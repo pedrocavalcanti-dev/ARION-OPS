@@ -1,0 +1,25 @@
+<li class="quality-order-timeline__item{% if not ticket.is_valid_occurrence %} is-excluded{% endif %}">
+  <span class="quality-order-timeline__marker" aria-hidden="true"></span>
+  <article class="quality-order-occurrence-card">
+    <header>
+      <div><time datetime="{{ ticket.source_created_at|date:'c' }}">{% if ticket.source_created_at %}{{ ticket.source_created_at|date:"d/m/Y H:i" }}{% else %}Data não informada{% endif %}</time>{% if ticket.sequence_label %}<span class="quality-ticket-sequence">{{ ticket.sequence_label }}</span>{% endif %}</div>
+      <span class="quality-ticket-validity{% if not ticket.is_valid_occurrence %} is-excluded{% endif %}">{{ ticket.exclusion_label }}</span>
+    </header>
+    <h3>{{ ticket.ticket_number }} <span>·</span> {{ ticket.title|default:"Ticket sem título" }}</h3>
+    <dl>
+      <div><dt>Fila</dt><dd>{{ ticket.queue_name|default:"—" }}</dd></div>
+      <div><dt>Estado OTRS</dt><dd>{{ ticket.external_state_name|default:"—" }}</dd></div>
+      <div><dt>Motivo revisado</dt><dd>{{ ticket.reason_display }}</dd></div>
+      <div><dt>Causa raiz</dt><dd>{{ ticket.root_cause_display }}</dd></div>
+      {% if ticket.closing_code_display %}<div><dt>Código de encerramento</dt><dd>{{ ticket.closing_code_display }}</dd></div>{% endif %}
+      {% if ticket.same_cause_label %}<div><dt>Revisão da causa</dt><dd>{{ ticket.same_cause_label }}</dd></div>{% endif %}
+    </dl>
+    <footer>
+      {% if ticket.is_pending_review %}<span class="quality-ticket-review-state">Pendente de revisão</span>{% endif %}
+      {% if ticket.otrs_url %}<a class="quality-inline-link" href="{{ ticket.otrs_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS ↗</a>{% endif %}
+      {% if can_manage_orders %}
+        <button class="quality-row-open" type="button" data-quality-review-ticket="{{ ticket.external_id }}" data-ticket-number="{{ ticket.ticket_number }}" data-classification="{{ ticket.review_classification }}" data-same-cause="{{ ticket.review_same_cause|yesno:'true,false' }}" data-reason="{{ ticket.review_reason }}" data-root-cause="{{ ticket.review_root_cause }}" data-exclusion-reason="{{ ticket.review_exclusion_reason }}">Revisar</button>
+      {% endif %}
+    </footer>
+  </article>
+</li>

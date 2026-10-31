@@ -119,7 +119,7 @@ class DocumentationPortalTests(TestCase):
                     self.assertIn(next_url, sequence)
 
     def test_registry_has_search_metadata_and_expected_technical_pages(self):
-        expected = {"chamados", "banco-de-dados", "otrs", "cmdb", "worker", "dicionario-de-dados"}
+        expected = {"chamados", "banco-de-dados", "otrs", "cmdb", "worker", "dicionario-de-dados", "qualidade"}
         self.assertTrue(expected.issubset(DOCUMENTS))
         for item in DocumentationService.navigation():
             with self.subTest(slug=item["slug"]):
@@ -130,7 +130,7 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 28)
+        self.assertEqual(len(DOCUMENTS), 29)
 
     def test_search_terms_find_current_operational_documents(self):
         cases = {

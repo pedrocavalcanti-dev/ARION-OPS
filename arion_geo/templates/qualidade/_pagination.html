@@ -1,0 +1,10 @@
+{% if page_obj.paginator.num_pages > 1 %}
+<nav class="quality-pagination" aria-label="Paginação">
+  <span>{{ page_obj.start_index }}–{{ page_obj.end_index }} de {{ page_obj.paginator.count }}</span>
+  <div>
+    {% if page_obj.has_previous %}<a href="{% if page_query %}?{{ page_query }}&amp;page={{ page_obj.previous_page_number }}{% else %}?page={{ page_obj.previous_page_number }}{% endif %}" aria-label="Página anterior">Anterior</a>{% else %}<span aria-disabled="true">Anterior</span>{% endif %}
+    <strong>Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</strong>
+    {% if page_obj.has_next %}<a href="{% if page_query %}?{{ page_query }}&amp;page={{ page_obj.next_page_number }}{% else %}?page={{ page_obj.next_page_number }}{% endif %}" aria-label="Próxima página">Próxima</a>{% else %}<span aria-disabled="true">Próxima</span>{% endif %}
+  </div>
+</nav>
+{% endif %}

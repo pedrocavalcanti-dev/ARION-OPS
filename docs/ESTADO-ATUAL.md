@@ -19,9 +19,10 @@ Versão interna registrada em `docs/releases/releases.json`: **1.2.0**. A distri
 | OTRS Mirror | Ativo no código | MySQL OTRS read-only; quatro filas do Cockpit | Escrita no banco ARION | FAST incremental e FULL reconciliador; FAST exige FULL com cobertura completa vigente. |
 | Worker | Ativo no código | `integration_worker` | Atualiza mirrors/estado | Requer processo ativo para freshness; agenda FULL quando a cobertura configurada muda. |
 | Central de Relatórios | Ativo | Original Claro e mirrors locais OTRS/CMDB em enriquecimento explícito | Tratativa, pausas, overrides, decisão e auditoria no ARION | Cálculo automático é baseline; decisão final é humana. |
+| Qualidade Operacional | Ativo no código: Fases 1–4 implementadas | OQs, checklist, contatos e ciclos locais; mirrors CMDB/OTRS | OQs, checklist, contatos e auditoria locais; sem escrita remota | Dashboard, Links prioritários/detalhe, OQ (Resumo, Ocorrências, Tratativas, Monitoramento e Histórico), fila global RREIP, diretório de contatos e histórico global; 39 testes do app e validações Django aprovados. |
 | RBAC/Data Scope | Ativo | Django Groups/Permissions e `GroupDataScope` | Administração protegida | Superuser técnico é global. |
 | Auditoria | Ativo | `AuditEvent` via `AuditService` | Histórico local | Metadata sanitizada; não é debug log. |
-| Central documental | Ativo | Markdown registrado em `docs/` e catálogo de releases em `docs/releases/releases.json` | Leitura | Inclui Atualizações e versões, Central de Relatórios e Roadmap; páginas técnicas protegidas por `configuracoes.manage_groups`. |
+| Central documental | Ativo | Markdown registrado em `docs/` e catálogo de releases em `docs/releases/releases.json` | Leitura | Inclui Atualizações e versões, Central de Relatórios, Qualidade Operacional e Roadmap; páginas técnicas protegidas por `configuracoes.manage_groups`. |
 
 ## Banco e fontes
 
@@ -32,6 +33,8 @@ A seleção suporta SQLite e MySQL. A validação desta consolidação W44 foi e
 A preparação de produção V1 inclui modo Django explícito, Waitress localhost, supervisor Windows para Web/Worker, build de assets production, `collectstatic`, production-check, preparação do serviço Cloudflare Tunnel e backup MySQL. Isso descreve código/script disponível; domínio, host novo, MySQL restaurado, conta Cloudflare/Tunnel e credenciais de serviço ainda precisam ser configurados e verificados no ambiente de destino. Consulte [Implantação e Produção](IMPLANTACAO-E-PRODUCAO.md).
 
 OTRS/CMDB são fontes oficiais. `CMDBLinkMirror`, `CMDBOperatorMirror`, `OTRSTicket` e `OTRSTicketConfigItem` são cópias locais. `TicketTracking` representa trabalho interno do ARION.
+
+Qualidade Operacional usa `CMDBLinkMirror` e `OTRSTicket` locais como referências de leitura e mantém OQs, checklist, contatos, ciclos e snapshots no banco ARION. Dashboard, Links prioritários, fila/detalhe da OQ, monitoramento, histórico e contatos aplicam RBAC e Data Scope no backend. A carteira e o detalhe usam a mesma janela e validação; o histórico do link é paginado, inclui tickets válidos e desconsiderados e só apresenta causa revisada quando registrada pela Qualidade. Designação e nome do provedor são os rótulos principais da interface; IDs CMDB/ISP permanecem técnicos. TQs são referenciados pelo mirror local, ciclos RREIP e seus resultados são operados manualmente, e tratativas financeiras exigem confirmação e evidência antes do ciclo. Contatos e alterações de OQ geram auditoria. O módulo não cria nem altera tickets ou registros oficiais no OTRS/CMDB.
 
 ## Frontend mobile e PWA
 

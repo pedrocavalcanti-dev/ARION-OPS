@@ -41,9 +41,10 @@ O banco local é ao mesmo tempo estado próprio do produto, cache dos mirrors e 
 | `mapa` | Analytics | Agregações por UF e modos geográficos | Sem model de domínio próprio | `services/analytics.py`, views |
 | `rankings` | Analytics | Rankings e exportações | Sem model de domínio próprio | `services.py`, `performance.py`, `exports.py` |
 | `relatorios` | Operacional e analítico | Importação privada e tratativa de Claro Multas | `PenaltyCompetence`, `PenaltySourceRow`, `PenaltyTreatmentRow` e modelos de auditoria financeira | services de importação, cálculo, tratamento e enriquecimento |
+| `qualidade` | Operacional e analítico | Ordens de Qualidade, carteira derivada de links e análise de recorrência | `QualityOrder`, `QualityOccurrence`, `QualityTicket`, `QualityMonitoringCycle`, `QualityContact`, `QualityAuditEvent` | `QualityDataScopeService`, serviços das filas, OQ, ocorrência, RREIP e dashboard |
 | `ari` | Produto | Conversas e artefatos Preview | `AriConversation`, `AriMessage`, `AriAttachment`, `AriArtifact` | services de conversa, simulação e arquivos |
 
-`projetos` e `importacoes` existem no repositório, mas não estão em `INSTALLED_APPS` na configuração atual. O app `relatorios` está instalado e suas rotas ficam sob `/relatorios/`.
+`projetos` e `importacoes` existem no repositório, mas não estão em `INSTALLED_APPS` na configuração atual. Os apps `relatorios` e `qualidade` ficam sob `/relatorios/` e `/qualidade/`.
 
 ## Fluxos protegidos
 
@@ -98,6 +99,33 @@ V --> R[Ranking e detalhe]
 
 Ranking usa a dimensão Provider/ISP do CMDB mirror. Data Scope é aplicado antes dos recortes e cálculos. Os componentes, universo e limites de interpretação estão em [Ranking de Provedores](funcionalidades/rankings.md).
 
+### Qualidade Operacional
+
+```mermaid
+flowchart TD
+P[Permission: qualidade.view_quality] --> S[Data Scope no backend]
+S --> L[Links CMDB dentro do escopo]
+L --> D[Carteira derivada de Links prioritários]
+S --> O[Ordens de Qualidade locais]
+O --> F[Filtros e agregações server-side]
+F --> E[Dashboard Django + ECharts]
+F --> Q[Fila de OQs]
+F --> R[Fila de monitoramento RREIP]
+F --> H[Histórico OQ e global]
+M[Permission: qualidade.manage_quality_orders] --> C[Criar OQ / atribuir / prioridade / tratativas]
+C --> O
+M --> K[Checklist e ciclo RREIP local]
+K --> O
+CP[Permission: qualidade.manage_quality_contacts] --> CT[CRUD de contatos]
+S --> CT
+CT --> H
+T[OTRSTicket e relações Ticket-CI locais] --> D
+T --> O
+T --> K
+```
+
+Dashboard, filas de Links/OQs/monitoramento, diretório de contatos e histórico consultam somente dados locais. O Data Scope restringe OQs, links, contatos e eventos antes de filtros, contagens ou paginação; contatos em escopo CUSTOM respeitam a interseção de cliente/operadora e projeto. `Links prioritários` deriva candidatos dos mirrors CMDB/OTRS e não classifica reincidência automaticamente. Escritas de OQ, checklist, referências de TQ e ciclos RREIP exigem `qualidade.manage_quality_orders`; mudanças no diretório exigem `qualidade.manage_quality_contacts`. Eventos relevantes ficam no histórico local e na auditoria central. Tickets e links não são alterados, e referências históricas mantêm seus snapshots.
+
 ## Matriz de módulos e dados
 
 | Módulo | Dados locais consultados | Escrita local | Consulta OTRS/CMDB durante request |
@@ -109,9 +137,10 @@ Ranking usa a dimensão Provider/ISP do CMDB mirror. Data Scope é aplicado ante
 | Chamados | Tickets/relações OTRS, Links/Providers CMDB, acompanhamento e histórico ARION | Tracking, notas, eventos e filas pessoais | Não |
 | Administração e acesso | User, Group, Permission, escopos, preferências, integrações e auditoria | Formulários administrativos e services correspondentes | Não |
 | Central de Relatórios | Linhas importadas e dados locais de OTRS/CMDB sob enriquecimento explícito | Tratativas, pausas, overrides, decisões e auditoria locais | Somente na ação administrativa de enriquecimento OTRS; nunca em request de leitura |
+| Qualidade Operacional | OQs, ocorrências, ciclos e snapshots; mirrors locais CMDB/OTRS | OQs, referências, ciclos RREIP e eventos locais | Não |
 | ARI | Conversas, mensagens, anexos e artefatos locais | Services ARI e storage associado | Não |
 
-Os conjuntos variam por tela e indicador; a tabela registra as famílias centrais, não um contrato de que cada view leia todas as tabelas citadas. Veja também [Dashboard](funcionalidades/dashboard.md), [Cockpit](funcionalidades/cockpit.md), [Mapa](funcionalidades/mapa.md), [Rankings](funcionalidades/rankings.md), [Base](funcionalidades/base.md) e [Chamados](funcionalidades/chamados.md).
+Os conjuntos variam por tela e indicador; a tabela registra as famílias centrais, não um contrato de que cada view leia todas as tabelas citadas. Veja também [Dashboard](funcionalidades/dashboard.md), [Cockpit](funcionalidades/cockpit.md), [Mapa](funcionalidades/mapa.md), [Rankings](funcionalidades/rankings.md), [Base](funcionalidades/base.md), [Chamados](funcionalidades/chamados.md) e [Qualidade Operacional](funcionalidades/qualidade.md).
 
 ## Request, escopo e performance
 

@@ -22,6 +22,7 @@ DOCUMENTS = {
     "chamados": ("Chamados", "Fila NOC e acompanhamento local no ARION", "Funcionalidades", "funcionalidades/chamados.md", "TicketTracking ticket status nota evento prioridade recorrência fila NOC"),
     "cockpit": ("Cockpit", "Análise operacional, consultas, views e exportações", "Funcionalidades", "funcionalidades/cockpit.md", "AnalyticsQuery Saved Views CSV filtros evidências séries"),
     "relatorios": ("Central de Relatórios", "Claro Multas, cálculos, enriquecimento e tratativa", "Funcionalidades", "funcionalidades/relatorios.md", "Claro Multas PenaltyCompetence baseline pausa TMP efetivo ISP tratativa decisão auditoria"),
+    "qualidade": ("Qualidade Operacional", "Ordens, reincidências, ciclos RREIP e dashboard", "Funcionalidades", "funcionalidades/qualidade.md", "OQ Ordem de Qualidade ocorrência reincidência TQ Ticket de Qualidade RREIP monitoramento links prioritários Data Scope"),
     "mapa": ("Mapa Operacional", "Agregações por UF, modos e critérios geográficos", "Funcionalidades", "funcionalidades/mapa.md", "mapa UF chamadas reincidência motivos geografia"),
     "ranking-provedores": ("Ranking de Provedores", "Índice ARION, risco e desempenho por Provider/ISP", "Funcionalidades", "funcionalidades/rankings.md", "provedor ISP risco performance exposição incidência"),
     "base": ("Base de Links", "Links e Providers/ISP do espelho CMDB", "Funcionalidades", "funcionalidades/base.md", "links provider operadora ISP ConfigItemID CMDB busca exportação"),

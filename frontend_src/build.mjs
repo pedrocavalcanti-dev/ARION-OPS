@@ -66,7 +66,7 @@ if (process.argv.includes("--clean")) {
 
 const templateFiles = await walk(templateRoot, ".html");
 const references = new Set();
-const tagPattern = /\{\%\s*arion_js\s+['"](js\/[A-Za-z0-9_./-]+\.js)['"]\s*%\}/g;
+const tagPattern = /\{\%\s*(?:arion_js|arion_bundle_js)\s+['"](js\/[A-Za-z0-9_./-]+\.js)['"]\s*%\}/g;
 for (const templateFile of templateFiles) {
   const html = await readFile(templateFile, "utf8");
   for (const match of html.matchAll(tagPattern)) references.add(match[1]);

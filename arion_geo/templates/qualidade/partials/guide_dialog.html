@@ -1,0 +1,77 @@
+<dialog class="quality-guide-dialog" id="quality-guide-dialog" aria-labelledby="quality-guide-title">
+  <aside class="quality-guide-drawer">
+    <header class="quality-guide-header">
+      <div><p class="quality-eyebrow">GUIA OPERACIONAL</p><h2 id="quality-guide-title">Como funciona a Qualidade Operacional</h2><p>O módulo organiza a identificação, o tratamento e o acompanhamento de circuitos reincidentes sem substituir o OTRS ou a CMDB.</p></div>
+      <button class="quality-dialog__close" type="button" data-quality-guide-close aria-label="Fechar guia">×</button>
+    </header>
+    <div class="quality-guide-body" tabindex="0" aria-label="Conteúdo do guia de Qualidade Operacional">
+      <section class="quality-guide-section" aria-labelledby="quality-guide-flow-title">
+        <h3 id="quality-guide-flow-title">Fluxo do caso</h3>
+        <ol class="quality-guide-flow">
+          <li>Ocorrência válida no OTRS</li>
+          <li>Reincidência identificada no circuito</li>
+          <li>Link Prioritário para investigação</li>
+          <li>OQ criada manualmente pela Qualidade</li>
+          <li>Triagem e definição da tratativa</li>
+          <li>Tratamento e referência ao TQ, quando aplicável</li>
+          <li>Monitoramento RREIP por 30 dias</li>
+        </ol>
+        <div class="quality-guide-outcomes"><div><strong>Sucesso</strong><span>Sem nova ocorrência válida; ciclo concluído.</span></div><div><strong>Reincidiu</strong><span>O ciclo falha e o caso retorna ao tratamento.</span></div></div>
+      </section>
+
+      <section class="quality-guide-section" aria-labelledby="quality-guide-concepts-title">
+        <h3 id="quality-guide-concepts-title">Conceitos operacionais</h3>
+        <dl class="quality-guide-definitions">
+          <div><dt>Ocorrência</dt><dd>Ticket operacional válido relacionado ao circuito. Tickets cancelados, improcedentes ou desconsiderados pelas regras não entram na contagem operacional.</dd></div>
+          <div><dt>Reincidência</dt><dd>Nova ocorrência válida dentro do episódio operacional do circuito. Até 30 dias entre ocorrências mantém o episódio; acima de 30 dias inicia outro.</dd></div>
+          <div><dt>Links Prioritários</dt><dd>Carteira de investigação que destaca circuitos com reincidência ativa ou maior necessidade de atenção. Estar na carteira não cria automaticamente uma OQ.</dd></div>
+          <div><dt>OQ — Ordem de Qualidade</dt><dd>Caso gerencial no ARION OPS que reúne contexto, ocorrências, tratativas, monitoramento e histórico.</dd></div>
+          <div><dt>TQ — Ticket de Qualidade</dt><dd>Ticket usado na tratativa do OTRS. O ARION acompanha sua referência; detalhes técnicos e conversa oficial permanecem no OTRS.</dd></div>
+          <div><dt>RREIP</dt><dd>Ciclo local de monitoramento por 30 dias após a tratativa. Sucesso exige ausência de ocorrência válida durante o ciclo; uma nova reincidência faz o caso retornar ao tratamento.</dd></div>
+        </dl>
+      </section>
+
+      <section class="quality-guide-section" aria-labelledby="quality-guide-window-title">
+        <h3 id="quality-guide-window-title">Como funciona a janela de 30 dias</h3>
+        <p>Uma ocorrência válida inicia um episódio do circuito. Outra ocorrência até 30 dias depois da anterior integra o mesmo episódio; uma diferença maior inicia um novo episódio e reinicia a sequência operacional.</p>
+        <p>Quando o último episódio reincidente completa 30 dias sem uma nova ocorrência válida, ele fica <strong>estabilizado</strong> e sai da carteira ativa. Uma ocorrência isolada nunca é contada como link reincidente estabilizado. O histórico dos episódios permanece disponível.</p>
+        <p>Estabilização operacional vem dos tickets válidos do OTRS e não significa que a Qualidade tratou o caso. RREIP é o monitoramento formal após a tratativa; somente um ciclo encerrado com sucesso conta como sucesso da Qualidade.</p>
+        <p><strong>R operacional</strong> indica a posição da reincidência dentro do episódio atual (primeira reincidência = R1; a sequência reinicia no novo episódio). O nível R1–R5 exibido na gestão da OQ continua sendo a classificação humana de complexidade e criticidade, preenchida pela Qualidade.</p>
+      </section>
+
+      <section class="quality-guide-section" aria-labelledby="quality-guide-levels-title">
+        <h3 id="quality-guide-levels-title">Nível da Qualidade — R1 a R5</h3>
+        <p>O nível representa complexidade, criticidade e necessidade de escalonamento. A Qualidade o define manualmente; ele não é a quantidade de reincidências.</p>
+        <ul class="quality-guide-levels">
+          <li><strong>R1</strong><span>Baixa complexidade; tratativa direta e acompanhamento simples.</span></li>
+          <li><strong>R2</strong><span>Investigação adicional ou interação com o provedor.</span></li>
+          <li><strong>R3</strong><span>Caso relevante que exige tratativa estruturada ou ação corretiva.</span></li>
+          <li><strong>R4</strong><span>Alta complexidade técnica, possível participação de engenharia ou escalonamento especializado.</span></li>
+          <li><strong>R5</strong><span>Caso crítico, crônico ou de alta complexidade, com acompanhamento e escalonamento especial.</span></li>
+        </ul>
+        <p class="quality-guide-callout">Uma OQ pode começar em R4 ou R5 mesmo na primeira atuação formal naquele circuito, por exemplo em problemas complexos de VPN/IPsec, túnel, roteamento ou arquitetura.</p>
+        <p class="quality-guide-caveat">Os critérios definitivos de R1–R5 ainda serão formalizados pela operação.</p>
+      </section>
+
+      <section class="quality-guide-section quality-guide-notes" aria-labelledby="quality-guide-rules-title">
+        <h3 id="quality-guide-rules-title">Regras de análise</h3>
+        <div><strong>Mesma causa</strong><p>É uma confirmação da Qualidade. Não é inferida automaticamente apenas porque houve vários tickets no mesmo circuito.</p></div>
+        <div><strong>Pendência financeira</strong><p>Também pode gerar reincidência. Desbloqueio temporário não é solução definitiva; antes do monitoramento, a Qualidade confirma a regularização e registra a evidência correspondente.</p></div>
+      </section>
+
+      <section class="quality-guide-section" aria-labelledby="quality-guide-sources-title">
+        <h3 id="quality-guide-sources-title">De onde vêm os dados?</h3>
+        <dl class="quality-guide-sources">
+          <div><dt>OTRS</dt><dd>Tickets operacionais e TQs.</dd></div>
+          <div><dt>CMDB / Base</dt><dd>Circuito, Designação, cliente, projeto, ISP e localização.</dd></div>
+          <div><dt>ARION OPS</dt><dd>OQs, classificações da Qualidade, acompanhamento, RREIP, contatos e histórico.</dd></div>
+        </dl>
+      </section>
+
+      <section class="quality-guide-section" aria-labelledby="quality-guide-permissions-title">
+        <h3 id="quality-guide-permissions-title">Permissões</h3>
+        <p>Usuários com acesso de consulta visualizam a operação conforme seu escopo de dados. Criar e alterar OQs exige acesso de gestão da Qualidade. A gestão de contatos possui acesso próprio.</p>
+      </section>
+    </div>
+  </aside>
+</dialog>

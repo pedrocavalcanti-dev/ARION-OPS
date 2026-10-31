@@ -20,6 +20,12 @@ Revisado em 30/10/2026. A versão **1.2.0** foi registrada no catálogo interno 
 - Materializar eventos de entrada e mudança de fila para melhorar históricos por etapa no Cockpit.
 - Avaliar futuras integrações operacionais com fonte, escopo e governança definidos.
 
+## Qualidade Operacional — estado das fases
+
+- Fase 1 — fundação e Dashboard: implementada no workspace.
+- Fase 2 — Links prioritários e fila de Ordens de Qualidade: implementada no workspace, com validação Django/migrations ainda pendente do runtime funcional da `.venv`.
+- Próxima etapa: detalhe completo da OQ e aprovação operacional das regras de classificação de reincidência e causa raiz.
+
 ## Pendências de validação
 
 - Confirmar a definição operacional de ANOP e ETIT com a área responsável; fórmulas não devem ser inventadas.

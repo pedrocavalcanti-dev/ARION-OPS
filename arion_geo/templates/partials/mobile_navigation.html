@@ -19,11 +19,12 @@
       <h2>Navegação principal</h2>
       <nav aria-label="Navegação principal">
         {% if perms.configuracoes.view_dashboard %}<a href="{% url 'painel:index' %}"{% if request.resolver_match.app_name == 'painel' and request.resolver_match.url_name == 'index' %} aria-current="page"{% endif %}>Início</a>{% endif %}
-        {% if perms.configuracoes.view_dashboard %}<a href="{% url 'dashboard' %}"{% if request.resolver_match.url_name == 'dashboard' %} aria-current="page"{% endif %}>Dashboard</a>{% endif %}
+        {% if perms.configuracoes.view_dashboard %}<a href="{% url 'dashboard' %}"{% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name != 'qualidade' %} aria-current="page"{% endif %}>Dashboard</a>{% endif %}
         {% if perms.configuracoes.view_operational_tickets %}<a href="{% url 'chamados:index' %}"{% if request.resolver_match.app_name == 'chamados' %} aria-current="page"{% endif %}>Chamados</a>{% endif %}
         {% if perms.configuracoes.view_cockpit %}<a href="{% url 'cockpit' %}"{% if request.resolver_match.url_name == 'cockpit' %} aria-current="page"{% endif %}>Cockpit</a>{% endif %}
         {% if perms.configuracoes.view_map %}<a href="{% url 'mapa:index' %}"{% if request.resolver_match.app_name == 'mapa' %} aria-current="page"{% endif %}>Mapa</a>{% endif %}
         {% if perms.configuracoes.view_rankings %}<a href="{% url 'rankings:index' %}"{% if request.resolver_match.app_name == 'rankings' %} aria-current="page"{% endif %}>Rankings</a>{% endif %}
+        {% if perms.qualidade.view_quality %}<a href="{% url 'qualidade:dashboard' %}"{% if request.resolver_match.app_name == 'qualidade' %} aria-current="page"{% endif %}><svg class="header-link-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5h6a1 1 0 0 0 1-1v-.2A1.3 1.3 0 0 0 14.7 2h-5A1.3 1.3 0 0 0 8.4 3.3v.2a1 1 0 0 0 .6 1ZM8.5 13l2.2 2.2 4.8-5"/></svg><span>Qualidade</span></a>{% endif %}
         {% if perms.configuracoes.view_base %}<a href="{% url 'base_links:index' %}"{% if request.resolver_match.app_name == 'base_links' %} aria-current="page"{% endif %}>Base</a>{% endif %}
         {% if perms.configuracoes.view_ari %}<a href="{% url 'ari:index' %}"{% if request.resolver_match.app_name == 'ari' %} aria-current="page"{% endif %}>ARI I.A</a>{% endif %}
       </nav>

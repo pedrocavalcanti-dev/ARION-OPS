@@ -263,6 +263,7 @@ INSTALLED_APPS = [
     "aplicativos.base_links.apps.BaseLinksConfig",
     "aplicativos.chamados.apps.ChamadosConfig",
     "aplicativos.relatorios.apps.RelatoriosConfig",
+    "aplicativos.qualidade.apps.QualidadeConfig",
 ]
 
 

@@ -1,0 +1,17 @@
+<dialog class="quality-dialog" id="quality-create-order-dialog" aria-labelledby="quality-create-order-title" data-quality-link-options-url="{% url 'qualidade:link_options' %}">
+  <form method="post" action="{% url 'qualidade:ordem_create' %}" class="quality-dialog__form" data-quality-create-form>
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    <header class="quality-dialog__header"><div><p class="quality-eyebrow">QUALIDADE OPERACIONAL</p><h2 id="quality-create-order-title">Nova Ordem de Qualidade</h2><p>A OQ será criada no ARION OPS com status Nova.</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+    <div class="quality-dialog__body">
+      <label class="quality-dialog__field quality-dialog__field--wide"><span>Buscar link no CMDB</span><input type="search" data-quality-link-search placeholder="Digite designação, CI, cliente ou ISP" autocomplete="off"><small data-quality-link-search-status aria-live="polite">Digite ao menos 2 caracteres para buscar.</small></label>
+      <label class="quality-dialog__field quality-dialog__field--wide"><span>Link / designação</span><select name="link" required data-quality-link-select><option value="">Selecione um link do CMDB</option></select></label>
+      <div class="quality-dialog__snapshot quality-dialog__field--wide" data-quality-link-preview aria-live="polite"><span>Cliente <strong data-preview-client>—</strong></span><span>Projeto <strong data-preview-project>—</strong></span><span>ISP <strong data-preview-provider-name>—</strong></span><span>UF <strong data-preview-uf>—</strong></span></div>
+      <label class="quality-dialog__field"><span>Prioridade</span>{{ create_form.priority }}</label>
+      <label class="quality-dialog__field"><span>Responsável</span>{{ create_form.owner }}</label>
+      <label class="quality-dialog__field"><span>Prazo</span>{{ create_form.treatment_deadline }}</label>
+      <label class="quality-dialog__field quality-dialog__field--wide"><span>Observação inicial</span>{{ create_form.initial_note }}</label>
+    </div>
+    <footer class="quality-dialog__footer"><span>A criação não abre chamado no OTRS.</span><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Criar OQ</button></footer>
+  </form>
+</dialog>

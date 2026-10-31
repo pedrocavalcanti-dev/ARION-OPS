@@ -28,6 +28,21 @@ def canonical_project_name(value):
     return PROJECT_ALIASES.get(project_comparison_key(raw), raw)
 
 
+def display_project_name(value):
+    """Render the shared canonical project identity as a readable business label."""
+    canonical = canonical_project_name(value)
+    if not canonical:
+        return ""
+    key = project_comparison_key(canonical)
+    if key in {"FUST", "BB", "BDN", "ISP", "NOC"}:
+        return key
+    words = canonical.casefold().split()
+    return " ".join(
+        word if word in {"do", "da", "dos", "das", "de", "e"} else word.capitalize()
+        for word in words
+    )
+
+
 def project_alias_groups(raw_names):
     """Group a small distinct project catalog and retain its source spellings."""
     grouped = {}
