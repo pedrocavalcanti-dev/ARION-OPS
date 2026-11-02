@@ -25,6 +25,12 @@ from aplicativos.integracoes.services.semantics import LinkSemantics, UNCLASSIFI
 from .search import matching_link_queryset, normalize_search_text
 
 
+def _safe_csv_value(value):
+    """Keep external CMDB values inert when opened in a spreadsheet."""
+    text = str(value if value is not None else "")
+    return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
+
+
 
 @login_required
 @access_required("view_base")
@@ -162,8 +168,8 @@ def export_csv(request):
         writer = csv.writer(response)
         writer.writerow(["Provedor / ISP", "Telefone", "WhatsApp", "Horário de atendimento", "CNPJ", "Links associados", "Implantação", "Incidente"])
         for provider in rows.iterator(chunk_size=300):
-            writer.writerow([provider.name, provider.phone, provider.whatsapp, provider.business_hours,
-                provider.cnpj, provider.link_count, provider.deployment_state, provider.incident_state])
+            writer.writerow([_safe_csv_value(value) for value in (provider.name, provider.phone, provider.whatsapp, provider.business_hours,
+                provider.cnpj, provider.link_count, provider.deployment_state, provider.incident_state)])
         return response
     queryset = _filter_links(LinkQueryService.base(request.user), _read_filters(request)).select_related("operator")
     queryset = queryset.annotate(display_designation=Case(
@@ -178,14 +184,14 @@ def export_csv(request):
     writer.writerow(["Designacao", "Nome original CMDB", "Cliente", "Projeto", "Conta", "Business ID", "Provedor / ISP", "Cidade", "UF", "Circuito", "Tipo", "Velocidade", "Range IP", "Implantacao", "Incidente"])
     for link in queryset.iterator(chunk_size=500):
         semantics = LinkSemantics.from_link(link)
-        writer.writerow([
+        writer.writerow([_safe_csv_value(value) for value in (
             link.display_designation or "Nao informado", link.name,
             link.contracting_client or UNCLASSIFIED, link.business_project or UNCLASSIFIED,
             link.business_account or UNCLASSIFIED, link.business_id or "Nao identificado",
             semantics.provider_name, link.city or "Nao informado", link.state or "Nao informado",
             link.circuit or "Não informado", link.link_type or "Não informado", link.speed_raw or "Não informado",
             link.ip_range or "Não informado", link.deployment_state or "Não informado", link.incident_state or "Não informado",
-        ])
+        )])
     return response
 
 @login_required

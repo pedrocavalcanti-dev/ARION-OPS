@@ -11,6 +11,7 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 from unittest.mock import patch
 from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.base_links.models import Operadora, Projeto
@@ -24,6 +25,7 @@ from aplicativos.integracoes.otrs_queues import (
 from aplicativos.integracoes.services.cancellation import classify_cancellation_stage
 from aplicativos.integracoes.services.analytics import TicketQueryService
 from aplicativos.integracoes.services.semantics import LinkSemantics
+from aplicativos.qualidade.models import QualityMonitoringCycle, QualityOrder
 from .services.analytics import (
     AnalyticsQueryService, DashboardAnalyticsService, _operational_buckets,
     resolve_time_granularity,
@@ -94,9 +96,15 @@ class MirrorAnalyticsTests(TestCase):
         self.assertNotContains(response, ' src="/static/branding/arion/arion-logo-primary.png"')
         self.assertNotContains(response, 'pwa-update-menu--desktop')
         self.assertContains(response, "ACESSO OPERACIONAL")
+        self.assertContains(response, f'class="overview-module-card" href="{reverse("dashboard")}"')
+        self.assertContains(response, f'class="overview-module-card" href="{reverse("qualidade:dashboard")}"')
+        self.assertContains(response, f'class="overview-module-card" href="{reverse("configuracoes:about")}"')
+        self.assertNotContains(response, f'href="{reverse("relatorios:dashboard")}"')
+        self.assertContains(response, "Sobre o sistema")
+        self.assertContains(response, "Abrir Sobre")
         self.assertContains(response, 'class="overview-module-card" href="/chamados/"')
         self.assertContains(response, 'class="overview-module-card" href="/ari/"')
-        self.assertContains(response, 'class="overview-module-card"', count=6)
+        self.assertContains(response, 'class="overview-module-card"', count=9)
         self.assertContains(response, "Conta")
         self.assertNotContains(response, "ACESSO RESTRITO")
         self.assertNotContains(response, "Documenta&ccedil;&atilde;o")
@@ -111,11 +119,14 @@ class MirrorAnalyticsTests(TestCase):
         response = self.client.get(reverse("painel:index"))
         self.assertEqual(response.status_code, 200)
         for label in (
-            "Chamados", "Base de Links", "Cockpit", "Mapa", "Rankings", "ARI I.A", "Conta",
+            "Dashboard", "Chamados", "Base de Links", "Cockpit", "Mapa", "Rankings", "Qualidade",
+            "Sobre o sistema", "Abrir Sobre", "ARI I.A", "Conta",
             "Administra&ccedil;&atilde;o", "Integra&ccedil;&otilde;es", "Usu&aacute;rios", "Grupos",
             "Escopos", "Auditoria", "Documenta&ccedil;&atilde;o", "Sistema", "Minha conta",
         ):
             self.assertContains(response, label)
+        self.assertNotContains(response, f'href="{reverse("relatorios:dashboard")}"')
+        self.assertContains(response, 'class="overview-module-card"', count=9)
 
         limited = get_user_model().objects.create_user(
             username="home-limited", password="safe-password-3",
@@ -127,6 +138,11 @@ class MirrorAnalyticsTests(TestCase):
         self.client.force_login(limited)
         response = self.client.get(reverse("painel:index"))
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'class="overview-module-card" href="{reverse("dashboard")}"')
+        self.assertContains(response, f'class="overview-module-card" href="{reverse("configuracoes:about")}"')
+        self.assertContains(response, 'class="overview-module-card"', count=2)
+        self.assertNotContains(response, f'class="overview-module-card" href="{reverse("qualidade:dashboard")}"')
+        self.assertNotContains(response, f'href="{reverse("relatorios:dashboard")}"')
         self.assertNotContains(response, 'href="/chamados/"')
         self.assertNotContains(response, 'href="/ari/"')
         self.assertNotContains(response, f'href="{reverse("configuracoes:documentation")}"')
@@ -135,6 +151,12 @@ class MirrorAnalyticsTests(TestCase):
         self.assertContains(response, "Minha conta")
         self.assertEqual(self.client.get(reverse("ari:index")).status_code, 403)
         self.assertEqual(self.client.get(reverse("configuracoes:documentation")).status_code, 403)
+
+        about = self.client.get(reverse("configuracoes:about"))
+        self.assertEqual(about.status_code, 200)
+        self.assertContains(about, "Sobre o ARION OPS")
+        self.assertContains(about, "centralizar dados, indicadores e fluxos do NOC Atacado")
+        self.assertContains(about, "Pedro Cavalcanti")
 
     def _ticket(self, ext, status, open_state, day):
         created_at = datetime(2026, 10, day, 3, tzinfo=datetime_timezone.utc)
@@ -163,13 +185,20 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(response.context["closed_count"], 0)
         self.assertEqual(response.context["canceled_count"], 0)
         self.assertNotContains(response, ">OPEN<")
-        self.assertEqual(response.context["top_providers"], [{"name": "Operadora Analytics", "value": 2}])
+        self.assertEqual(response.context["top_providers"], [{
+            "name": "Operadora Analytics", "value": 2, "logo_url": "", "logo_initials": "OA",
+        }])
         self.assertNotContains(response, "CLASSIFICAÇÃO LEGADA")
         self.assertNotContains(response, "VIVO")
         self.assertNotContains(response, "CLARO")
         self.assertNotContains(response, "ALGAR")
         self.assertContains(response, "Top 10 Estados com mais Links")
         self.assertContains(response, "Provedores com mais Links")
+        self.assertContains(response, "Aging dos chamados abertos")
+        self.assertContains(response, "Qualidade operacional")
+        self.assertContains(response, "Chamados por projeto")
+        self.assertContains(response, "Principais motivos dos chamados")
+        self.assertContains(response, "provider-logo--fallback")
 
     def test_dashboard_and_queue_count_active_tickets_and_distinct_affected_links(self):
         from aplicativos.chamados.services import TicketQueueService
@@ -269,10 +298,134 @@ class MirrorAnalyticsTests(TestCase):
 
         self.assertEqual(dashboard["business_open"], 1)
         self.assertEqual(dashboard["links_affected"], 1)
+        self.assertEqual(dashboard["calls"], 1)
+        self.assertEqual([row["name"] for row in dashboard["top_projects"]], ["Projeto A"])
         self.assertEqual(queue["active_count"], 1)
         self.assertEqual(queue["affected_count"], 1)
         self.assertNotIn(hidden.external_id, {row["external_id"] for row in queue["rows"]})
         self.assertNotIn(unlinked.pk, set(TicketQueryService.base(self.user).values_list("pk", flat=True)))
+
+    def test_dashboard_aging_bands_use_current_open_snapshot_not_selected_period(self):
+        fixed_now = datetime(2026, 11, 2, 12, tzinfo=datetime_timezone.utc)
+        for index, age_seconds in enumerate((60, 24 * 3600, 48 * 3600, 72 * 3600, 72 * 3600 + 1)):
+            ticket = self._ticket(1450 + index, "OPEN", True, 5)
+            ticket.source_created_at = fixed_now - timedelta(seconds=age_seconds)
+            ticket.save(update_fields=("source_created_at",))
+        unknown = self._ticket(1455, "UNKNOWN", True, 5)
+        unknown.source_created_at = fixed_now - timedelta(days=10)
+        unknown.save(update_fields=("source_created_at",))
+
+        with patch("aplicativos.painel.services.analytics.timezone.now", return_value=fixed_now):
+            october = DashboardAnalyticsService.build(
+                user=self.user, start=date(2026, 10, 1), end=date(2026, 10, 31),
+            )
+            november = DashboardAnalyticsService.build(
+                user=self.user, start=date(2026, 11, 1), end=date(2026, 11, 30),
+            )
+
+        self.assertEqual(october["aging"], november["aging"])
+        self.assertEqual(october["aging"]["open_count"], 5)
+        self.assertEqual([item["value"] for item in october["aging"]["bands"]], [2, 1, 1, 1])
+        self.assertEqual(october["aging"]["over_72"], 1)
+        self.assertEqual(october["aging"]["over_72_percent_label"], "20,0%")
+        self.assertEqual(october["aging"]["oldest_label"], "3d")
+
+    def test_dashboard_quality_pulse_uses_current_scoped_quality_service(self):
+        fixed_now = datetime(2026, 11, 2, 12, tzinfo=datetime_timezone.utc)
+        active_ages = (20, 5)
+        stabilized_ages = (60, 40)
+        for index, age_days in enumerate(active_ages + stabilized_ages):
+            ticket = self._ticket(1460 + index, "OPEN", True, 5)
+            ticket.source_created_at = fixed_now - timedelta(days=age_days)
+            ticket.save(update_fields=("source_created_at",))
+            link = self.link if index < 2 else self.other_link
+            OTRSTicketConfigItem.objects.create(
+                ticket=ticket, config_item_id=link.source_config_item_id,
+                cmdb_link=link, relation_type=f"DependsOn-quality-{index}",
+                relation_state="Valid",
+            )
+        order = QualityOrder.objects.create(
+            link=self.link, status=QualityOrder.Status.TRATAMENTO,
+        )
+        QualityMonitoringCycle.objects.create(
+            quality_order=order, cycle_number=1,
+            expected_end_at=fixed_now + timedelta(days=15),
+            result=QualityMonitoringCycle.Result.IN_PROGRESS,
+        )
+
+        with patch("aplicativos.painel.services.analytics.timezone.now", return_value=fixed_now):
+            dashboard = DashboardAnalyticsService.build(
+                user=self.user, start=date(2026, 10, 1), end=date(2026, 10, 31),
+            )
+
+        self.assertEqual(dashboard["quality_pulse"], {
+            "active_links": 1,
+            "stabilized_links": 1,
+            "open_orders": 1,
+            "monitoring": 1,
+        })
+
+    def test_dashboard_projects_and_reasons_are_canonical_and_keep_unclassified(self):
+        self.link.business_project = "BB"
+        self.link.contracting_client = "Cliente A"
+        self.link.save(update_fields=("business_project", "contracting_client"))
+        self.other_link.business_project = "PROJETO BB"
+        self.other_link.contracting_client = "Cliente B"
+        self.other_link.save(update_fields=("business_project", "contracting_client"))
+        legacy_link = CMDBLinkMirror.objects.create(
+            source_config_item_id="analytics-ci-legacy-project",
+            legacy_project="BANCO DO BRASIL", contracting_client="Cliente C",
+        )
+        client_link = CMDBLinkMirror.objects.create(
+            source_config_item_id="analytics-ci-client-project", contracting_client="Cliente D",
+        )
+        reason_values = ("FalhaMassiva", "Falha Massiva", "Falha Particular", "", "", "")
+        links = (self.link, self.other_link, legacy_link, client_link, None, None)
+        for index, (reason, link) in enumerate(zip(reason_values, links)):
+            ticket = self._ticket(1470 + index, "OPEN", True, 5)
+            ticket.closing_code_raw = reason
+            ticket.save(update_fields=("closing_code_raw",))
+            if link:
+                OTRSTicketConfigItem.objects.create(
+                    ticket=ticket, config_item_id=link.source_config_item_id,
+                    cmdb_link=link, relation_type=f"DependsOn-breakdown-{index}",
+                    relation_state="Valid",
+                )
+
+        dashboard = DashboardAnalyticsService.build(
+            user=self.user, start=date(2026, 10, 1), end=date(2026, 10, 31),
+        )
+        projects = {row["name"]: row for row in dashboard["top_projects"]}
+        reasons = {row["name"]: row for row in dashboard["top_reasons"]}
+
+        self.assertEqual(projects["Banco do Brasil"]["value"], 3)
+        self.assertEqual(projects["Banco do Brasil"]["share_label"], "50,0%")
+        self.assertEqual(projects["Cliente D"]["value"], 1)
+        self.assertEqual(projects["Não classificado"]["value"], 2)
+        self.assertEqual(reasons["Falha Massiva"]["value"], 2)
+        self.assertEqual(reasons["Falha Massiva"]["share_label"], "33,3%")
+        self.assertIn("termination_reason=falha_massiva", reasons["Falha Massiva"]["cockpit_url"])
+        self.assertEqual(reasons["Não classificado"]["value"], 2)
+        self.assertEqual(reasons["Falha Particular"]["value"], 1)
+
+    def test_dashboard_quality_summary_respects_quality_permission(self):
+        limited = get_user_model().objects.create_user(
+            username="dashboard-without-quality", password="safe-password-4",
+        )
+        dashboard_permission = Permission.objects.get(
+            content_type__app_label="configuracoes", codename="view_dashboard",
+        )
+        limited.user_permissions.add(dashboard_permission)
+        self.client.force_login(limited)
+
+        response = self.client.get(reverse("dashboard"), {
+            "date_from": "2026-10-01", "date_to": "2026-10-31",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context["quality_pulse"])
+        self.assertContains(response, "Aging dos chamados abertos")
+        self.assertNotContains(response, "Qualidade operacional")
 
     def test_dashboard_keeps_created_volume_and_official_closed_snapshot(self):
         ticket = self._ticket(102, "CLOSED", False, 5)
@@ -402,7 +555,9 @@ class MirrorAnalyticsTests(TestCase):
             user=self.user, start=date(2026, 10, 1), end=date(2026, 10, 31),
         )
         self.assertEqual(result["total_links"], 3)
-        self.assertEqual(result["top_providers"], [{"name": "FIERCE TELECOM", "value": 2}])
+        self.assertEqual(result["top_providers"], [{
+            "name": "FIERCE TELECOM", "value": 2, "logo_url": "", "logo_initials": "FT",
+        }])
         self.assertNotIn(str(absent.source_config_item_id), [row["name"] for row in result["top_providers"]])
         self.assertNotIn("10097", [row["name"] for row in result["top_providers"]])
         self.assertNotIn("macro_operators", result)
@@ -1391,9 +1546,13 @@ class MirrorAnalyticsTests(TestCase):
                 captured["story"] = story
 
         def render_story(query_result):
+            filter_rows = [
+                ("Motivo", "Pend\u00eancia Financeira"),
+                ("Incluir cancelados", "Sim" if query_result["normalized_query"]["include_cancelled"] else "N\u00e3o (padr\u00e3o)"),
+                ("Incluir improcedentes", "Sim" if query_result["normalized_query"]["include_improcedente"] else "N\u00e3o (padr\u00e3o)"),
+            ]
             with patch("reportlab.platypus.SimpleDocTemplate", StoryCaptureDocument):
-                _pdf_report("24/10/2026 14:14", self.user.get_username(), query_result,
-                            [("Motivo", "Pendência Financeira")])
+                _pdf_report("24/10/2026 14:14", self.user.get_username(), query_result, filter_rows)
             texts = []
             def collect(item):
                 if isinstance(getattr(item, "text", None), str):
@@ -1419,6 +1578,19 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn("ANEXO - TICKETS DO RESULTADO", report_text)
         self.assertIn("A-1723", report_text)
         self.assertIn("A-1724", report_text)
+        self.assertIn("Incluir cancelados", report_text)
+        self.assertIn("Incluir improcedentes", report_text)
+        manager_result = AnalyticsQueryService().query(
+            {**base, "include_cancelled": True, "include_improcedente": True},
+            user=self.user, include_all_rows=True,
+        )
+        manager_text = render_story(manager_result)
+        self.assertIn("Incluir cancelados", manager_text)
+        self.assertIn("Incluir improcedentes", manager_text)
+        self.assertIn("Evolu\u00e7\u00e3o operacional e backlog", manager_text)
+        self.assertIn("Aging do estoque atual", manager_text)
+        self.assertIn("Snapshot atual", manager_text)
+        self.assertIn("Exibindo 2 de 2 tickets", manager_text)
         from reportlab.pdfbase import pdfmetrics
         self.assertGreater(pdfmetrics.stringWidth("Período · Pendência Financeira · Criação · Não identificado · Página", "ArionVera", 8), 0)
 
@@ -1785,6 +1957,110 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn('mode === "closed" ? `<small>Encerrados:', operational_render)
         self.assertIn("const visualHeight = grain === \"hour\" ? 260 : 268", operational_render)
 
+    def test_cockpit_quick_queries_keep_context_and_load_operational_analytics(self):
+        script = (Path(settings.BASE_DIR.parent) / "frontend_src" / "js" / "painel" / "cockpit.js").read_text(encoding="utf-8")
+        template = Path("arion_geo/templates/painel/cockpit.html").read_text(encoding="utf-8")
+        for key in ("finance", "recurrence", "massive", "improper", "proper", "high-critical", "over-24h", "unassigned", "open", "pending", "resolved"):
+            self.assertIn(f'data-quick="{key}"', template)
+        for preset in (
+            'open: { metric: "open_tickets", group_by: "provider"',
+            'pending: { metric: "pending_tickets", group_by: "provider"',
+            'resolved: { metric: "resolved_closed_tickets", group_by: "provider"',
+        ):
+            self.assertIn(preset, script)
+        self.assertNotIn('data-quick="backlog"', template)
+        self.assertNotIn('data-quick="status"', template)
+        self.assertNotIn('data-quick="reason"', template)
+        self.assertIn('filters: { responsibility: "IMPROCEDENTE" }', script)
+        self.assertIn('filters: { responsibility: "PROCEDENTE" }', script)
+        self.assertIn('filters: { age_bucket: "OVER_24H" }', script)
+        self.assertIn('filters: { responsible: "unassigned" }', script)
+        self.assertIn('include_cancelled: true, include_improcedente: true', script)
+        self.assertIn('if (key === "improper") queryState.include_improcedente = true', script)
+        self.assertIn('if (!queryState.include_cancelled) params.set("include_cancelled", "0")', script)
+        self.assertIn('if (!queryState.include_improcedente) params.set("include_improcedente", "0")', script)
+        preset_state = script[script.index("function presetState"):script.index("function updatePresetStatus")]
+        self.assertIn("queryState.scope = scope", preset_state)
+        self.assertIn("queryState.chart_view = chart_view; queryState.chart_origin = chart_origin", preset_state)
+        self.assertIn("refresh()", preset_state)
+
+    def test_cockpit_manager_options_keep_flow_and_snapshot_semantics_consistent(self):
+        active = self._ticket(4120, "OPEN", True, 5)
+        canceled = self._ticket(4121, "CANCELED", False, 6)
+        improper = self._ticket(4122, "OPEN", True, 7)
+        improper.responsibility_normalized = "IMPROCEDENTE"
+        improper.save(update_fields=("responsibility_normalized",))
+        for ticket in (active, canceled, improper):
+            OTRSTicketConfigItem.objects.create(
+                ticket=ticket, config_item_id=self.link.source_config_item_id,
+                cmdb_link=self.link, relation_type=f"Manager-{ticket.external_id}", relation_state="Valid",
+            )
+
+        service = AnalyticsQueryService()
+        base = {"metric": "tickets", "start": "2026-10-01", "end": "2026-10-31",
+                "group_by": "provider", "filters": {}}
+        default = service.query(base, user=self.user, include_all_rows=True)
+        expanded = service.query({**base, "include_cancelled": True, "include_improcedente": True},
+                                 user=self.user, include_all_rows=True)
+
+        self.assertEqual(default["value"], 3)
+        self.assertEqual(default["ticket_result_total"], 3)
+        self.assertTrue(default["normalized_query"]["include_cancelled"])
+        self.assertTrue(default["normalized_query"]["include_improcedente"])
+        self.assertEqual(default["operational"]["period"]["entries"], 3)
+        self.assertEqual(default["operational"]["period"]["canceled"], 1)
+        self.assertEqual(default["operational"]["current"]["total"], 1)
+        self.assertEqual(expanded["value"], 3)
+        self.assertEqual(expanded["ticket_result_total"], 3)
+        self.assertEqual(expanded["normalized_query"]["include_cancelled"], True)
+        self.assertEqual(expanded["normalized_query"]["include_improcedente"], True)
+        self.assertEqual(expanded["operational"]["period"]["entries"], 3)
+        self.assertEqual(expanded["operational"]["period"]["canceled"], 1)
+        self.assertEqual(expanded["operational"]["period"]["balance"], 2)
+        self.assertEqual(expanded["operational"]["current"]["total"], 1)
+        self.assertEqual(sum(row["total"] for row in expanded["operational"]["aging"]), 1)
+        self.assertEqual(sum(row["value"] for row in expanded["series"]), expanded["value"])
+        self.assertEqual(sum(row["value"] for row in expanded["breakdown"]), expanded["value"])
+        self.assertEqual(sum(row["value"] for row in expanded["detail"]), expanded["value"])
+        self.assertIn("cancelados", expanded["metric_semantics"])
+        ranking = next(spec for spec in expanded["chart_specs"] if spec.get("dimension") == "provider")
+        self.assertIn("logo_initials", ranking["details"][0])
+
+        snapshot = service.query({**base, "metric": "backlog", "include_cancelled": True,
+                                  "include_improcedente": True}, user=self.user, include_all_rows=True)
+        self.assertEqual(snapshot["value"], 1)
+        self.assertFalse(snapshot["normalized_query"]["include_improcedente"])
+        self.assertEqual(snapshot["operational"]["current"]["total"], 1)
+
+    def test_cockpit_operational_shortcut_filters_use_mirror_fields(self):
+        old_unassigned = self._ticket(4110, "OPEN", True, 1)
+        old_unassigned.responsibility_normalized = "IMPROCEDENTE"
+        old_unassigned.responsible_user_id = None
+        old_unassigned.save(update_fields=("responsibility_normalized", "responsible_user_id"))
+        assigned = self._ticket(4111, "PENDING", True, 2)
+        assigned.responsibility_normalized = "PROCEDENTE"
+        assigned.responsible_user_id = 52
+        assigned.save(update_fields=("responsibility_normalized", "responsible_user_id"))
+
+        service = AnalyticsQueryService()
+        base = {"scope": "support", "start": "2026-10-01", "end": "2026-10-31", "group_by": "provider"}
+        improper = service.query({**base, "metric": "tickets", "filters": {"responsibility": "improcedente"}}, user=self.user, include_all_rows=True)
+        proper = service.query({**base, "metric": "tickets", "filters": {"responsibility": "procedente"}}, user=self.user, include_all_rows=True)
+        unassigned = service.query({**base, "metric": "backlog", "filters": {"responsible": "unassigned"}}, user=self.user, include_all_rows=True)
+        assigned_filter = service.query({**base, "metric": "backlog", "filters": {"responsible": "assigned"}}, user=self.user, include_all_rows=True)
+        aged = service.query({**base, "metric": "backlog", "filters": {"age_bucket": "OVER_24H"}}, user=self.user, include_all_rows=True)
+        queue = service.query({**base, "metric": "tickets", "filters": {"queue": "NOC - ATACADO"}}, user=self.user, include_all_rows=True)
+
+        self.assertEqual({row["id"] for row in improper["tickets"]}, {old_unassigned.pk})
+        self.assertEqual({row["id"] for row in proper["tickets"]}, {assigned.pk})
+        self.assertEqual({row["id"] for row in unassigned["tickets"]}, {old_unassigned.pk})
+        self.assertEqual({row["id"] for row in assigned_filter["tickets"]}, {assigned.pk})
+        self.assertIn({"value": "assigned", "label": "Atribu\u00eddo"}, assigned_filter["options"]["responsible"])
+        self.assertEqual({row["id"] for row in aged["tickets"]}, {old_unassigned.pk, assigned.pk})
+        self.assertEqual(queue["value"], 2)
+        self.assertIn("NOC - ATACADO", queue["options"]["queue"])
+        self.assertEqual(aged["normalized_query"]["filters"]["age_bucket"], "OVER_24H")
+
     def test_cockpit_api_uses_real_query_and_rejects_bad_payload(self):
         ticket = self._ticket(104, "OPEN", True, 5)
         OTRSTicketConfigItem.objects.create(ticket=ticket, config_item_id="analytics-ci-1", cmdb_link=self.link, relation_type="DependsOn", relation_state="Valid")
@@ -1793,3 +2069,109 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(response.json()["value"], 1)
         invalid = self.client.post(reverse("analytics-query"), data="[]", content_type="application/json")
         self.assertEqual(invalid.status_code, 400)
+
+    def test_cockpit_query_api_returns_json_for_support_cancellation_and_general(self):
+        support = self._ticket(1901, "OPEN", True, 5)
+        cancellation = self._ticket(1902, "OPEN", True, 5)
+        cancellation.queue_name = "NOC - CANCELAMENTOS NGO"
+        cancellation.external_state_name = "em atendimento"
+        cancellation.external_state_type = "open"
+        cancellation.source_created_at = datetime(2025, 11, 5, 3, tzinfo=datetime_timezone.utc)
+        cancellation.save(update_fields=(
+            "queue_name", "external_state_name", "external_state_type", "source_created_at",
+        ))
+        for ticket in (support, cancellation):
+            OTRSTicketConfigItem.objects.create(
+                ticket=ticket,
+                config_item_id="analytics-ci-1",
+                cmdb_link=self.link,
+                relation_type="DependsOn",
+                relation_state="Valid",
+            )
+
+        payloads = (
+            {"scope": "support", "group_by": "provider", "expected": 1},
+            {"scope": "cancellation", "group_by": "cancellation_stage", "expected": 1},
+            {"scope": "general", "group_by": "operational_origin", "expected": 2},
+        )
+        for item in payloads:
+            with self.subTest(scope=item["scope"]):
+                response = self.client.post(
+                    reverse("analytics-query"),
+                    data=json.dumps({
+                        "scope": item["scope"], "metric": "tickets", "group_by": item["group_by"],
+                        "start": "2025-11-01", "end": "2026-10-31", "compare_to": None,
+                        "selected_month": None, "detail_page": 1, "ticket_page": 1,
+                        "ticket_page_size": 25, "ticket_search": "",
+                        "filters": {
+                            "provider": "all", "uf": "all", "status": "all", "source_state": "all",
+                            "service": "all", "sla": "all", "priority": "all",
+                            "termination_reason": "all", "origin": "all", "stage": "all", "project": "all",
+                        },
+                    }),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 200, response.content.decode())
+                body = response.json()
+                self.assertEqual(body["value"], item["expected"])
+                self.assertEqual(body["ticket_result_total"], item["expected"])
+                self.assertNotIn(b"NaN", response.content)
+                if item["scope"] == "general":
+                    self.assertEqual(
+                        {row["dimension"]: row["value"] for row in body["detail"]},
+                        {"Suporte": 1, "Cancelamentos": 1},
+                    )
+
+    def test_cockpit_general_query_api_applies_provider_status_origin_period_and_reason_filters(self):
+        support = self._ticket(1911, "OPEN", True, 5)
+        support.closing_code_raw = "PendenciaFinanceira"
+        support.save(update_fields=("closing_code_raw",))
+        cancellation = self._ticket(1912, "OPEN", True, 5)
+        cancellation.queue_name = "NOC - CANCELAMENTOS NGO"
+        cancellation.external_state_name = "em atendimento"
+        cancellation.external_state_type = "open"
+        cancellation.closing_code_raw = "PendenciaFinanceira"
+        cancellation.save(update_fields=(
+            "queue_name", "external_state_name", "external_state_type", "closing_code_raw",
+        ))
+        for ticket in (support, cancellation):
+            OTRSTicketConfigItem.objects.create(
+                ticket=ticket,
+                config_item_id="analytics-ci-1",
+                cmdb_link=self.link,
+                relation_type="DependsOn",
+                relation_state="Valid",
+            )
+
+        filters_and_expected = (
+            ({}, 2),
+            ({"provider": self.operator.name}, 2),
+            ({"status": "OPEN"}, 2),
+            ({"origin": "CANCELLATION"}, 1),
+            ({"termination_reason": "pendencia_financeira"}, 2),
+        )
+        for filters, expected in filters_and_expected:
+            with self.subTest(filters=filters):
+                response = self.client.post(
+                    reverse("analytics-query"),
+                    data=json.dumps({
+                        "scope": "general", "metric": "tickets", "group_by": "operational_origin",
+                        "start": "2026-10-01", "end": "2026-10-31", "filters": filters,
+                    }),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 200, response.content.decode())
+                self.assertEqual(response.json()["value"], expected)
+                self.assertNotIn(b"NaN", response.content)
+
+        period_response = self.client.post(
+            reverse("analytics-query"),
+            data=json.dumps({
+                "scope": "general", "metric": "tickets", "group_by": "operational_origin",
+                "start": "2026-10-06", "end": "2026-10-06", "filters": {},
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(period_response.status_code, 200, period_response.content.decode())
+        self.assertEqual(period_response.json()["value"], 0)
+        self.assertNotIn(b"NaN", period_response.content)

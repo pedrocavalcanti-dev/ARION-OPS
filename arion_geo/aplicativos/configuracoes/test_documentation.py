@@ -31,7 +31,7 @@ class DocumentationPortalTests(TestCase):
         self.assertContains(home, "Segurança e operação")
         self.assertContains(home, "Dados e Integrações")
         self.assertContains(home, "9 documentos")
-        self.assertContains(home, "5 documentos")
+        self.assertContains(home, "7 documentos")
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Caminho da request")
 
@@ -56,12 +56,13 @@ class DocumentationPortalTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(home, "Atualizações e versões")
         self.assertContains(response, "Atualiza&ccedil;&otilde;es e vers&otilde;es")
+        self.assertContains(response, "ARION OPS 1.3.0 — Visão Operacional, Qualidade e Segurança")
         self.assertContains(response, "ARION OPS 1.2.0 — Identidade, Cockpit e Inteligência Operacional")
         self.assertContains(response, "data-pwa-update-version")
         self.assertContains(response, "Sobre o ARION OPS")
-        self.assertContains(response, 'id="release-v1.2.0"')
-        self.assertContains(response, "Vers&atilde;o carregada nesta p&aacute;gina: v1.2.0")
-        self.assertEqual(response.context["version"], "1.2.0")
+        self.assertContains(response, 'id="release-v1.3.0"')
+        self.assertContains(response, "Vers&atilde;o carregada nesta p&aacute;gina: v1.3.0")
+        self.assertEqual(response.context["version"], "1.3.0")
         self.assertEqual(response.context["current_release"]["version"], response.context["version"])
 
     def test_portal_receives_the_existing_saved_theme(self):
@@ -119,7 +120,7 @@ class DocumentationPortalTests(TestCase):
                     self.assertIn(next_url, sequence)
 
     def test_registry_has_search_metadata_and_expected_technical_pages(self):
-        expected = {"chamados", "banco-de-dados", "otrs", "cmdb", "worker", "dicionario-de-dados"}
+        expected = {"chamados", "banco-de-dados", "otrs", "cmdb", "worker", "dicionario-de-dados", "qualidade"}
         self.assertTrue(expected.issubset(DOCUMENTS))
         for item in DocumentationService.navigation():
             with self.subTest(slug=item["slug"]):
@@ -130,7 +131,7 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 28)
+        self.assertEqual(len(DOCUMENTS), 32)
 
     def test_search_terms_find_current_operational_documents(self):
         cases = {

@@ -4,9 +4,11 @@ from unittest.mock import Mock
 
 from aplicativos.integracoes.clients.cmdb import CMDBClient
 from aplicativos.integracoes.clients.otrs import OTRSReadOnlyClient
+from aplicativos.integracoes.forms import CMDBConfigurationForm, OTRSConfigurationForm
 from aplicativos.integracoes.services.errors import (
     CMDBAuthenticationError,
     CMDBTimeoutError,
+    IntegrationNotConfigured,
     OTRSAuthenticationError,
     OTRSConnectionRefusedError,
     OTRSCredentialInvalidError,
@@ -14,6 +16,7 @@ from aplicativos.integracoes.services.errors import (
     OTRSDatabaseNotFoundError,
     OTRSDriverError,
     OTRSHostUnreachableError,
+    OTRSTLSRequiredError,
     OTRSTimeoutError,
 )
 
@@ -141,6 +144,20 @@ class CMDBClientTests(TestCase):
         self.assertEqual(result["CIXMLData"], {"Designacao": "Circuito A", "ISP": "Operadora", "CNPJ": "123", "Equipamento": "router", "RandomField": "hidden"})
         self.assertNotIn("top secret", json.dumps(result))
         self.assertNotIn("portal-user", json.dumps(result))
+
+    def test_cmdb_client_and_form_reject_non_https_urls(self):
+        with self.assertRaises(IntegrationNotConfigured):
+            CMDBClient(base_url="http://cmdb.example/Webservice/", username="reader", password="private", opener=Mock())
+        form = CMDBConfigurationForm(data={
+            "base_url": "http://cmdb.example/Webservice",
+            "username": "reader",
+            "password": "private",
+            "timeout": 15,
+            "verify_tls": True,
+            "batch_size": 50,
+        })
+        self.assertFalse(form.is_valid())
+        self.assertIn("base_url", form.errors)
 
 
 class FakeCursor:
@@ -301,3 +318,35 @@ class OTRSReadOnlyClientTests(TestCase):
     def test_table_identifier_must_be_discovered_and_supported(self):
         with self.assertRaises(OTRSDatabaseError):
             self.client.get_sample_rows("users; DROP TABLE users")
+
+    def test_remote_host_requires_tls_fail_closed_while_loopback_allows_local_mode(self):
+        remote_insecure = OTRSReadOnlyClient(
+            host="200.174.198.133", username="reader", password="private", use_tls=False
+        )
+        with self.assertRaises(OTRSTLSRequiredError):
+            remote_insecure._build_ssl_context()
+
+        remote_default = OTRSReadOnlyClient(
+            host="200.174.198.133", username="reader", password="private"
+        )
+        self.assertTrue(remote_default.use_tls)
+        self.assertIsNotNone(remote_default._build_ssl_context())
+
+        loopback_client = OTRSReadOnlyClient(
+            host="127.0.0.1", username="reader", password="private"
+        )
+        self.assertFalse(loopback_client.use_tls)
+        self.assertIsNone(loopback_client._build_ssl_context())
+
+        form_invalid = OTRSConfigurationForm(data={
+            "host": "200.174.198.133", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "private", "timeout": 10, "use_tls": False,
+        })
+        self.assertFalse(form_invalid.is_valid())
+        self.assertIn("use_tls", form_invalid.errors)
+
+        form_loopback = OTRSConfigurationForm(data={
+            "host": "127.0.0.1", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "private", "timeout": 10, "use_tls": False,
+        })
+        self.assertTrue(form_loopback.is_valid())

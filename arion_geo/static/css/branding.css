@@ -248,12 +248,23 @@ textarea:not([aria-invalid="true"]):focus:not(:focus-visible) {
   line-height: 1.7;
 }
 
+.about-page__details {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:22px;
+  max-width:650px;
+  margin-top:25px;
+}
+
+.about-page__details section { padding-top:12px; border-top:1px solid var(--border-primary); }
+.about-page__details h2 { margin:0 0 6px; color:var(--text-muted); font-size:10px; font-weight:650; letter-spacing:.08em; text-transform:uppercase; }
+.about-page__details p { margin:0; color:var(--text-secondary); font-size:11px; line-height:1.6; }
+.about-page__footer { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; max-width:650px; margin-top:24px; padding-top:16px; border-top:1px solid var(--border-primary); }
+
 .about-page__credit {
   display: grid;
   gap: 5px;
-  margin-top: 31px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border-primary);
+  margin:0;
 }
 
 .about-page__credit span,
@@ -263,8 +274,9 @@ textarea:not([aria-invalid="true"]):focus:not(:focus-visible) {
 }
 
 .about-page__credit strong { font-size: 14px; font-weight: 600; }
-.about-page__company { margin: 15px 0 0; color: var(--text-secondary); font-size: 12px; }
-.about-page__version { margin: 23px 0 0; }
+.about-page__company { margin:0 0 6px; color:var(--text-secondary); font-size:12px; text-align:right; }
+.about-page__version { margin:0; color:var(--text-muted); font-size:11px; text-align:right; }
+.about-page__version span { padding:0 4px; color:var(--text-faint); }
 
 @media (max-width: 760px) {
   .brand-decoration::before,
@@ -279,6 +291,9 @@ textarea:not([aria-invalid="true"]):focus:not(:focus-visible) {
   .about-page__content { padding-left: 17px; }
   .about-page__lead { font-size: 14px; }
   .about-page__description { font-size: 12px; }
+  .about-page__details { grid-template-columns:1fr; gap:15px; margin-top:21px; }
+  .about-page__footer { align-items:flex-start; flex-direction:column; gap:13px; margin-top:20px; }
+  .about-page__company, .about-page__version { text-align:left; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

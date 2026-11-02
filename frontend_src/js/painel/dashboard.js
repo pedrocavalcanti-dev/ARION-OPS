@@ -7,6 +7,8 @@
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const dataTag = document.getElementById("monthly-chart-data");
   const monthly = dataTag ? JSON.parse(dataTag.textContent) : [];
+  const clientDataTag = document.getElementById("dashboard-client-distribution-data");
+  const clientDistribution = clientDataTag ? JSON.parse(clientDataTag.textContent) : [];
   const tooltip = page.querySelector("[data-chart-tooltip]");
 
   const svg = (tag, attrs = {}) => {
@@ -54,6 +56,87 @@
 
   function tipRow(swatch, label, value) {
     return `<div class="tip-row"><i class="tip-swatch tip-swatch--${swatch}"></i>${label}<b>${value}</b></div>`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[character]);
+  }
+
+  function showRankingTooltip(element) {
+    const label = element.dataset.tipLabel || element.getAttribute("aria-label") || "";
+    const value = element.dataset.tipValue || "";
+    const share = element.dataset.tipShare;
+    const detail = share ? `${value} · ${share}` : value;
+    const rect = element.getBoundingClientRect();
+    const html = `<span class="tip-title">${escapeHtml(label)}</span>${tipRow("neutral", "Volume", escapeHtml(detail))}`;
+    showTooltip(element, html, { y: rect.top });
+  }
+
+  function bindRankingTooltips() {
+    page.querySelectorAll(".dashboard-aging-column-item,.dashboard-project-column").forEach((item) => {
+      item.addEventListener("mouseenter", showRankingTooltip.bind(null, item));
+      item.addEventListener("focus", showRankingTooltip.bind(null, item));
+      item.addEventListener("mouseleave", hideTooltip);
+      item.addEventListener("blur", hideTooltip);
+    });
+  }
+
+  function arcPath(start, end) {
+    const center = 90;
+    const outer = 66;
+    const inner = 46;
+    const point = (radius, angle) => [center + radius * Math.cos(angle), center + radius * Math.sin(angle)];
+    const [outerStartX, outerStartY] = point(outer, start);
+    const [outerEndX, outerEndY] = point(outer, end);
+    const [innerEndX, innerEndY] = point(inner, end);
+    const [innerStartX, innerStartY] = point(inner, start);
+    const largeArc = end - start > Math.PI ? 1 : 0;
+    return [
+      `M${outerStartX} ${outerStartY}`,
+      `A${outer} ${outer} 0 ${largeArc} 1 ${outerEndX} ${outerEndY}`,
+      `L${innerEndX} ${innerEndY}`,
+      `A${inner} ${inner} 0 ${largeArc} 0 ${innerStartX} ${innerStartY}Z`,
+    ].join(" ");
+  }
+
+  function buildClientDonut() {
+    const chart = page.querySelector("[data-client-donut]");
+    const arcs = chart?.querySelector("[data-client-donut-arcs]");
+    if (!chart || !arcs || !clientDistribution.length) return;
+    const total = clientDistribution.reduce((sum, item) => sum + Number(item.value || 0), 0);
+    if (!total) return;
+
+    let cursor = -Math.PI / 2;
+    clientDistribution.forEach((item) => {
+      const value = Math.max(0, Number(item.value) || 0);
+      if (!value) return;
+      const slice = Math.PI * 2 * value / total;
+      const gap = Math.min(.035, slice / 3);
+      const start = cursor + gap / 2;
+      const end = cursor + slice - gap / 2;
+      cursor += slice;
+      const share = `${Number(item.share || 0).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+      const label = `${item.label}: ${numberFormat.format(value)} links, ${share}`;
+      const segment = svg("path", {
+        d: arcPath(start, end),
+        class: `dashboard-client-arc dashboard-client-arc--${item.key}`,
+        tabindex: "0",
+        role: "img",
+        "aria-label": label,
+      });
+      const show = (event) => {
+        const rect = segment.getBoundingClientRect();
+        const html = `<span class="tip-title">Distribuição por cliente</span>${tipRow(item.key, escapeHtml(item.label), `${numberFormat.format(value)} · ${escapeHtml(share)}`)}`;
+        showTooltip(segment, html, { x: event?.clientX ?? rect.left + rect.width / 2, y: rect.top });
+      };
+      segment.addEventListener("mousemove", show);
+      segment.addEventListener("focus", show);
+      segment.addEventListener("mouseleave", hideTooltip);
+      segment.addEventListener("blur", hideTooltip);
+      arcs.append(segment);
+    });
   }
 
   /* ---------- Escala "bonita" para o eixo Y ---------- */
@@ -218,10 +301,16 @@
 
   /* ---------- Revelação (barras, anel, splits) ---------- */
   function reveal() {
-    page.querySelectorAll("[data-value][data-max]").forEach((bar) => {
+    page.querySelectorAll("[data-value][data-max]:not(.dashboard-aging-column-item):not(.dashboard-project-column)").forEach((bar) => {
       const value = Number(bar.dataset.value);
       const max = Number(bar.dataset.max);
       bar.style.width = `${max ? Math.max(0, Math.min(100, (value / max) * 100)) : 0}%`;
+    });
+    page.querySelectorAll(".dashboard-aging-column-item[data-value][data-max],.dashboard-project-column[data-value][data-max]").forEach((column) => {
+      const value = Number(column.dataset.value);
+      const max = Number(column.dataset.max);
+      const bar = column.querySelector(".dashboard-aging-column b,.dashboard-project-track b");
+      if (bar) bar.style.height = `${max ? Math.max(0, Math.min(100, (value / max) * 100)) : 0}%`;
     });
     page.querySelectorAll("[data-share]").forEach((segment) => {
       segment.style.flexBasis = `calc(${Number(segment.dataset.share) || 0}% - 2px)`;
@@ -233,6 +322,8 @@
   }
 
   buildTrendChart();
+  buildClientDonut();
+  bindRankingTooltips();
   buildSparklines();
   buildDots();
   bindOperatorSegments();

@@ -18,5 +18,8 @@ def configured_otrs_client(integration, *, connection_factory=None):
         host=config.get("host", ""), port=config.get("port", 3306),
         database=config.get("database", ""), username=integration.username,
         password=password, timeout=config.get("timeout", 10),
+        use_tls=config.get("use_tls", None),
+        ssl_ca=config.get("ssl_ca", ""),
+        ssl_verify=config.get("ssl_verify", True),
         connection_factory=connection_factory,
     )

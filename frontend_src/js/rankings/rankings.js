@@ -137,11 +137,10 @@
     cockpit.searchParams.set("provider", item.name);
     const responsibility = item.responsibility || {};
     const overviewMetric = (label, value) => '<div><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>';
-    const summary = '<section class="drawer-score-summary"><div class="drawer-score-main"><span>\u00cdndice ARION V2</span><strong>' + score(item.risk_score) + '<small>/100</small></strong><em class="risk-pill risk-pill--' + escapeHtml(item.risk_class) + '">' + escapeHtml(item.risk_label) + '</em></div><div class="drawer-overview">' +
-      overviewMetric("Base CMDB", num(item.links_total) + " " + unit(item.links_total, "link", "links")) +
-      overviewMetric("Links ativos atuais", num(item.links_active)) +
+    const summary = '<section class="drawer-score-summary"><div class="drawer-score-main"><span title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação.">Indicador operacional</span><strong>' + score(item.risk_score) + '<small>/100</small></strong><em class="risk-pill risk-pill--' + escapeHtml(item.risk_class) + '">' + escapeHtml(item.risk_label) + '</em></div><div class="drawer-overview">' +
+      overviewMetric("Links na CMDB", num(item.links_total) + " " + unit(item.links_total, "link", "links")) +
       overviewMetric("Chamados", num(item.tickets)) +
-      overviewMetric("Chamados / 100 links ativos", item.tickets_per_100_active_links == null ? "—" : decimal.format(item.tickets_per_100_active_links)) +
+      overviewMetric("Chamados / 100 links CMDB", item.tickets_per_100_active_links == null ? "—" : decimal.format(item.tickets_per_100_active_links)) +
       overviewMetric("Tempo médio de resolução", item.avg_resolution_display || "—") +
       overviewMetric("Links afetados", num(item.links_affected)) +
       overviewMetric("Reincidentes", num(item.recurrent_links)) +
@@ -153,16 +152,16 @@
       const width = max ? Math.max(0, Math.min(100, points / max * 100)) : 0;
       return '<article><div><h4>' + label + '</h4><b>' + score(points) + ' / ' + max + '</b></div><div class="component-track" role="progressbar" aria-label="' + label + '" aria-valuemin="0" aria-valuemax="' + max + '" aria-valuenow="' + points.toFixed(1) + '"><i style="width:' + width.toFixed(1) + '%"></i></div><p>' + escapeHtml(detail) + '</p>' + (note ? '<small>' + escapeHtml(note) + '</small>' : '') + '</article>';
     };
-    const components = '<section class="drawer-section"><h3>Risco atual · composição do Índice</h3><div class="drawer-components drawer-components--v2">' +
+    const components = '<section class="drawer-section"><h3>Risco atual · componentes do indicador</h3><div class="drawer-components drawer-components--v2">' +
       componentRow("Impacto no NOC", item.impact_noc_score, 30, num(item.tickets) + " chamados \u00b7 " + num(item.links_affected) + " links afetados", "Volume e links afetados normalizados pelo P95 do conjunto filtrado.") +
       componentRow("Base afetada", item.affected_base_score, 20, num(item.links_affected) + " de " + num(item.links_total) + " links \u00b7 " + decimal.format(item.affected_rate * 100) + "%") +
       componentRow("Reincid\u00eancia", item.recurrent_score, 20, num(item.recurrent_links) + " de " + num(item.links_affected) + " links afetados \u00b7 " + decimal.format(item.recurrent_rate * 100) + "%") +
       componentRow("ARION >24h", item.over_24h_score, 20, num(item.tickets_over_24h) + " de " + num(item.eligible_tickets) + " chamados avali\u00e1veis \u00b7 " + decimal.format(item.over_24h_rate * 100) + "%") +
       componentRow("Backlog atual", item.backlog_score, 10, num(item.backlog_current) + " " + unit(item.backlog_current, "chamado", "chamados")) +
-      '</div><small class="aging-disclaimer">Os cinco componentes somam o Índice ARION V2. A base afetada conserva o denominador CMDB do cálculo atual. Exposição é a quantidade atual de links com implantação Operacional; incidência é o número de chamados criados no período por 100 links ativos. Chamados sem timestamps suficientes não entram no denominador do aging. O limite de 24h não representa necessariamente o SLA contratual.</small></section>';
+      '</div><small class="aging-disclaimer">Os cinco componentes e a fórmula vigente permanecem inalterados. Links representam o snapshot atual completo da CMDB; chamados seguem o período selecionado. Este indicador é uma leitura auxiliar, e seus critérios definitivos serão definidos com a operação. O limite de 24h não representa necessariamente o SLA contratual.</small></section>';
     const cockpitLink = '<footer class="drawer-actions"><a class="ranking-button ranking-button--primary" href="' + escapeHtml(base.toString()) + '">Ver links na Base</a><a class="ranking-button ranking-button--quiet" href="' + escapeHtml(cockpit.toString()) + '">Analisar no Cockpit</a></footer>';
     content.innerHTML = summary + sample + components + responsibilitySection(responsibility) +
-      '<section class="drawer-section"><h3>Evolu\u00e7\u00e3o do \u00cdndice ARION V2 \u00b7 3 meses</h3>' + historyChart(item.history) + '</section>' +
+      '<section class="drawer-section"><h3>Evolu\u00e7\u00e3o do indicador operacional \u00b7 3 meses</h3>' + historyChart(item.history) + '</section>' +
       listSection("Projetos com mais ocorr\u00eancias", item.projects_top) +
       listSection("Clientes com mais ocorr\u00eancias", item.clients_top) +
       stateList(item.ufs_top) +

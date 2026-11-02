@@ -1,0 +1,35 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% load static %}
+{% block title %}ARION OPS · Histórico da Qualidade{% endblock %}
+{% block quality_title %}Histórico da Qualidade{% endblock %}
+{% block quality_content %}
+<main class="quality-history-page">
+  <header class="quality-page-header"><div><p class="quality-eyebrow">AUDITORIA OPERACIONAL</p><h1>{{ page_title }}</h1><p class="quality-page-subtitle">Eventos auditados das Ordens de Qualidade e do diretório de contatos no seu escopo.</p>{% include "qualidade/partials/guide_trigger.html" %}</div></header>
+  <form class="quality-list-toolbar quality-history-toolbar" method="get" aria-label="Busca e filtros do histórico">
+    <label class="quality-search-field"><span class="quality-sr-only">Buscar OQ, Designação, ticket, ator ou descrição</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{ selected.q }}" placeholder="Buscar OQ, Designação, ticket, ator ou descrição"></label>
+    <label class="quality-toolbar-control quality-page-size"><span>Por página</span><select name="per_page"><option value="25"{% if page_size == 25 %} selected{% endif %}>25</option><option value="50"{% if page_size == 50 %} selected{% endif %}>50</option><option value="100"{% if page_size == 100 %} selected{% endif %}>100</option></select></label>
+    <details class="quality-list-filter-details"{% if selected.oq or selected.event or selected.user or selected.client or selected.project or selected.isp or date_from or date_to %} open{% endif %}>
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Filtros</summary>
+      <div class="quality-list-filter-panel quality-history-filter-panel">
+        <label>OQ<input type="search" name="oq" value="{{ selected.oq }}" placeholder="OQ-2026..."></label>
+        <label>Evento<select name="event"><option value="">Todos</option>{% for value,label in event_options %}<option value="{{ value }}"{% if selected.event == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>Usuário<select name="user"><option value="">Todos</option>{% for value,label in actor_options %}<option value="{{ value }}"{% if selected.user == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>Cliente<select name="client"><option value="">Todos</option>{% for item in client_options %}<option value="{{ item }}"{% if selected.client == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>Projeto<select name="project"><option value="">Todos</option>{% for item in project_options %}<option value="{{ item }}"{% if selected.project == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>ISP / Provedor<select name="isp"><option value="">Todos</option>{% for item in provider_options %}<option value="{{ item }}"{% if selected.isp == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>De<input type="date" name="date_from" value="{{ date_from }}"></label>
+        <label>Até<input type="date" name="date_to" value="{{ date_to }}"></label>
+        <div class="quality-list-filter-actions"><a href="{% url 'qualidade:historico' %}">Limpar</a><button type="submit">Aplicar filtros</button></div>
+      </div>
+    </details>
+    <button class="quality-list-submit" type="submit">Buscar</button>
+  </form>
+  {% if history_events %}
+    <section class="quality-history-table-wrap" aria-label="Eventos auditados da Qualidade"><table class="quality-history-table"><thead><tr><th>Data / Hora</th><th>OQ</th><th>Designação</th><th>ISP / Provedor</th><th>Evento</th><th>Ator</th><th>Resumo</th><th>Ação</th></tr></thead><tbody>
+      {% for event in history_events %}<tr><td>{{ event.timestamp|date:"d/m/Y H:i" }}</td><td>{% if event.order %}<a href="{% url 'qualidade:ordem_detail' codigo=event.order.code %}?tab=historico">{{ event.order.code }}</a>{% else %}Contato{% endif %}</td><td>{{ event.designation }}</td><td>{{ event.provider_name }}</td><td><span class="quality-history-event-label">{{ event.event_label }}</span></td><td>{{ event.user.get_full_name|default:event.user.get_username|default:"Sistema" }}</td><td>{{ event.summary }}</td><td>{% if event.order %}<a class="quality-row-open" href="{% url 'qualidade:ordem_detail' codigo=event.order.code %}?tab=historico">Abrir</a>{% elif event.contact %}<a class="quality-row-open" href="{% url 'qualidade:contatos' %}">Contato</a>{% endif %}</td></tr>{% endfor %}
+    </tbody></table></section>
+    <ol class="quality-audit-timeline quality-audit-timeline--global">{% for event in history_events %}<li><time datetime="{{ event.timestamp|date:'c' }}"><strong>{{ event.timestamp|date:"H:i" }}</strong><span>{{ event.timestamp|date:"d/m/Y" }}</span></time><i aria-hidden="true"></i><article><header><strong>{{ event.event_label }}</strong><small>{{ event.user.get_full_name|default:event.user.get_username|default:"Sistema" }}</small></header><p>{% if event.order %}{{ event.order.code }} · {{ event.designation }} · {{ event.provider_name }} · {% elif event.contact %}Contato · {{ event.provider_name }} · {% endif %}{{ event.summary }}</p><a href="{% if event.order %}{% url 'qualidade:ordem_detail' codigo=event.order.code %}?tab=historico{% else %}{% url 'qualidade:contatos' %}{% endif %}">{% if event.order %}Abrir OQ{% else %}Ver contatos{% endif %}</a></article></li>{% endfor %}</ol>
+    {% if history_page.paginator.num_pages > 1 %}<nav class="quality-pagination" aria-label="Paginação do histórico"><span>{{ history_page.start_index }}–{{ history_page.end_index }} de {{ history_page.paginator.count }}</span><div>{% if history_page.has_previous %}<a href="?{{ page_query }}&amp;page={{ history_page.previous_page_number }}">Anterior</a>{% endif %}<strong>Página {{ history_page.number }} de {{ history_page.paginator.num_pages }}</strong>{% if history_page.has_next %}<a href="?{{ page_query }}&amp;page={{ history_page.next_page_number }}">Próxima</a>{% endif %}</div></nav>{% endif %}
+  {% else %}<div class="quality-list-empty"><strong>Nenhum evento registrado.</strong><p>Os registros de auditoria da Qualidade aparecerão conforme o trabalho for realizado.</p></div>{% endif %}
+</main>
+{% endblock %}

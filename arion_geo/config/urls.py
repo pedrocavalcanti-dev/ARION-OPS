@@ -36,6 +36,7 @@ urlpatterns = [
     path('base/', include('aplicativos.base_links.urls')),
     path('chamados/', include('aplicativos.chamados.urls')),
     path('relatorios/', include('aplicativos.relatorios.urls')),
+    path('qualidade/', include('aplicativos.qualidade.urls')),
     path('dashboard/', dashboard, name='dashboard'),
     path('cockpit/', cockpit, name='cockpit'),
     path('api/analytics/', include('aplicativos.painel.analytics_urls')),

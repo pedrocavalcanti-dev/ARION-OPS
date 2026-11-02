@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}{% block quality_title %}Qualidade Operacional{% endblock %} · ARION OPS{% endblock %}
+{% block body_class %}quality-page{% endblock %}
+{% block extra_css %}{{ block.super }}<link rel="stylesheet" href="{% static 'css/qualidade/qualidade.css' %}">{% endblock %}
+{% block extra_js %}{{ block.super }}<script defer src="{% arion_bundle_js 'js/qualidade/shell.js' %}"></script><script defer src="{% arion_bundle_js 'js/qualidade/guide.js' %}"></script>{% endblock %}
+{% block content %}
+<div class="quality-layout">
+  <aside class="quality-sidebar" aria-label="Navegação de Qualidade">
+    <div class="quality-sidebar__header">
+      <a class="quality-brand" href="{% url 'qualidade:dashboard' %}" aria-label="Qualidade, visão geral" title="Qualidade">
+        <span class="quality-brand__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5h6a1 1 0 0 0 1-1v-.2A1.3 1.3 0 0 0 14.7 2h-5A1.3 1.3 0 0 0 8.4 3.3v.2a1 1 0 0 0 .6 1ZM8.5 13l2.2 2.2 4.8-5"/></svg></span>
+        <span class="quality-brand__copy"><small>ARION OPS</small><strong>Qualidade</strong></span>
+      </a>
+      <button class="quality-sidebar__toggle" type="button" data-quality-sidebar-toggle aria-controls="quality-sidebar-nav" aria-expanded="true" aria-label="Recolher menu" title="Recolher menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5-7 7 7 7"/></svg></button>
+    </div>
+    <p class="quality-nav-label">OPERAÇÃO</p>
+    <nav class="quality-nav" id="quality-sidebar-nav" aria-label="Seções de Qualidade">
+      <a href="{% url 'qualidade:dashboard' %}" aria-label="Visão geral" title="Visão geral"{% if active_section == 'overview' %} class="is-active" aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>Visão geral</span></a>
+      <a href="{% url 'qualidade:links_prioritarios' %}" aria-label="Links prioritários" title="Links prioritários"{% if active_section == 'links' %} class="is-active" aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.2 1.2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.2-1.2"/></svg><span>Links prioritários</span></a>
+      <a href="{% url 'qualidade:ordens' %}" aria-label="Ordens de Qualidade" title="Ordens de Qualidade"{% if active_section == 'orders' %} class="is-active" aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg><span>Ordens de Qualidade</span></a>
+      <a href="{% url 'qualidade:monitoramento' %}" aria-label="Monitoramento" title="Monitoramento"{% if active_section == 'monitoring' %} class="is-active" aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Monitoramento</span></a>
+      <a href="{% url 'qualidade:contatos' %}" aria-label="Contatos" title="Contatos"{% if active_section == 'contacts' %} class="is-active" aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 20v-1a5.5 5.5 0 0 1 11 0v1M16 5.5a3 3 0 0 1 0 5.8M18 15a4.5 4.5 0 0 1 2.5 4v1"/></svg><span>Contatos</span></a>
+      <a href="{% url 'qualidade:historico' %}" aria-label="Histórico" title="Histórico"{% if active_section == 'history' %} class="is-active" aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7v5h5M5 12a7 7 0 1 0 2-5"/><path d="M12 8v4l3 2"/></svg><span>Histórico</span></a>
+    </nav>
+    <div class="quality-sidebar__footer"><span>QUALIDADE OPERACIONAL</span><small>Recorrência · Tratativa · RREIP</small></div>
+  </aside>
+  <div class="quality-main">
+    <details class="quality-mobile-nav">
+      <summary><span>Qualidade</span><strong>{% if active_section == 'links' %}Links prioritários{% elif active_section == 'orders' %}Ordens de Qualidade{% elif active_section == 'monitoring' %}Monitoramento{% elif active_section == 'contacts' %}Contatos{% elif active_section == 'history' %}Histórico{% else %}Visão geral{% endif %}</strong><span aria-hidden="true">⌄</span></summary>
+      <nav aria-label="Seções de Qualidade">
+        <a href="{% url 'qualidade:dashboard' %}"{% if active_section == 'overview' %} aria-current="page"{% endif %}>Visão geral</a>
+        <a href="{% url 'qualidade:links_prioritarios' %}"{% if active_section == 'links' %} aria-current="page"{% endif %}>Links prioritários</a>
+        <a href="{% url 'qualidade:ordens' %}"{% if active_section == 'orders' %} aria-current="page"{% endif %}>Ordens de Qualidade</a>
+        <a href="{% url 'qualidade:monitoramento' %}"{% if active_section == 'monitoring' %} aria-current="page"{% endif %}>Monitoramento</a>
+        <a href="{% url 'qualidade:contatos' %}"{% if active_section == 'contacts' %} aria-current="page"{% endif %}>Contatos</a>
+        <a href="{% url 'qualidade:historico' %}"{% if active_section == 'history' %} aria-current="page"{% endif %}>Histórico</a>
+      </nav>
+    </details>
+    <div class="quality-content">{% block quality_content %}{% endblock %}</div>
+  </div>
+</div>
+{% include "qualidade/partials/guide_dialog.html" %}
+{% endblock %}

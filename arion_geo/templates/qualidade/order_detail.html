@@ -1,0 +1,239 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% load static %}
+{% block title %}ARION OPS · {{ order.code }} · Qualidade{% endblock %}
+{% block quality_title %}{{ order.code }}{% endblock %}
+{% block extra_js %}{{ block.super }}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script>{% endblock %}
+{% block quality_content %}
+<main class="quality-order-detail"{% if open_edit_dialog %} data-quality-open-edit-dialog="true"{% endif %}>
+  <a class="quality-back-link quality-order-back" href="{% url 'qualidade:ordens' %}">← Ordens de Qualidade</a>
+  <header class="quality-order-hero">
+    <div class="quality-order-hero__identity">
+      <div class="quality-order-hero__eyebrow"><span>{{ order.code }}{% if order.is_demo %} <span class="quality-demo-badge">Demonstração local</span>{% endif %}</span><span class="quality-pill quality-pill--status quality-pill--status-{{ order.status|lower }}">{{ order.status_label }}</span></div>
+      <h1>{{ designation }}</h1>
+      <p class="quality-order-hero__technical">CI {{ ci_display }}{% if source_record %}<span>·</span> Registro nº {{ source_record }}{% endif %}</p>
+      <p class="quality-order-hero__context">{{ client }} <span>·</span> {{ project }} <span>·</span> {{ provider_name }} <span>·</span> {{ uf }}</p>
+    </div>
+    <dl class="quality-order-hero__facts">
+      <div><dt>Prioridade</dt><dd>{{ order.priority_label }}</dd></div>
+      <div><dt>Responsável</dt><dd>{{ owner_label }}</dd></div>
+      <div><dt>Prazo</dt><dd>{% if order.treatment_deadline %}{{ order.treatment_deadline|date:"d/m/Y" }}{% else %}Sem prazo{% endif %}</dd></div>
+    </dl>
+    {% if can_manage_orders %}<button class="quality-action-button" type="button" data-quality-edit-order>Abrir edição</button>{% endif %}
+  </header>
+
+  <section class="quality-order-lifecycle" aria-label="Fase atual da ordem">
+    <div><span>Fase atual</span><strong>{{ order.lifecycle_label }}</strong>{% if order.status == "AGUARDANDO_TERCEIRO" %}<small>Aguardando terceiro</small>{% endif %}</div>
+    <ol>
+      {% for step in lifecycle_steps %}<li{% if step.current %} class="is-current" aria-current="step"{% endif %}><span aria-hidden="true"></span>{{ step.label }}</li>{% endfor %}
+    </ol>
+    <p>A fase pode mudar quando o caso evolui ou reincide.</p>
+  </section>
+
+  <nav class="quality-order-tabs" aria-label="Seções da Ordem de Qualidade">
+    <a href="?tab=resumo"{% if active_tab == "resumo" %} aria-current="page"{% endif %}>Resumo</a>
+    <a href="?tab=ocorrencias"{% if active_tab == "ocorrencias" %} aria-current="page"{% endif %}>Ocorrências <span>{{ all_ticket_count }}</span></a>
+    <a href="?tab=tratativas"{% if active_tab == "tratativas" %} aria-current="page"{% endif %}>Tratativas <span>{{ quality_ticket_count }}</span></a>
+    <a href="?tab=monitoramento"{% if active_tab == "monitoramento" %} aria-current="page"{% endif %}>Monitoramento <span>{{ monitoring_cycle_count }}</span></a>
+    <a href="?tab=historico"{% if active_tab == "historico" %} aria-current="page"{% endif %}>Histórico</a>
+  </nav>
+
+  {% if active_tab == "resumo" %}
+    <section class="quality-order-metrics" aria-label="Indicadores da OQ">
+      <article title="Tickets contabilizados após as regras de exclusão"><strong>{{ valid_occurrence_count }}</strong><span>Ocorrências válidas</span></article>
+      <article title="Ocorrências válidas posteriores à ocorrência inicial"><strong>{{ recurrence_count }}</strong><span>Reincidências</span></article>
+      <article title="Reincidências cuja causa foi confirmada pela Qualidade"><strong>{{ same_cause_count }}</strong><span>Mesma causa</span></article>
+      <article><strong>{{ quality_ticket_count }}</strong><span>TQs</span></article>
+      <article><strong>{{ monitoring_cycle_count }}</strong><span>Ciclos RREIP</span></article>
+    </section>
+
+    <div class="quality-order-summary-grid">
+      <div class="quality-order-summary-main">
+        {% if has_link_history %}<section class="quality-order-section quality-order-episode"><header><div><p class="quality-eyebrow">OTRS + CMDB</p><h2>Episódio operacional</h2></div><span class="quality-operational-state{% if operational_is_active %} quality-operational-state--active{% elif operational_is_stabilized %} quality-operational-state--stabilized{% elif operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ operational_state_label }}</span></header><dl class="quality-order-data-grid"><div><dt>Episódio atual</dt><dd>{% if current_episode_number %}{{ current_episode_number|stringformat:"02d" }}{% else %}—{% endif %}</dd></div><div><dt>Sequência operacional</dt><dd>{{ operational_recurrence_level }} · {{ current_episode_recurrence_count }} reincidências</dd></div><div><dt>Dias sem ocorrência</dt><dd>{% if current_episode_days_since_last != None %}{{ current_episode_days_since_last }}{% else %}—{% endif %}</dd></div><div><dt>Início do episódio</dt><dd>{% if current_episode_started_at %}{{ current_episode_started_at|date:"d/m/Y" }}{% else %}—{% endif %}</dd></div></dl></section>{% endif %}
+        <section class="quality-order-section quality-order-current">
+          <header><div><p class="quality-eyebrow">ACOMPANHAMENTO</p><h2>Situação atual</h2></div>{% if latest_occurrence %}<span class="quality-order-section__date">Última ocorrência · {{ latest_occurrence.source_created_at|date:"d/m/Y H:i" }}</span>{% endif %}</header>
+          <dl class="quality-order-data-grid">
+            <div><dt>Motivo atual</dt><dd>{{ current_reason|default:"Não classificado" }}</dd></div>
+            <div><dt>Causa raiz</dt><dd>{{ current_root_cause|default:"Não classificada" }}</dd></div>
+            <div><dt>Motivo anterior</dt><dd>{{ previous_reason|default:"—" }}</dd></div>
+            <div><dt>Mesma causa anterior</dt><dd>{% if previous_same_cause is None %}—{% elif previous_same_cause %}Confirmada{% else %}Não confirmada{% endif %}</dd></div>
+          </dl>
+        </section>
+
+        <section class="quality-order-section">
+          <header><div><p class="quality-eyebrow">FONTE CMDB</p><h2>Circuito</h2></div></header>
+          <dl class="quality-order-data-grid quality-order-data-grid--circuit">
+            <div><dt>Designação</dt><dd>{{ designation }}</dd></div>
+            <div><dt>CI</dt><dd>{{ ci_display }}</dd></div>
+            <div><dt>Cliente</dt><dd>{{ client }}</dd></div>
+            <div><dt>Projeto</dt><dd>{{ project }}</dd></div>
+            <div><dt>Provedor</dt><dd>{{ provider_name }}</dd></div>
+            <div><dt>Cidade / UF</dt><dd>{{ city }} · {{ uf }}</dd></div>
+            <div><dt>Velocidade</dt><dd>{{ speed }}</dd></div>
+            <div><dt>Situação CMDB</dt><dd>{{ circuit_status }}</dd></div>
+          </dl>
+        </section>
+
+        {% if order.internal_notes %}<section class="quality-order-section quality-order-notes"><header><div><p class="quality-eyebrow">REGISTRO INTERNO</p><h2>Observação da Qualidade</h2></div></header><p>{{ order.internal_notes|linebreaksbr }}</p></section>{% endif %}
+      </div>
+
+      <aside class="quality-order-summary-side">
+        <section class="quality-order-section">
+          <header><div><p class="quality-eyebrow">RESPONSABILIDADE</p><h2>Gestão da OQ</h2></div></header>
+          <dl class="quality-order-management">
+            <div><dt>Status</dt><dd>{{ order.status_label }}</dd></div>
+            <div><dt>Nível</dt><dd>{{ order.level_label }}</dd></div>
+            <div><dt>Prioridade</dt><dd>{{ order.priority_label }}</dd></div>
+            <div><dt>Responsável</dt><dd>{{ owner_label }}</dd></div>
+            <div><dt>Prazo</dt><dd>{% if order.treatment_deadline %}{{ order.treatment_deadline|date:"d/m/Y" }}{% else %}Sem prazo{% endif %}</dd></div>
+            <div><dt>Criada em</dt><dd>{{ order.created_at|date:"d/m/Y H:i" }}</dd></div>
+            <div><dt>Última atualização</dt><dd>{{ order.updated_at|date:"d/m/Y H:i" }}</dd></div>
+          </dl>
+        </section>
+
+        <section class="quality-order-section quality-order-related">
+          <header><div><p class="quality-eyebrow">TQ</p><h2>Tratativa atual</h2></div></header>
+          {% if treatment_ticket %}
+            <strong>{{ treatment_ticket.ticket_number|default:"TQ sem número" }}</strong>
+            <dl class="quality-order-related__facts"><div><dt>Fila</dt><dd>{{ treatment_ticket.queue_snapshot|default:treatment_ticket.otrs_ticket.queue_name|default:"—" }}</dd></div><div><dt>Status</dt><dd>{{ treatment_ticket.state_snapshot|default:treatment_ticket.otrs_ticket.external_state_name|default:"—" }}</dd></div><div><dt>Responsável</dt><dd>{{ treatment_ticket.owner_snapshot|default:"—" }}</dd></div></dl>
+            {% if treatment_ticket_url %}<a class="quality-inline-link" href="{{ treatment_ticket_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS ↗</a>{% endif %}
+          {% else %}<p class="quality-order-empty-note">Nenhuma tratativa de Qualidade vinculada.</p>{% endif %}
+        </section>
+
+        <section class="quality-order-section quality-order-related">
+          <header><div><p class="quality-eyebrow">RREIP</p><h2>Monitoramento atual</h2></div></header>
+          {% if active_cycle %}<strong>Ciclo {{ active_cycle.cycle_number|stringformat:"02d" }}</strong><dl class="quality-order-related__facts"><div><dt>Início</dt><dd>{{ active_cycle.started_at|date:"d/m/Y" }}</dd></div><div><dt>Fim previsto</dt><dd>{{ active_cycle.expected_end_at|date:"d/m/Y" }}</dd></div><div><dt>Decorrido</dt><dd>{{ cycle_days_elapsed }} / {{ rreip_days }} dias</dd></div><div><dt>Status</dt><dd>Em andamento</dd></div></dl><a class="quality-inline-link" href="?tab=monitoramento">Ver monitoramento</a>{% else %}<p class="quality-order-empty-note">Monitoramento ainda não iniciado.</p>{% endif %}
+        </section>
+
+        {% if latest_event %}<p class="quality-order-audit-note">Último evento · {{ latest_event_label }} · {{ latest_event.created_at|date:"d/m/Y H:i" }}{% if latest_event.actor %} · {{ latest_event.actor.get_full_name|default:latest_event.actor.get_username }}{% endif %}</p>{% endif %}
+      </aside>
+    </div>
+  {% elif active_tab == "ocorrencias" %}
+    <section class="quality-order-occurrences">
+      <header class="quality-order-occurrences__header"><div><p class="quality-eyebrow">HISTÓRICO OTRS</p><h2>Ocorrências do circuito</h2><p>Tickets do espelho local relacionados ao ConfigItem. As métricas são recalculadas com as regras operacionais e revisões locais.</p></div><span>{{ all_ticket_count }} tickets</span></header>
+      <nav class="quality-occurrence-filters" aria-label="Filtrar ocorrências">
+        <a href="?tab=ocorrencias&amp;history=all&amp;direction={{ direction }}"{% if history_filter == "all" %} aria-current="page"{% endif %}>Todas <span>{{ all_ticket_count }}</span></a>
+        <a href="?tab=ocorrencias&amp;history=valid&amp;direction={{ direction }}"{% if history_filter == "valid" %} aria-current="page"{% endif %}>Válidas <span>{{ valid_occurrence_count }}</span></a>
+        <a href="?tab=ocorrencias&amp;history=excluded&amp;direction={{ direction }}"{% if history_filter == "excluded" %} aria-current="page"{% endif %}>Desconsideradas <span>{{ excluded_history_count }}</span></a>
+        <a href="?tab=ocorrencias&amp;history=pending&amp;direction={{ direction }}"{% if history_filter == "pending" %} aria-current="page"{% endif %}>Pendentes <span>{{ pending_review_count }}</span></a>
+      </nav>
+      <form class="quality-occurrence-sort" method="get" action="{% url 'qualidade:ordem_detail' codigo=order.code %}">
+        <input type="hidden" name="tab" value="ocorrencias"><input type="hidden" name="history" value="{{ history_filter }}">
+        <label for="quality-occurrence-direction">Ordenar por</label><select id="quality-occurrence-direction" name="direction"><option value="recent"{% if direction == "recent" %} selected{% endif %}>Mais recentes</option><option value="oldest"{% if direction == "oldest" %} selected{% endif %}>Mais antigas</option></select><button type="submit">Aplicar</button>
+      </form>
+
+      {% if not has_link_history %}<div class="quality-list-empty"><strong>O link CMDB não está disponível neste escopo.</strong><p>O histórico de tickets não pode ser consultado.</p></div>
+      {% elif occurrence_page and occurrence_page.object_list %}
+        <ol class="quality-order-timeline">
+          {% for ticket in occurrence_page.object_list %}{% include "qualidade/_order_occurrence_item.html" with ticket=ticket order=order can_manage_orders=can_manage_orders %}{% endfor %}
+        </ol>
+        {% if occurrence_page.paginator.num_pages > 1 %}<nav class="quality-pagination" aria-label="Paginação de ocorrências"><span>{{ occurrence_page.start_index }}–{{ occurrence_page.end_index }} de {{ occurrence_page.paginator.count }}</span><div>{% if occurrence_page.has_previous %}<a href="?tab=ocorrencias&amp;history={{ history_filter }}&amp;direction={{ direction }}&amp;page={{ occurrence_page.previous_page_number }}">Anterior</a>{% else %}<span aria-disabled="true">Anterior</span>{% endif %}<strong>Página {{ occurrence_page.number }} de {{ occurrence_page.paginator.num_pages }}</strong>{% if occurrence_page.has_next %}<a href="?tab=ocorrencias&amp;history={{ history_filter }}&amp;direction={{ direction }}&amp;page={{ occurrence_page.next_page_number }}">Próxima</a>{% else %}<span aria-disabled="true">Próxima</span>{% endif %}</div></nav>{% endif %}
+      {% elif history_filter != "excluded" %}<div class="quality-list-empty"><strong>Nenhuma ocorrência válida encontrada.</strong><p>Tickets fora das regras operacionais não entram na contagem de reincidência.</p></div>{% endif %}
+
+      {% if history_filter == "all" or history_filter == "excluded" %}
+        {% if excluded_ticket_page and excluded_ticket_page.paginator.count %}
+          <details class="quality-order-excluded"{% if history_filter == "excluded" %} open{% endif %}><summary>Ocorrências desconsideradas <span>{{ excluded_history_count }}</span></summary>
+            <ol class="quality-order-timeline quality-order-timeline--excluded">{% for ticket in excluded_ticket_page.object_list %}{% include "qualidade/_order_occurrence_item.html" with ticket=ticket order=order can_manage_orders=can_manage_orders %}{% endfor %}</ol>
+            {% if excluded_ticket_page.paginator.num_pages > 1 %}<nav class="quality-pagination" aria-label="Paginação de desconsideradas"><span>{{ excluded_ticket_page.start_index }}–{{ excluded_ticket_page.end_index }} de {{ excluded_ticket_page.paginator.count }}</span><div>{% if excluded_ticket_page.has_previous %}<a href="?tab=ocorrencias&amp;history={{ history_filter }}&amp;direction={{ direction }}&amp;excluded_page={{ excluded_ticket_page.previous_page_number }}">Anterior</a>{% else %}<span aria-disabled="true">Anterior</span>{% endif %}<strong>Página {{ excluded_ticket_page.number }} de {{ excluded_ticket_page.paginator.num_pages }}</strong>{% if excluded_ticket_page.has_next %}<a href="?tab=ocorrencias&amp;history={{ history_filter }}&amp;direction={{ direction }}&amp;excluded_page={{ excluded_ticket_page.next_page_number }}">Próxima</a>{% else %}<span aria-disabled="true">Próxima</span>{% endif %}</div></nav>{% endif %}
+          </details>
+        {% endif %}
+      {% endif %}
+    </section>
+  {% elif active_tab == "tratativas" %}
+    <div class="quality-workflow-grid">
+      <section class="quality-workflow-main">
+        <header class="quality-page-header"><div><p class="quality-eyebrow">TRATATIVAS</p><h2>Tratativa atual</h2><p class="quality-page-subtitle">A OQ acompanha o caso; os detalhes técnicos e a conversa permanecem no OTRS.</p></div>{% if can_manage_orders %}<button type="button" class="quality-action-button" data-quality-open-ticket-form>Vincular TQ</button>{% endif %}</header>
+        {% if current_treatment %}
+          <article class="quality-treatment-current">
+            <header><div><p class="quality-eyebrow">TICKET DE QUALIDADE · {{ current_treatment.ticket_type_label|upper }}</p><h3>{{ current_treatment.ticket_number }}</h3></div><span class="quality-pill quality-pill--status quality-pill--status-treatment">{{ current_treatment.state }}</span></header>
+            <dl class="quality-treatment-facts"><div><dt>Fila</dt><dd>{{ current_treatment.queue }}</dd></div><div><dt>Responsável</dt><dd>{{ current_treatment.owner }}</dd></div><div><dt>Aberto em</dt><dd>{% if current_treatment.opened_at %}{{ current_treatment.opened_at|date:"d/m/Y H:i" }}{% else %}Não informado{% endif %}</dd></div><div><dt>Última movimentação</dt><dd>{% if current_treatment.last_movement_at %}{{ current_treatment.last_movement_at|timesince }} atrás{% else %}Não informada{% endif %}</dd></div><div><dt>Resultado</dt><dd>{{ current_treatment.result }}</dd></div></dl>
+            {% if current_treatment.otrs_url %}<a class="quality-action-button quality-action-button--subtle" href="{{ current_treatment.otrs_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS ↗</a>{% endif %}
+          </article>
+        {% else %}<div class="quality-list-empty"><strong>Nenhuma tratativa de Qualidade vinculada.</strong><p>A OQ permanece ativa, mas nenhum TQ foi associado até o momento.</p></div>{% endif %}
+
+        {% if has_financial_reason %}<aside class="quality-financial-notice"><strong>Tratativa financeira</strong><p>Desbloqueio não significa regularização definitiva. A Qualidade deve confirmar o pagamento ou a regularização antes de encaminhar a OQ para RREIP.</p></aside>{% endif %}
+
+        <section class="quality-treatment-history"><header><div><p class="quality-eyebrow">TRATATIVAS ANTERIORES</p><h2>Histórico de TQs</h2></div><span>{{ treatment_history|length }} registros</span></header>
+          {% if treatment_history %}<ol class="quality-treatment-list">{% for item in treatment_history %}<li><div class="quality-treatment-list__identity"><strong>{{ item.ticket_number }}</strong><span>{{ item.ticket_type_label }} · {{ item.state }}</span></div><div class="quality-treatment-list__detail"><span>{{ item.queue }}</span><span>{% if item.opened_at %}{{ item.opened_at|date:"d/m/Y" }}{% else %}Data não informada{% endif %} → {% if item.closed_at %}{{ item.closed_at|date:"d/m/Y" }}{% else %}Ativo{% endif %}</span><small>{{ item.result }}</small></div>{% if item.otrs_url %}<a class="quality-inline-link" href="{{ item.otrs_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS ↗</a>{% endif %}</li>{% endfor %}</ol>{% else %}<p class="quality-order-empty-note">Nenhum TQ anterior registrado.</p>{% endif %}
+        </section>
+      </section>
+      <aside class="quality-workflow-side">
+        <section class="quality-order-section quality-checklist"><header><div><p class="quality-eyebrow">ACOMPANHAMENTO GERENCIAL</p><h2>Checklist da Qualidade</h2></div><span>{{ quality_actions|length }} itens</span></header>
+          {% if quality_actions %}<ul>{% for action in quality_actions %}<li class="{% if action.completed %}is-complete{% endif %}">{% if can_manage_orders %}<form method="post" action="{% url 'qualidade:checklist_toggle' codigo=order.code action_id=action.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" name="completed" value="{% if action.completed %}false{% else %}true{% endif %}" aria-label="{% if action.completed %}Reabrir{% else %}Concluir{% endif %}: {{ action.title }}"><span aria-hidden="true">{% if action.completed %}✓{% else %}○{% endif %}</span></button></form>{% else %}<span class="quality-checklist__mark" aria-hidden="true">{% if action.completed %}✓{% else %}○{% endif %}</span>{% endif %}<div><strong>{{ action.title }}</strong>{% if action.completed and action.completed_at %}<small>Concluído em {{ action.completed_at|date:"d/m/Y H:i" }}{% if action.completed_by %} · {{ action.completed_by.get_full_name|default:action.completed_by.get_username }}{% endif %}</small>{% endif %}</div></li>{% endfor %}</ul>{% else %}<p class="quality-order-empty-note">Checklist ainda não configurado para esta OQ.</p>{% endif %}
+          {% if can_manage_orders %}<form class="quality-checklist-add" method="post" action="{% url 'qualidade:checklist_adicionar' codigo=order.code %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><label class="quality-sr-only" for="quality-action-title">Nova ação</label>{{ action_form.title }}<button type="submit">Adicionar</button></form>{% endif %}<p class="quality-order-audit-note">Checklist gerencial simples; não executa playbooks nem altera tickets OTRS.</p>
+        </section>
+        {% if recommended_contacts %}<section class="quality-order-section quality-recommended-contacts"><header><div><p class="quality-eyebrow">ESCALONAMENTO</p><h2>Contatos recomendados</h2></div><a class="quality-inline-link" href="{% url 'qualidade:contatos' %}">Diretório</a></header>{% for contact in recommended_contacts %}<article><strong>{{ contact.name }}</strong><span>{{ contact.company_display|default:provider_name }} · {{ contact.contact_type_label }} {{ contact.escalation_label }}</span>{% if contact.role %}<small>{{ contact.role }}</small>{% endif %}{% if contact.email %}<div><span>{{ contact.email }}</span><button type="button" data-quality-copy-email="{{ contact.email }}">Copiar e-mail</button></div>{% endif %}</article>{% endfor %}</section>{% endif %}
+      </aside>
+    </div>
+  {% elif active_tab == "monitoramento" %}
+    <section class="quality-monitoring-detail">
+      <header class="quality-page-header"><div><p class="quality-eyebrow">RREIP · ACOMPANHAMENTO LOCAL</p><h2>Monitoramento RREIP</h2><p class="quality-page-subtitle">O ARION acompanha o período; o ciclo não cria nem altera tickets no OTRS.</p></div><a class="quality-inline-link" href="{% url 'qualidade:monitoramento' %}">Fila global</a></header>
+      {% if active_cycle %}<article class="quality-cycle-card quality-cycle-card--active">
+        <header><div><p class="quality-eyebrow">CICLO {{ active_cycle.cycle_number|stringformat:"02d" }}</p><h3>Em andamento</h3></div><span class="quality-pill quality-pill--status quality-pill--status-monitoring">Em andamento</span></header>
+          <dl class="quality-cycle-facts"><div><dt>TQ</dt><dd>{% if active_cycle.quality_ticket %}{{ active_cycle.quality_ticket.ticket_number|default:"TQ sem número" }}{% else %}Sem TQ de monitoramento{% endif %}</dd></div><div><dt>Início</dt><dd>{{ active_cycle.started_at|date:"d/m/Y" }}</dd></div><div><dt>Fim previsto</dt><dd>{{ active_cycle.expected_end_at|date:"d/m/Y" }}</dd></div><div><dt>Duração</dt><dd>{{ active_cycle.total_days }} dias</dd></div></dl>
+        <div class="quality-cycle-timeline" style="--quality-cycle-progress: {{ active_cycle.progress_width }}%"><div class="quality-cycle-timeline__labels"><span>{{ active_cycle.started_at|date:"d/m" }} · Início</span><span>Hoje · Dia {{ active_cycle.days_elapsed }}</span><span>{{ active_cycle.expected_end_at|date:"d/m" }} · Fim previsto</span></div><div class="quality-cycle-timeline__track" role="progressbar" aria-label="Progresso do ciclo RREIP em dias" aria-valuemin="0" aria-valuemax="{{ active_cycle.total_days }}" aria-valuenow="{{ active_cycle.days_elapsed }}"><span></span><i></i></div><strong>{{ active_cycle.days_elapsed }} / {{ active_cycle.total_days }} dias</strong>{% if active_cycle.is_ending %}<small class="quality-cycle-attention">Termina em {{ active_cycle.days_remaining }} dias</small>{% elif active_cycle.is_overdue %}<small class="quality-cycle-attention">Prazo previsto ultrapassado há {{ active_cycle.expected_end_at|timesince }}</small>{% endif %}</div>
+        {% if active_cycle.financial_regularization_confirmed %}<p class="quality-financial-confirmed">Regularização financeira confirmada pela Qualidade antes deste ciclo.</p>{% endif %}<p class="quality-cycle-empty-state">Nenhuma nova ocorrência válida foi registrada como causa deste ciclo.</p>
+        {% if can_manage_orders %}<details class="quality-cycle-result"><summary>Registrar resultado do ciclo</summary><form method="post" action="{% url 'qualidade:monitoramento_resultado' codigo=order.code cycle_id=active_cycle.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><label class="quality-dialog__field"><span>{{ monitoring_finish_form.result.label }}</span>{{ monitoring_finish_form.result }}</label><label class="quality-dialog__field"><span>{{ monitoring_finish_form.trigger_ticket_identifier.label }}</span>{{ monitoring_finish_form.trigger_ticket_identifier }}<small>Obrigatório ao registrar reincidência.</small></label><button class="quality-dialog__submit" type="submit">Salvar resultado local</button></form></details>{% endif %}
+      </article>
+      {% else %}<div class="quality-list-empty"><strong>Nenhum ciclo RREIP em andamento.</strong><p>O início exige uma decisão da Qualidade; não há automação remota no OTRS.</p></div>
+        {% if can_manage_orders %}<section class="quality-order-section quality-cycle-start"><header><div><p class="quality-eyebrow">NOVO CICLO</p><h3>Iniciar monitoramento de 30 dias</h3></div></header>{% if has_financial_reason %}<aside class="quality-financial-notice"><strong>Confirmação financeira obrigatória</strong><p>Desbloqueio não significa regularização definitiva. Registre evidência de pagamento ou regularização antes de iniciar o RREIP.</p></aside>{% endif %}<form method="post" action="{% url 'qualidade:monitoramento_iniciar' codigo=order.code %}" class="quality-cycle-start__form">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><label class="quality-dialog__field"><span>{{ monitoring_start_form.quality_ticket.label }}</span>{{ monitoring_start_form.quality_ticket }}</label>{% if has_financial_reason %}<label class="quality-checkbox-row">{{ monitoring_start_form.financial_regularization_confirmed }} Confirmo que o pagamento/regularização definitiva foi validado.</label><label class="quality-dialog__field"><span>{{ monitoring_start_form.financial_evidence.label }}</span>{{ monitoring_start_form.financial_evidence }}</label>{% endif %}<button type="submit" class="quality-dialog__submit">Iniciar ciclo RREIP</button></form></section>{% endif %}
+      {% endif %}
+      <section class="quality-cycle-history"><header><div><p class="quality-eyebrow">CICLOS ANTERIORES</p><h3>Histórico de monitoramento</h3></div><span>{{ monitoring_cycles|length }} ciclos</span></header>
+        {% for cycle in monitoring_cycles %}{% if cycle != active_cycle %}<article class="quality-cycle-history__item quality-cycle-history__item--{{ cycle.result|lower }}"><div><strong>Ciclo {{ cycle.cycle_number|stringformat:"02d" }}</strong><span>{{ cycle.started_at|date:"d/m/Y" }} → {% if cycle.ended_at %}{{ cycle.ended_at|date:"d/m/Y" }}{% else %}{{ cycle.expected_end_at|date:"d/m/Y" }}{% endif %}</span></div><div><span class="quality-cycle-result-label">{{ cycle.get_result_display }}</span>{% if cycle.result == "REINCIDIU" %}<small>Falhou após {{ cycle.failed_after_days }} dias</small>{% elif cycle.result == "SUCESSO" %}<small>30 dias sem ocorrência válida registrada</small>{% endif %}</div>{% if cycle.trigger_ticket_number %}<div><span>Ticket causador</span><strong>{{ cycle.trigger_ticket_number }}</strong>{% if cycle.otrs_url %}<a href="{{ cycle.otrs_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS ↗</a>{% endif %}</div>{% endif %}</article>{% endif %}{% empty %}<p class="quality-order-empty-note">Nenhum ciclo anterior registrado.</p>{% endfor %}
+      </section>
+      {% if monitoring_tickets %}<section class="quality-cycle-history"><header><div><p class="quality-eyebrow">TQ DE MONITORAMENTO</p><h3>Tickets relacionados</h3></div></header>{% for item in monitoring_tickets %}<article class="quality-cycle-history__item"><div><strong>{{ item.ticket_number }}</strong><span>{{ item.record.state_snapshot|default:"Estado não informado" }}</span></div>{% if item.otrs_url %}<a href="{{ item.otrs_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS ↗</a>{% endif %}</article>{% endfor %}</section>{% endif %}
+    </section>
+  {% else %}
+    <section class="quality-order-occurrences quality-order-history"><header class="quality-order-occurrences__header"><div><p class="quality-eyebrow">LOG ADMINISTRATIVO E OPERACIONAL</p><h2>Histórico da OQ</h2><p>Eventos da ordem, das tratativas e do monitoramento. Eventos de indisponibilidade continuam na aba Ocorrências.</p></div><span>{{ history_page.paginator.count }} eventos</span></header>
+      <nav class="quality-occurrence-filters" aria-label="Filtrar histórico da OQ"><a href="?tab=historico&amp;history_type=all"{% if history_category == "all" %} aria-current="page"{% endif %}>Todos</a><a href="?tab=historico&amp;history_type=order"{% if history_category == "order" %} aria-current="page"{% endif %}>OQ</a><a href="?tab=historico&amp;history_type=occurrences"{% if history_category == "occurrences" %} aria-current="page"{% endif %}>Ocorrências</a><a href="?tab=historico&amp;history_type=treatments"{% if history_category == "treatments" %} aria-current="page"{% endif %}>Tratativas</a><a href="?tab=historico&amp;history_type=monitoring"{% if history_category == "monitoring" %} aria-current="page"{% endif %}>Monitoramento</a></nav>
+      {% if history_events %}<ol class="quality-audit-timeline">{% for item in history_events %}<li><time datetime="{{ item.event.created_at|date:'c' }}"><strong>{{ item.event.created_at|date:"H:i" }}</strong><span>{{ item.event.created_at|date:"d/m/Y" }}</span></time><i aria-hidden="true"></i><article><header><strong>{{ item.label }}</strong><small>{{ item.actor_label }}</small></header><p>{{ item.summary }}</p></article></li>{% endfor %}</ol>{% else %}<div class="quality-list-empty"><strong>Nenhum evento registrado.</strong><p>As alterações auditáveis da OQ aparecerão aqui.</p></div>{% endif %}
+      {% if history_page.paginator.num_pages > 1 %}<nav class="quality-pagination" aria-label="Paginação do histórico"><span>{{ history_page.start_index }}–{{ history_page.end_index }} de {{ history_page.paginator.count }}</span><div>{% if history_page.has_previous %}<a href="?tab=historico&amp;history_type={{ history_category }}&amp;page={{ history_page.previous_page_number }}">Anterior</a>{% endif %}<strong>Página {{ history_page.number }} de {{ history_page.paginator.num_pages }}</strong>{% if history_page.has_next %}<a href="?tab=historico&amp;history_type={{ history_category }}&amp;page={{ history_page.next_page_number }}">Próxima</a>{% endif %}</div></nav>{% endif %}
+    </section>
+  {% endif %}
+</main>
+
+{% if can_manage_orders %}
+  <dialog class="quality-dialog" id="quality-order-edit-dialog" aria-labelledby="quality-order-edit-title">
+    <form method="post" action="{% url 'qualidade:ordem_update' codigo=order.code %}" class="quality-dialog__form">
+      {% csrf_token %}<input type="hidden" name="field" value="detail"><input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <header class="quality-dialog__header"><div><p class="quality-eyebrow">GESTÃO DE QUALIDADE</p><h2 id="quality-order-edit-title">Editar OQ {{ order.code }}</h2><p>As alterações ficam registradas na auditoria da ordem.</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+      <div class="quality-dialog__body quality-order-edit-grid">
+        <label class="quality-dialog__field"><span>Status</span>{{ detail_form.status }}</label>
+        <label class="quality-dialog__field"><span>Nível</span>{{ detail_form.recurrence_level }}</label>
+        <label class="quality-dialog__field"><span>Prioridade</span>{{ detail_form.priority }}</label>
+        <label class="quality-dialog__field"><span>Responsável</span>{{ detail_form.owner }}</label>
+        <label class="quality-dialog__field quality-dialog__field--wide"><span>Prazo de tratamento</span>{{ detail_form.treatment_deadline }}</label>
+        <label class="quality-dialog__field quality-dialog__field--wide"><span>Observação interna</span>{{ detail_form.internal_notes }}</label>
+      </div>
+      <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Salvar alterações</button></footer>
+    </form>
+  </dialog>
+
+  {% if active_tab == "ocorrencias" %}
+    <dialog class="quality-dialog" id="quality-occurrence-review-dialog" aria-labelledby="quality-occurrence-review-title" data-quality-review-url-template="{% url 'qualidade:ocorrencia_revisar' codigo=order.code ticket_external_id=1 %}">
+      <form method="post" action="" class="quality-dialog__form" data-quality-review-form>
+        {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <header class="quality-dialog__header"><div><p class="quality-eyebrow">REVISÃO LOCAL</p><h2 id="quality-occurrence-review-title">Revisar ocorrência</h2><p data-quality-review-ticket-label></p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+        <div class="quality-dialog__body quality-order-edit-grid">
+          <label class="quality-dialog__field quality-dialog__field--wide"><span>Classificação</span>{{ review_form.classification }}</label>
+          <label class="quality-dialog__field quality-dialog__field--wide" data-review-same-cause><span class="quality-checkbox-row">{{ review_form.same_root_cause }} Confirmar mesma causa raiz</span></label>
+          <label class="quality-dialog__field quality-dialog__field--wide"><span>Motivo</span>{{ review_form.reason }}</label>
+          <label class="quality-dialog__field quality-dialog__field--wide"><span>Causa raiz</span>{{ review_form.root_cause }}</label>
+          <label class="quality-dialog__field quality-dialog__field--wide" data-review-exclusion><span>Motivo da desconsideração</span>{{ review_form.exclusion_reason }}</label>
+        </div>
+        <p class="quality-dialog__notice">A revisão altera somente os dados locais do ARION OPS; o ticket OTRS não é modificado.</p>
+        <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Salvar revisão</button></footer>
+      </form>
+    </dialog>
+  {% endif %}
+  {% if active_tab == "tratativas" %}
+    <dialog class="quality-dialog" id="quality-ticket-link-dialog" aria-labelledby="quality-ticket-link-title">
+      <form method="post" action="{% url 'qualidade:tq_vincular' codigo=order.code %}" class="quality-dialog__form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <header class="quality-dialog__header"><div><p class="quality-eyebrow">REFERÊNCIA LOCAL</p><h2 id="quality-ticket-link-title">Vincular ticket OTRS</h2><p>O ARION registra somente a relação com o espelho local; não cria nem altera o ticket.</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+        <div class="quality-dialog__body quality-order-edit-grid"><label class="quality-dialog__field quality-dialog__field--wide"><span>{{ ticket_form.ticket_identifier.label }}</span>{{ ticket_form.ticket_identifier }}<small>Informe um ticket espelhado e relacionado ao ConfigItem desta OQ.</small></label><label class="quality-dialog__field quality-dialog__field--wide"><span>{{ ticket_form.ticket_type.label }}</span>{{ ticket_form.ticket_type }}</label></div>
+        <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Vincular TQ</button></footer>
+      </form>
+    </dialog>
+  {% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,106 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% load static %}
+{% block title %}Visão geral · Qualidade Operacional{% endblock %}
+{% block quality_title %}Visão geral{% endblock %}
+{% block quality_content %}
+<header class="quality-page-header">
+  <div>
+    <p class="quality-eyebrow">ARION OPS <span>/</span> NOC ATACADO <span>/</span> QUALIDADE</p>
+    <h1>Qualidade Operacional</h1>
+    <p class="quality-page-subtitle">Resultado das tratativas, estabilidade dos circuitos e reincidências.</p>
+    {% include "qualidade/partials/guide_trigger.html" %}
+  </div>
+  <form class="quality-filters" method="get" action="{% url 'qualidade:dashboard' %}" aria-label="Filtros do dashboard">
+    <input type="hidden" name="concentration_by" value="{{ concentration_by }}">
+    <label class="quality-period-control">Período gerencial
+      <select name="period">
+        {% for value,label in period_options %}<option value="{{ value }}"{% if filters.period == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="quality-group-control">Agrupar por
+      <select name="group_by">
+        {% for value,label in granularity_options %}<option value="{{ value }}"{% if filters.group_by == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <details class="quality-filter-details"{% if filters.cliente or filters.projeto or filters.isp or filters.uf %} open{% endif %}>
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Filtros</summary>
+      <div class="quality-filter-panel">
+        <label>Cliente<select name="cliente"><option value="">Todos</option>{% for option in filter_options.cliente %}<option value="{{ option }}"{% if filters.cliente == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label>Projeto<select name="projeto"><option value="">Todos</option>{% for option in filter_options.projeto %}<option value="{{ option }}"{% if filters.projeto == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label>ISP<select name="isp"><option value="">Todos</option>{% for option in filter_options.isp %}<option value="{{ option }}"{% if filters.isp == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label>UF<select name="uf"><option value="">Todas</option>{% for option in filter_options.uf %}<option value="{{ option }}"{% if filters.uf == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <div class="quality-filter-actions"><a href="{% url 'qualidade:dashboard' %}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
+      </div>
+    </details>
+    <button class="quality-period-apply" type="submit">Aplicar</button>
+  </form>
+</header>
+
+<section class="quality-kpis" aria-label="Resultados da Qualidade no período">
+  <article class="quality-kpi quality-kpi--danger"><span class="quality-kpi__label">Novas reincidências</span><strong>{{ kpis.new_recurrences }}</strong><small>Ocorrências válidas após a inicial</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17 10 11l4 4 6-8M15 7h5v5"/></svg></span></article>
+  <a class="quality-kpi quality-kpi--danger" href="{{ kpi_urls.active_links }}"><span class="quality-kpi__label">Links reincidentes ativos</span><strong>{{ kpis.active_links }}</strong><small>Estoque atual · episódios com reincidência nos últimos 30 dias</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17 10 11l4 4 6-8M15 7h5v5"/></svg></span></a>
+  <a class="quality-kpi quality-kpi--green" href="{{ kpi_urls.stabilized_links }}"><span class="quality-kpi__label">Links estabilizados</span><strong>{{ kpis.stabilized_links }}</strong><small>30 dias completos sem nova ocorrência neste período</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></svg></span></a>
+  <a class="quality-kpi" href="{{ kpi_urls.open }}"><span class="quality-kpi__label">OQs abertas</span><strong>{{ kpis.open_orders }}</strong><small>{{ kpis.opened }} criadas · {{ kpis.completed }} concluídas no período</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5"/></svg></span></a>
+  <a class="quality-kpi quality-kpi--teal" href="{{ kpi_urls.monitoring }}"><span class="quality-kpi__label">Em monitoramento</span><strong>{{ kpis.monitoring }}</strong><small>Ciclos RREIP ativos agora</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span></a>
+  <a class="quality-kpi quality-kpi--green" href="{{ kpi_urls.rreip_success }}"><span class="quality-kpi__label">RREIP com sucesso</span><strong>{{ kpis.rreip_success }}</strong><small>Sem nova ocorrência · {{ kpis.post_treatment_recurrence }} reincidiram pós-tratamento</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 20 6v5c0 5-3.4 8.2-8 10-4.6-1.8-8-5-8-10V6zM8.5 12l2.2 2.2 4.8-5"/></svg></span></a>
+</section>
+
+<div class="quality-attention-summary" aria-label="Resumo de OQs que precisam de atenção">
+  <span>Precisam de atenção:</span>
+  <a href="{{ kpi_urls.critical }}">{{ attention_summary.critical }} críticas abertas</a>
+  <a href="{{ kpi_urls.overdue }}">{{ attention_summary.overdue }} vencidas</a>
+</div>
+
+<div class="quality-chart-grid quality-chart-grid--primary">
+  <section class="quality-panel quality-panel--evolution" aria-labelledby="quality-evolution-title">
+    <header class="quality-panel__header"><div><h2 id="quality-evolution-title">Resultado operacional</h2><p>Quanto problema entrou, foi concluído e voltou após o tratamento.</p></div><span class="quality-panel__context">{{ evolution.granularity }} · {{ period_label }}</span></header>
+    {% if has_evolution %}<div class="quality-chart" data-quality-chart="evolution" role="img" aria-label="Gráfico temporal de novas reincidências, links estabilizados, OQs concluídas e ciclos RREIP reincidentes"></div><p class="quality-sr-only">{{ evolution.tooltip_labels|join:", " }}. Novas reincidências: {{ evolution.recurrences|join:", " }}. Links estabilizados: {{ evolution.stabilized|join:", " }}. OQs concluídas: {{ evolution.completed|join:", " }}. Pós-tratamento: {{ evolution.post_treatment|join:", " }}.</p>{% else %}<div class="quality-chart-empty"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5m0 14h16M7 15l4-4 3 3 5-7"/></svg></span><strong>Sem resultados registrados neste período.</strong><small>Reincidências, estabilizações, conclusões e ciclos concluídos aparecerão nesta evolução.</small></div>{% endif %}
+  </section>
+  <section class="quality-panel quality-panel--status" aria-labelledby="quality-status-title">
+    <header class="quality-panel__header"><div><h2 id="quality-status-title">OQs por status</h2><p>Estoque atual no escopo autorizado</p></div></header>
+    {% if has_status_distribution %}<div class="quality-chart quality-chart--donut" data-quality-chart="status" role="img" aria-label="Gráfico de distribuição das Ordens de Qualidade por status"></div><ul class="quality-chart-legend" aria-label="Dados do gráfico de status">{% for item in status_distribution %}<li><span>{{ item.name }}</span><strong>{{ item.value }}</strong></li>{% endfor %}</ul>{% else %}<div class="quality-chart-empty quality-chart-empty--compact"><span aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9h9"/></svg></span><strong>Ainda não há Ordens de Qualidade.</strong><small>As ordens criadas aparecerão aqui.</small></div>{% endif %}
+  </section>
+</div>
+
+<div class="quality-chart-grid quality-chart-grid--insights">
+  <section class="quality-panel quality-panel--effectiveness" aria-labelledby="quality-effectiveness-title">
+    <header class="quality-panel__header"><div><h2 id="quality-effectiveness-title">Efetividade da Qualidade</h2><p>Taxa de sucesso dos RREIP concluídos no período</p></div></header>
+    {% if effectiveness.has_data %}
+      <div class="quality-effectiveness-summary"><div><strong class="quality-effectiveness-value">{{ effectiveness.percentage }}<span>%</span></strong><span>taxa de sucesso</span></div><span class="quality-effectiveness-total">{{ effectiveness.total }}<small>ciclos avaliados</small></span></div>
+      <div class="quality-effectiveness-track" role="meter" aria-label="Taxa de sucesso no RREIP" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ effectiveness.progress }}"><span style="--quality-progress: {{ effectiveness.progress }}%"></span><i style="--quality-progress: {{ effectiveness.failure_progress }}%"></i></div>
+      <div class="quality-effectiveness-breakdown"><div><span>Sucesso</span><strong>{{ effectiveness.success }}</strong></div><div><span>Reincidiu</span><strong>{{ effectiveness.recurrence }}</strong></div><div><span>Total avaliado</span><strong>{{ effectiveness.total }}</strong></div></div>
+    {% else %}<div class="quality-effectiveness-empty"><strong>Sem ciclos concluídos no período.</strong><span>Sucessos e reincidências após tratamento aparecerão aqui.</span></div>{% endif %}
+  </section>
+
+  <section class="quality-panel quality-panel--concentration" aria-labelledby="quality-concentration-title">
+    <header class="quality-panel__header"><div><h2 id="quality-concentration-title">Concentração das reincidências</h2><p>Top 5 · percentual sobre {{ concentration_total }} reincidências do recorte</p></div>
+      <form class="quality-concentration-filter" method="get" action="{% url 'qualidade:dashboard' %}">
+        <input type="hidden" name="period" value="{{ filters.period }}"><input type="hidden" name="group_by" value="{{ filters.group_by }}"><input type="hidden" name="cliente" value="{{ filters.cliente }}"><input type="hidden" name="projeto" value="{{ filters.projeto }}"><input type="hidden" name="isp" value="{{ filters.isp }}"><input type="hidden" name="uf" value="{{ filters.uf }}">
+        <label><span>Visualizar por</span><select name="concentration_by"><option value="project"{% if concentration_by == "project" %} selected{% endif %}>Projeto</option><option value="isp"{% if concentration_by == "isp" %} selected{% endif %}>ISP</option></select></label><button type="submit">Ver</button>
+      </form>
+    </header>
+    {% if has_concentration %}<ol class="quality-concentration-list">{% for item in concentration %}<li>{% if item.can_filter %}<a class="quality-concentration-item" href="{{ item.url }}" aria-label="Abrir Links prioritários filtrados por {{ item.name }}">{% else %}<div class="quality-concentration-item">{% endif %}<span class="quality-concentration-name">{{ item.name }}</span><span class="quality-concentration-meta"><span>{{ item.value }} reincidências</span><strong>{{ item.share_percent }}%</strong></span><span class="quality-concentration-track" aria-hidden="true"><i style="--quality-progress: {{ item.bar_percent }}%"></i></span>{% if item.can_filter %}</a>{% else %}</div>{% endif %}</li>{% endfor %}</ol>{% else %}<div class="quality-chart-empty quality-chart-empty--compact"><strong>Sem reincidências neste período.</strong><small>Os grupos aparecerão quando houver ocorrências reincidentes válidas.</small></div>{% endif %}
+    <a class="quality-panel__link quality-concentration-details" href="{{ concentration_detail_url }}">Ver links <span aria-hidden="true">→</span></a>
+  </section>
+
+  <section class="quality-panel quality-panel--attention" aria-labelledby="quality-attention-title">
+    <header class="quality-panel__header"><div><h2 id="quality-attention-title">Precisam de atenção</h2><p>Pendências em OQs e ciclos RREIP</p></div>{% if attention %}<span class="quality-count">{{ attention_count }}</span>{% endif %}</header>
+    {% if attention %}<ul class="quality-attention-list">{% for item in attention %}<li><span class="quality-attention__marker" aria-hidden="true"></span><div><span class="quality-attention__kind">{{ item.kind }}</span><a href="{{ item.url }}">{{ item.label }}</a><small>{{ item.code }}{% if item.is_demo %} · Demonstração local{% endif %} · {{ item.detail }}</small></div><a class="quality-attention__open" href="{{ item.url }}" aria-label="Abrir {{ item.code }}">↗</a></li>{% endfor %}</ul>{% else %}<div class="quality-chart-empty quality-chart-empty--compact"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span><strong>Nenhuma pendência identificada.</strong><small>Críticas, vencidas e ciclos próximos do fim aparecerão aqui.</small></div>{% endif %}
+  </section>
+</div>
+
+<div class="quality-operational-links">
+  <section class="quality-panel quality-panel--links" aria-labelledby="quality-links-title">
+    <header class="quality-panel__header"><div><h2 id="quality-links-title">Links mais reincidentes</h2><p>Top 5 por reincidências no episódio ativo de 30 dias.</p></div><a class="quality-panel__link" href="{{ kpi_urls.active_links }}">Ver ativos <span aria-hidden="true">→</span></a></header>
+    {% if has_recurring_links %}<div class="quality-chart quality-chart--links" data-quality-chart="links" role="img" aria-label="Gráfico dos cinco links com mais reincidências ativas"></div><ol class="quality-recurring-links">{% for item in recurring_links %}<li><a href="{{ item.url }}"><strong>{{ item.designation }}</strong><span>{{ item.client }} · {{ item.project }} · {{ item.provider_name }}</span></a><small>{{ item.value }} reincidência{{ item.value|pluralize }} · última em {{ item.last_occurrence|date:"d/m/Y" }}</small></li>{% endfor %}</ol>{% else %}<div class="quality-chart-empty quality-chart-empty--compact"><strong>Nenhum episódio reincidente ativo.</strong><small>O histórico operacional segue disponível nos Links prioritários e nas OQs.</small></div>{% endif %}
+  </section>
+  <section class="quality-panel quality-panel--stabilized" aria-labelledby="quality-stabilized-title">
+    <header class="quality-panel__header"><div><h2 id="quality-stabilized-title">Estabilizados recentemente</h2><p>Top 5 · 30 dias completos sem nova ocorrência válida.</p></div><a class="quality-panel__link" href="{{ kpi_urls.stabilized_links }}">Ver estabilizados <span aria-hidden="true">→</span></a></header>
+    {% if has_stabilized_links %}<ol class="quality-recurring-links quality-recurring-links--stabilized">{% for item in stabilized_links %}<li><a href="{{ item.url }}"><strong>{{ item.designation }}</strong><span>{{ item.client }} · {{ item.project }} · {{ item.provider_name }}</span></a><small>{{ item.value }} reincidência{{ item.value|pluralize }} · {{ item.days_since_last }} dias sem ocorrência</small></li>{% endfor %}</ol>{% else %}<div class="quality-chart-empty quality-chart-empty--compact"><strong>Nenhum link estabilizado neste recorte.</strong><small>A estabilização operacional é contada separadamente do sucesso do RREIP.</small></div>{% endif %}
+  </section>
+</div>
+
+<p class="quality-dashboard-note">O período gerencial filtra eventos históricos; links reincidentes ativos representam o estoque atual. Uma ocorrência dentro de até 30 dias pertence ao mesmo episódio; 30 dias completos sem nova ocorrência estabilizam o último episódio reincidente e uma queda posterior inicia nova sequência. {% if kpis.reopened_after_stability %}{{ kpis.reopened_after_stability }} novo(s) episódio(s) reaberto(s) após estabilidade neste período. {% endif %}R operacional é a posição da reincidência dentro do episódio; o nível R1–R5 da Qualidade continua sendo uma classificação manual de complexidade e criticidade.</p>
+{{ chart_data|json_script:"quality-chart-data" }}
+{% endblock %}
+{% block extra_js %}{{ block.super }}<script src="{% arion_bundle_js 'js/qualidade/dashboard.js' %}" defer></script>{% endblock %}

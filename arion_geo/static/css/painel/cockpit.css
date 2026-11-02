@@ -670,3 +670,19 @@ button.cockpit-calendar-day:hover { border-color:var(--accent-teal); box-shadow:
   .cockpit-current-analysis p { justify-content:flex-start; }
   .cockpit-secondary-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
+
+
+/* Compact manager options and evidence-search semantics. */
+.cockpit-analysis-options { display:flex; flex-wrap:wrap; gap:8px 18px; margin:12px 0 0; padding:10px 12px; border:1px solid var(--border-primary); border-radius:8px; }
+.cockpit-analysis-options legend { padding:0 5px; color:var(--text-muted); font-size:10px; }
+.cockpit-analysis-options label { display:inline-flex; align-items:center; gap:7px; min-height:24px; color:var(--text-secondary); font-size:10px; cursor:pointer; }
+.cockpit-analysis-options input { width:15px; height:15px; margin:0; accent-color:var(--accent-teal); }
+.cockpit-analysis-options label > span { display:inline-grid; width:14px; height:14px; place-items:center; border:1px solid var(--border-primary); border-radius:50%; color:var(--text-muted); font-size:9px; cursor:help; }
+.cockpit-evidence-note { margin:8px 0 0; color:var(--text-muted); font-size:9px; line-height:1.45; }
+.cockpit-provider-ranking.is-provider li { grid-template-columns:22px 26px minmax(0,1fr) 54px 52px; }
+.cockpit-provider-logo { display:grid; width:24px; height:24px; place-items:center; overflow:hidden; border:1px solid var(--border-primary); border-radius:6px; background:var(--surface-primary); color:var(--text-muted); font-size:8px; font-weight:650; }
+.cockpit-provider-logo img { display:block; width:100%; height:100%; object-fit:contain; }
+@media(max-width:760px) { .cockpit-analysis-options { gap:4px 12px; } .cockpit-provider-ranking.is-provider li { grid-template-columns:22px 24px minmax(0,1fr) 74px 48px; } }
+
+.cockpit-ops-legend i.canceled,.cockpit-ops-legend i.support-canceled,.cockpit-ops-legend i.cancellation-canceled { background:#a77a35; }
+.cockpit-ops-bar.canceled,.cockpit-ops-bar.support-canceled,.cockpit-ops-bar.cancellation-canceled { background:#a77a35; }

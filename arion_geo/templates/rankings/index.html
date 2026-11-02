@@ -56,9 +56,9 @@
     {% if filters.ranking_view == "links" %}
       <div class="ranking-exposure-controls">
         <label><span>Provedores</span><select name="top">{% for option in top_options %}<option value="{{ option }}"{% if filters.top == option %} selected{% endif %}>{% if option == "all" %}Todos{% else %}Top {{ option }}{% endif %}</option>{% endfor %}</select></label>
-        <label><span>Mínimo de links ativos</span><select name="min_links">{% for option in min_link_options %}<option value="{{ option }}"{% if filters.min_links == option %} selected{% endif %}>{% if option == "0" %}Todos{% else %}{{ option }}+{% endif %}</option>{% endfor %}</select></label>
+        <label><span>Mínimo de links</span><select name="min_links">{% for option in min_link_options %}<option value="{{ option }}"{% if filters.min_links == option %} selected{% endif %}>{% if option == "0" %}Todos{% else %}{{ option }}+{% endif %}</option>{% endfor %}</select></label>
         <label><span>Ordenar por</span><select name="sort">{% for option in sort_options %}<option value="{{ option.value }}"{% if option.active %} selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
-        <p>Links: inventário atual da CMDB. Chamados: criados no período selecionado.</p>
+        <p>Links: snapshot atual da CMDB. Chamados: criados no período selecionado.</p>
       </div>
     {% endif %}
     <div class="ranking-filter-actions">
@@ -77,16 +77,16 @@
 
   {% if filters.ranking_view == "links" %}
   <section class="ranking-kpis ranking-kpis--v2 ranking-exposure-kpis" aria-label="Resumo da exposição atual">
-    <article class="ranking-kpi"><span>Links ativos atuais</span><strong>{{ links_active|intcomma }}</strong><small>CMDB · estado de implantação operacional</small></article>
-    <article class="ranking-kpi"><span>Provedores ativos</span><strong>{{ active_provider_count|intcomma }}</strong><small>Com provedor resolvido no CMDB</small></article>
-    <article class="ranking-kpi"><span>Participação dos Top 10</span><strong>{{ top10_link_concentration|floatformat:1 }}%</strong><small>{{ top10_links|intcomma }} links ativos</small></article>
+    <article class="ranking-kpi"><span>Links na CMDB</span><strong>{{ links_active|intcomma }}</strong><small>Snapshot atual dentro do Data Scope</small></article>
+    <article class="ranking-kpi"><span>Provedores identificados</span><strong>{{ active_provider_count|intcomma }}</strong><small>Presentes no snapshot atual da CMDB</small></article>
+    <article class="ranking-kpi"><span>Participação dos Top 10</span><strong>{{ top10_link_concentration|floatformat:1 }}%</strong><small>{{ top10_links|intcomma }} links na base atual</small></article>
     <article class="ranking-kpi"><span>Chamados no período</span><strong>{{ tickets_valid|intcomma }}</strong><small>Criados entre {{ start|date:"d/m/Y" }} e {{ end|date:"d/m/Y" }}</small></article>
   </section>
-  <p class="exposure-period-note">A quantidade de links representa o inventário operacional atual. Os chamados seguem o período selecionado; não há histórico mensal de inventário CMDB.{% if active_links_unidentified %} {{ active_links_unidentified|intcomma }} links ativos estão sem provedor resolvido.{% endif %}</p>
+  <p class="exposure-period-note">A quantidade de links representa o inventário atual da CMDB. Os indicadores de chamados seguem o período selecionado; não há histórico mensal do inventário de links.{% if active_links_unidentified %} {{ active_links_unidentified|intcomma }} links estão sem provedor identificado.{% endif %}</p>
   {% else %}
   <section class="ranking-kpis ranking-kpis--v2" aria-label="Resumo do recorte">
     <article class="ranking-kpi"><span>Provedores analisados</span><strong>{{ provider_count|intcomma }}</strong></article>
-    <article class="ranking-kpi"><span>Links CMDB</span><strong>{{ links_total|intcomma }}</strong></article>
+    <article class="ranking-kpi"><span>Links na CMDB</span><strong>{{ links_total|intcomma }}</strong></article>
     <article class="ranking-kpi"><span>Chamados válidos</span><strong>{{ tickets_valid|intcomma }}</strong><small>Chamados nacionais distintos</small></article>
     <article class="ranking-kpi"><span>Links afetados</span><strong>{{ links_affected|intcomma }}</strong></article>
     <article class="ranking-kpi"><span>Links reincidentes</span><strong>{{ links_recurrent|intcomma }}</strong></article>
@@ -101,7 +101,7 @@
       <div class="criteria-chips">{% for option in sort_options %}<a href="{{ option.url }}"{% if option.active %} class="is-selected" aria-current="page"{% endif %}>{{ option.label }}</a>{% endfor %}</div>
     </nav>
   {% elif filters.ranking_view == "best" %}
-    <p class="best-sort-note">Menor Índice ARION primeiro. Considera provedores com chamados válidos no período; o pódio exige ao menos 5 links ou 3 chamados.</p>
+    <p class="best-sort-note">Menor Indicador operacional primeiro. Esta é uma leitura auxiliar; os critérios definitivos serão alinhados com a operação. O pódio exige ao menos 5 links ou 3 chamados.</p>
   {% else %}
     <p class="best-sort-note">Provedores sem chamados válidos e sem backlog, ordenados pela exposição da base CMDB.</p>
   {% endif %}
@@ -113,7 +113,7 @@
         <span class="section-kicker">ÍNDICE OPERACIONAL ARION</span>
         <h2 id="podium-title">{% if filters.ranking_view == "best" %}Top 3 melhores desempenhos observados{% elif filters.ranking_view == "stable" %}Provedores sem ocorrências{% else %}Top 3 provedores com maior risco operacional{% endif %}</h2>
       </div>
-      <span class="podium-caption">{% if filters.ranking_view == "best" %}Considera apenas provedores com chamados válidos no período.{% elif filters.ranking_view == "stable" %}Provedores sem chamados válidos e sem backlog, ordenados pela exposição da base.{% else %}Maior índice representa maior pressão operacional observada.{% endif %}</span>
+      <span class="podium-caption">{% if filters.ranking_view == "best" %}Considera apenas provedores com chamados válidos no período.{% elif filters.ranking_view == "stable" %}Provedores sem chamados válidos e sem backlog, ordenados pela exposição da base.{% else %}Indicador operacional maior representa mais pressão observada; os critérios são auxiliares e estão em validação.{% endif %}</span>
     </div>
     {% if filters.ranking_view == "best" %}
       <p class="best-eligibility">{{ best_eligible_count|intcomma }} provedores elegíveis ao pódio · mínimo de 5 links ou 3 chamados. Provedores menores continuam na tabela.</p>
@@ -134,7 +134,7 @@
             </header>
             {% if filters.ranking_view == "stable" %}
               <div class="stable-provider-summary">
-                <div class="stable-provider-total"><strong>{{ item.links_active|intcomma }}</strong><span>links ativos atuais</span></div>
+                <div class="stable-provider-total"><strong>{{ item.links_active|intcomma }}</strong><span>links na CMDB</span></div>
                 <span class="stable-zero">0 chamados · 0 backlog · Sem ocorr&ecirc;ncias no per&iacute;odo</span>
                 <div class="stable-dimensions">
                   <p><span>Clientes</span><strong>{{ item.clients|join:", "|default:"Não identificados" }}</strong></p>
@@ -144,8 +144,8 @@
               </div>
             {% else %}
               <div class="podium-score">
-                <div class="podium-index"><span>Índice ARION</span><strong>{{ item.risk_score|floatformat:1 }}<small>/100</small></strong></div>
-            <div class="podium-exposure"><strong>{{ item.links_active|intcomma }} <small>link{{ item.links_active|pluralize }}</small></strong><span>Links ativos atuais</span><small>{{ item.active_share|floatformat:1 }}% do inventário</small></div>
+                <div class="podium-index" title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação."><span>Indicador operacional</span><strong>{{ item.risk_score|floatformat:1 }}<small>/100</small></strong></div>
+            <div class="podium-exposure"><strong>{{ item.links_active|intcomma }} <small>link{{ item.links_active|pluralize }}</small></strong><span>Links na CMDB</span><small>{{ item.active_share|floatformat:1 }}% da base</small></div>
               </div>
               <div class="podium-stats">
                 <div><span>Chamados</span><strong>{{ item.tickets|intcomma }}</strong></div>
@@ -174,12 +174,12 @@
     <header class="table-section-heading">
       <div>
         <span class="section-kicker">CMDB + OTRS · SOMENTE LEITURA</span>
-        <h2 id="table-title">{% if filters.ranking_view == "links" %}{% if filters.top == "all" %}Todos os provedores por links ativos{% else %}Top {{ filters.top }} provedores por links ativos{% endif %}{% elif filters.ranking_view == "best" %}Ranking de melhor desempenho observado{% elif filters.ranking_view == "stable" %}Provedores sem ocorrências{% else %}Ranking de maior risco{% endif %} <small>{{ page_obj.paginator.count|intcomma }}</small></h2>
+        <h2 id="table-title">{% if filters.ranking_view == "links" %}{% if filters.top == "all" %}Todos os provedores por links na CMDB{% else %}Top {{ filters.top }} provedores por links na CMDB{% endif %}{% elif filters.ranking_view == "best" %}Ranking de melhor desempenho observado{% elif filters.ranking_view == "stable" %}Provedores sem ocorrências{% else %}Ranking de maior risco{% endif %} <small>{{ page_obj.paginator.count|intcomma }}</small></h2>
       </div>
       {% if filters.ranking_view == "links" %}
-        <span class="table-hint">Snapshot atual × chamados criados no período · incidência por 100 links ativos.</span>
+        <span class="table-hint">Snapshot atual da CMDB × chamados criados no período · incidência por 100 links atuais.</span>
       {% elif filters.ranking_view != "stable" %}
-        <span class="table-hint">ARION &gt;24h é um limite operacional provisório, não um SLA contratual.</span>
+        <span class="table-hint">Leitura operacional auxiliar; critérios finais serão definidos com a operação. ARION &gt;24h não é SLA contratual.</span>
       {% else %}
         <span class="table-hint">Sem chamados válidos e sem backlog no período selecionado.</span>
       {% endif %}
@@ -187,28 +187,28 @@
     <div class="table-scroll thin-scroll">
       {% if filters.ranking_view == "links" %}
         <table class="risk-table exposure-table">
-          <thead><tr><th>Pos.</th><th>Provedor / ISP</th><th>Links ativos</th><th>Chamados no período</th><th>Chamados / 100 links</th><th>Backlog atual</th><th>&gt;24h</th><th>Tempo médio</th><th>Índice ARION</th></tr></thead>
+          <thead><tr><th>Pos.</th><th>Provedor / ISP</th><th>Links na CMDB</th><th>Chamados no período</th><th>Chamados / 100 links</th><th>Backlog atual</th><th>&gt;24h</th><th>Tempo médio</th><th title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação.">Indicador operacional ⓘ</th></tr></thead>
           <tbody>
             {% for item in page_obj %}
               <tr tabindex="0" data-provider-row="{{ item.id }}" aria-label="Abrir detalhes de {{ item.name }}">
                 <td class="rank-pos rank-pos--{{ item.ranking_position }}">{{ item.ranking_position|stringformat:"02d" }}</td>
-                <td class="provider-table-cell"><button type="button" class="table-provider provider-open" data-provider-open="{{ item.id }}">{{ item.name }}</button></td>
+                <td class="provider-table-cell"><span class="ranking-provider-identity">{% if item.logo_url %}<img class="ranking-provider-logo" src="{{ item.logo_url }}" alt="" loading="lazy">{% else %}<span class="ranking-provider-logo ranking-provider-logo--fallback" aria-hidden="true">{{ item.logo }}</span>{% endif %}<button type="button" class="table-provider provider-open" data-provider-open="{{ item.id }}">{{ item.name }}</button></span></td>
                 <td>{{ item.links_active|intcomma }}</td><td>{{ item.tickets|intcomma }}</td>
                 <td>{% if item.links_active %}{{ item.tickets_per_100_active_links|floatformat:1 }}{% else %}—{% endif %}</td>
                 <td>{{ item.backlog_current|intcomma }}</td><td class="{% if item.tickets_over_24h %}aged-cell{% endif %}">{{ item.tickets_over_24h|intcomma }}</td>
-                <td>{{ item.avg_resolution_display }}</td><td><button type="button" class="score-open" data-provider-open="{{ item.id }}">{{ item.risk_score|floatformat:1 }}</button></td>
+                <td>{{ item.avg_resolution_display }}</td><td><button type="button" class="score-open" title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação." data-provider-open="{{ item.id }}">{{ item.risk_score|floatformat:1 }}</button></td>
               </tr>
-            {% empty %}<tr><td colspan="9">Nenhum provedor com links ativos atende ao filtro selecionado.</td></tr>{% endfor %}
+            {% empty %}<tr><td colspan="9">Nenhum provedor identificado na CMDB atende ao filtro selecionado.</td></tr>{% endfor %}
           </tbody>
         </table>
       {% elif filters.ranking_view == "stable" %}
         <table class="risk-table stable-table">
-          <thead><tr><th>Pos.</th><th>Provedor / ISP</th><th>Links ativos</th><th>Clientes</th><th>Projetos</th><th>UFs</th><th>Status</th></tr></thead>
+          <thead><tr><th>Pos.</th><th>Provedor / ISP</th><th>Links na CMDB</th><th>Clientes</th><th>Projetos</th><th>UFs</th><th>Status</th></tr></thead>
           <tbody>
             {% for item in page_obj %}
               <tr tabindex="0" data-provider-row="{{ item.id }}" aria-label="Abrir detalhes de {{ item.name }}">
                 <td class="rank-pos">{{ item.ranking_position|stringformat:"02d" }}</td>
-                <td class="provider-table-cell"><button type="button" class="table-provider provider-open" data-provider-open="{{ item.id }}">{{ item.name }}</button></td>
+                <td class="provider-table-cell"><span class="ranking-provider-identity">{% if item.logo_url %}<img class="ranking-provider-logo" src="{{ item.logo_url }}" alt="" loading="lazy">{% else %}<span class="ranking-provider-logo ranking-provider-logo--fallback" aria-hidden="true">{{ item.logo }}</span>{% endif %}<button type="button" class="table-provider provider-open" data-provider-open="{{ item.id }}">{{ item.name }}</button></span></td>
                 <td>{{ item.links_active|intcomma }}</td>
                 <td class="dimension-cell">{{ item.clients|join:", "|default:"—" }}</td>
                 <td class="dimension-cell">{{ item.projects|join:", "|default:"—" }}</td>
@@ -221,7 +221,7 @@
       {% else %}
         <table class="risk-table">
           <thead><tr>
-            <th>Pos.</th><th>Provedor / ISP</th><th title="Prioridade operacional calculada a partir de impacto no NOC, base afetada, reincidência, chamados acima de 24h e backlog.">Índice</th><th>Nível</th><th>Links CMDB</th><th>Ativos</th>
+            <th>Pos.</th><th>Provedor / ISP</th><th title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação.">Indicador operacional ⓘ</th><th>Nível</th><th>Links na CMDB</th><th>Em operação</th>
             <th title="Quantidade de chamados válidos no período selecionado.">Chamados</th>
             <th title="Quantidade de chamados válidos dividida pela quantidade de links atuais associados ao provedor.">Chamados / link</th>
             <th title="Links distintos que tiveram ao menos um chamado válido no período.">Links afetados</th>
@@ -235,10 +235,10 @@
             {% for item in page_obj %}
               <tr tabindex="0" data-provider-row="{{ item.id }}" aria-label="Abrir detalhes de {{ item.name }}">
                 <td class="rank-pos rank-pos--{{ item.ranking_position }}">{{ item.ranking_position|stringformat:"02d" }}</td>
-                <td class="provider-table-cell"><button type="button" class="table-provider provider-open" data-provider-open="{{ item.id }}">{{ item.name }}</button>{% if item.sample_small and not item.no_occurrence %}<small class="row-note">Amostra pequena · {{ item.links_total|intcomma }} link{{ item.links_total|pluralize }}</small>{% endif %}</td>
-                <td><button type="button" class="score-open" data-provider-open="{{ item.id }}">{{ item.risk_score|floatformat:1 }}</button></td>
+                <td class="provider-table-cell"><span class="ranking-provider-identity">{% if item.logo_url %}<img class="ranking-provider-logo" src="{{ item.logo_url }}" alt="" loading="lazy">{% else %}<span class="ranking-provider-logo ranking-provider-logo--fallback" aria-hidden="true">{{ item.logo }}</span>{% endif %}<button type="button" class="table-provider provider-open" data-provider-open="{{ item.id }}">{{ item.name }}</button></span>{% if item.sample_small and not item.no_occurrence %}<small class="row-note">Amostra pequena · {{ item.links_total|intcomma }} links</small>{% endif %}</td>
+                <td><button type="button" class="score-open" title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação." data-provider-open="{{ item.id }}">{{ item.risk_score|floatformat:1 }}</button></td>
                 <td><span class="risk-pill risk-pill--{{ item.risk_class }}">{{ item.risk_label }}</span></td>
-                <td>{{ item.links_total|intcomma }}</td><td>{{ item.links_active|intcomma }}</td><td>{{ item.tickets|intcomma }}</td><td>{{ item.tickets_per_link|floatformat:2 }}</td><td>{{ item.links_affected|intcomma }}</td>
+                <td>{{ item.links_total|intcomma }}</td><td>{{ item.deployment_active_links|intcomma }}</td><td>{{ item.tickets|intcomma }}</td><td>{{ item.tickets_per_link|floatformat:2 }}</td><td>{{ item.links_affected|intcomma }}</td>
                 <td>{{ item.affected_rate_pct|floatformat:1 }}%</td><td>{{ item.recurrent_links|intcomma }}</td>
                 <td class="{% if item.tickets_over_24h %}aged-cell{% endif %}">{{ item.tickets_over_24h|intcomma }}</td><td>{{ item.backlog_current|intcomma }}</td>
                 <td class="trend-cell trend-cell--{{ item.trend }}">{% if item.trend == "worse" %}↑ Piorou{% elif item.trend == "better" %}↓ Melhorou{% else %}→ Estável{% endif %} {{ item.trend_delta|floatformat:1 }}</td>
@@ -288,13 +288,13 @@
   {% endif %}
 
   <dialog class="score-dialog" data-score-dialog aria-labelledby="score-dialog-title">
-    <header><div><span class="section-kicker">TRANSPARÊNCIA DO CÁLCULO</span><h2 id="score-dialog-title">Como o Índice ARION é calculado?</h2></div><button type="button" class="ranking-button ranking-button--quiet" data-score-close>Fechar</button></header>
+    <header><div><span class="section-kicker">LEITURA OPERACIONAL AUXILIAR</span><h2 id="score-dialog-title">Como o indicador operacional é calculado?</h2></div><button type="button" class="ranking-button ranking-button--quiet" data-score-close>Fechar</button></header>
     <div class="score-dialog-body">
-      <p><strong>Exposi&ccedil;&atilde;o.</strong> Links ativos s&atilde;o registros presentes no mirror CMDB com estado de implanta&ccedil;&atilde;o <code>Operacional</code> (ou <code>Operational</code>). Cada ConfigItem &eacute; contado uma vez; n&atilde;o h&aacute; deduplica&ccedil;&atilde;o por nome nem fuzzy matching.</p>
-      <p><strong>Incid&ecirc;ncia.</strong> Chamados distintos criados no per&iacute;odo por provedor &divide; links ativos atuais &times; 100. Sem link ativo, a taxa n&atilde;o &eacute; calculada. Links usam o snapshot atual; chamados usam o per&iacute;odo escolhido.</p>
-      <p><strong>Risco atual.</strong> O denominador CMDB do &Iacute;ndice ARION permanece o da f&oacute;rmula aprovada. Essa dimens&atilde;o n&atilde;o muda com o novo contador de exposi&ccedil;&atilde;o.</p>
+      <p><strong>Exposi&ccedil;&atilde;o.</strong> Links s&atilde;o todos os registros presentes no mirror CMDB dentro do Data Scope, agrupados pelo nome resolvido do provedor. Cada ConfigItem &eacute; contado uma vez, independentemente do estado de implanta&ccedil;&atilde;o.</p>
+      <p><strong>Incid&ecirc;ncia.</strong> Chamados distintos criados no per&iacute;odo por provedor &divide; links atuais na CMDB &times; 100. Sem links, a taxa n&atilde;o &eacute; calculada. Links usam o snapshot atual; chamados usam o per&iacute;odo escolhido.</p>
+      <p><strong>Indicador operacional.</strong> O denominador CMDB do indicador permanece o da f&oacute;rmula vigente. Esta rodada altera a exposi&ccedil;&atilde;o exibida para o snapshot total, sem mudar a f&oacute;rmula do indicador.</p>
       <p><strong>Tempo m&eacute;dio.</strong> Inclui tickets RESOLVED/CLOSED cujo t&eacute;rmino operacional ocorreu no per&iacute;odo e cuja dura&ccedil;&atilde;o n&atilde;o &eacute; negativa.</p>
-      <p><strong>Índice ARION.</strong> Métrica operacional de 0 a 100. Zero significa sem pressão observada no período. O índice não representa SLA contratual, disponibilidade ou penalidade financeira.</p>
+      <p><strong>Indicador operacional.</strong> Métrica auxiliar de 0 a 100 baseada nos dados operacionais disponíveis. Não representa nota definitiva, SLA contratual, disponibilidade ou penalidade financeira. Os critérios finais serão definidos com a operação.</p>
       <div class="score-formula">
         <h3>Composição</h3>
         <ul>
@@ -306,10 +306,10 @@
           <li>ARION acima de 24h <b>20 pontos</b>: chamados acima do limite divididos pelos chamados avaliáveis com datas e horas suficientes.</li>
           <li>Backlog atual <b>10 pontos</b>: chamados Em atendimento, Pendente ou Agendado divididos pelo maior valor entre chamados válidos e 1.</li>
         </ul>
-        <p>Os cinco componentes somam um único Índice ARION. No consolidado de 3 meses, os dados brutos são agregados e os componentes recalculados uma vez. O histórico calcula o índice separadamente por mês.</p>
+        <p>Os cinco componentes somam o indicador operacional. No consolidado de 3 meses, os dados brutos são agregados e os componentes recalculados uma vez. O histórico calcula o indicador separadamente por mês.</p>
         <p>Amostra pequena: menos de {{ scoring.small_sample_threshold }} links. O provedor continua visível e pode aparecer no pódio de risco.</p>
       </div>
-      <p class="aging-disclaimer">O envelhecimento dos chamados ARION considera chamados OPEN/PENDING/SCHEDULED envelhecidos desde a criação e RESOLVED/CLOSED com duração operacional superior a 24h, usando resolved_at e, somente quando ausente, terminal_state_at. A classificação de responsabilidade é informativa e não altera o índice.</p>
+      <p class="aging-disclaimer">O envelhecimento dos chamados ARION considera chamados OPEN/PENDING/SCHEDULED envelhecidos desde a criação e RESOLVED/CLOSED com duração operacional superior a 24h, usando resolved_at e, somente quando ausente, terminal_state_at. A classificação de responsabilidade é informativa e não altera o indicador.</p>
     </div>
   </dialog>
 

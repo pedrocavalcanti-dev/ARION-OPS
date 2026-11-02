@@ -17,7 +17,7 @@
     <article class="kpi-card dash-card" data-tone="blue"><header><span class="kpi-label">Total de links</span></header><strong class="kpi-value" data-count="{{ total_links }}">{{ total_links|intcomma }}</strong><small class="kpi-note">CMDB · espelho atual</small></article>
     <article class="kpi-card dash-card" data-tone="green"><header><span class="kpi-label">Estados atendidos</span></header><strong class="kpi-value" data-count="{{ state_count }}">{{ state_count }}</strong><small class="kpi-note">CMDB real</small><div class="kpi-visual kpi-dots" data-dots="{{ state_count }}" aria-hidden="true"></div></article>
     <article class="kpi-card dash-card" data-tone="orange"><header><span class="kpi-label">Tickets no período</span></header><strong class="kpi-value" data-count="{{ calls }}">{{ calls|intcomma }}</strong><small class="kpi-note">Criados entre {{ date_from }} e {{ date_to }} · NOC</small><svg class="kpi-visual kpi-sparkline" data-sparkline="calls" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"></svg></article>
-    <article class="kpi-card dash-card" data-tone="rose"><header><span class="kpi-label">Links reincidentes</span></header><strong class="kpi-value" data-count="{{ repeat }}">{{ repeat|intcomma }}</strong><small class="kpi-note">2+ tickets distintos no período</small><svg class="kpi-visual kpi-sparkline" data-sparkline="repeat" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"></svg></article>
+    <article class="kpi-card dash-card" data-tone="rose"><header><span class="kpi-label">Links reincidentes</span></header><strong class="kpi-value" data-count="{{ repeat }}">{{ repeat|intcomma }}</strong><small class="kpi-note">No período · 2+ tickets distintos por Link</small><svg class="kpi-visual kpi-sparkline" data-sparkline="repeat" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"></svg></article>
     <article class="kpi-card dash-card" data-tone="violet"><header><span class="kpi-label">Chamados abertos agora</span></header><strong class="kpi-value" data-count="{{ business_open }}">{{ business_open|intcomma }}</strong><small class="kpi-note">Em atendimento + pendentes + agendados</small>{% if perms.configuracoes.view_operational_tickets %}<a class="dashboard-queue-link" href="{% url 'chamados:index' %}">Abrir fila operacional <span aria-hidden="true">&rarr;</span></a>{% endif %}</article>
   </div>
   <section class="dashboard-status-summary" aria-labelledby="dashboard-status-title">
@@ -45,8 +45,66 @@
   </section>
   <div class="dashboard-grid">
     <article class="dash-panel dash-card trend-panel"><header><div><span class="panel-kicker">EVOLUÇÃO MENSAL · NOC - ATACADO</span><h2>Chamados no período</h2></div></header><div class="chart-legend" aria-label="Legenda do gráfico"><span class="legend-calls"><i></i>Tickets criados</span><span class="legend-repeat"><i></i>Links com 2+ tickets no mês</span></div><div class="trend-chart" data-monthly-chart role="img" aria-label="Tickets criados por mês e quantidade de Links com dois ou mais tickets distintos no mês"></div>{{ monthly|json_script:"monthly-chart-data" }}</article>
+    <article class="dash-panel dash-card aging-panel">
+      <header><div><span class="panel-kicker">BACKLOG ATUAL</span><h2>Aging dos chamados abertos</h2></div><small class="demo-note">Snapshot atual · independente do período</small></header>
+      <div class="dashboard-aging-metrics" aria-label="Resumo do aging atual">
+        <div><strong>{{ aging.open_count|intcomma }}</strong><span>Chamados abertos</span></div>
+        <div data-tone="rose"><strong>{{ aging.over_72|intcomma }}</strong><span>Acima de 72h</span></div>
+        <div data-tone="orange"><strong>{{ aging.over_72_percent_label }}</strong><span>do backlog acima de 72h</span></div>
+        <div><strong>{{ aging.oldest_label }}</strong><span>Chamado mais antigo</span></div>
+      </div>
+      <ol class="dashboard-aging-columns" aria-label="Distribuição atual dos chamados por idade">
+        {% for item in aging.bands %}
+        <li class="dashboard-aging-column-item" data-tone="{{ item.tone }}" data-value="{{ item.value }}" data-max="{{ aging.open_count }}" data-tip-label="{{ item.label }}" data-tip-value="{{ item.value|intcomma }} chamados" tabindex="0" title="{{ item.value|intcomma }} chamados na faixa {{ item.label }}" aria-label="{{ item.label }}: {{ item.value|intcomma }} chamados">
+          <i class="dashboard-aging-column"><b></b></i><strong>{{ item.value|intcomma }}</strong><span>{{ item.label }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+      {% if aging.missing_dates %}<small class="dashboard-data-note">{{ aging.missing_dates|intcomma }} chamado{{ aging.missing_dates|pluralize }} sem data de abertura no espelho; idade indisponível.</small>{% endif %}
+    </article>
+    <article class="dash-panel dash-card clients-panel">
+      <header><div><span class="panel-kicker">BASE CMDB</span><h2>Distribuição da base por cliente</h2></div><small class="demo-note">Snapshot atual</small></header>
+      <div class="dashboard-client-distribution">
+        <div class="dashboard-client-donut-wrap">
+          <svg class="dashboard-client-donut" viewBox="0 0 180 180" role="group" aria-label="Distribuição dos links CMDB por cliente" data-client-donut>
+            <circle class="dashboard-client-donut-track" cx="90" cy="90" r="66"></circle>
+            <g data-client-donut-arcs></g>
+          </svg>
+          <div class="dashboard-client-donut-total"><strong>{{ total_links|intcomma }}</strong><span>links</span></div>
+        </div>
+        <ol class="dashboard-client-legend" aria-label="Legenda de links por cliente">
+          {% for item in client_distribution %}
+          <li><span><i class="client-swatch client-swatch--{{ item.key }}" aria-hidden="true"></i>{{ item.label }}</span><strong>{{ item.value|intcomma }}</strong><small>{{ item.share_label }}</small></li>
+          {% endfor %}
+        </ol>
+      </div>
+      {{ client_distribution|json_script:"dashboard-client-distribution-data" }}
+    </article>
+    <article class="dash-panel dash-card projects-panel">
+      <header><div><span class="panel-kicker">CONCENTRA&Ccedil;&Atilde;O NO PER&Iacute;ODO</span><h2>Chamados por projeto</h2></div><small class="demo-note">Participa&ccedil;&atilde;o sobre {{ calls|intcomma }} tickets</small></header>
+      <ol class="dashboard-project-chart" aria-label="Top projetos por volume de chamados">
+        {% for item in top_projects %}
+        <li class="dashboard-project-column" tabindex="0" data-value="{{ item.value }}" data-max="{{ top_projects.0.value }}" data-tip-label="{{ item.name }}" data-tip-value="{{ item.value|intcomma }} tickets" data-tip-share="{{ item.share_label }}" title="{{ item.name }}: {{ item.value|intcomma }} tickets, {{ item.share_label }} do total do período" aria-label="{{ item.name }}: {{ item.value|intcomma }} tickets, {{ item.share_label }} do total do período">
+          <strong>{{ item.value|intcomma }}</strong><i class="dashboard-project-track" aria-hidden="true"><b></b></i><span class="dashboard-project-name" title="{{ item.name }}">{{ item.name }}</span><small>{{ item.share_label }}</small>
+        </li>
+        {% empty %}<li class="provider-empty">Nenhum chamado no período selecionado.</li>{% endfor %}
+      </ol>
+      {% if top_projects %}<small class="dashboard-data-note">Um ticket associado a mais de um projeto pode aparecer em cada projeto relacionado.</small>{% endif %}
+    </article>
+    <article class="dash-panel dash-card reasons-panel">
+      <header><div><span class="panel-kicker">CLASSIFICA&Ccedil;&Atilde;O OTRS</span><h2>Principais motivos dos chamados</h2></div><small class="demo-note">No per&iacute;odo selecionado</small></header>
+      <ol class="dashboard-breakdown-list" aria-label="Principais motivos dos chamados no per&iacute;odo">
+        {% for item in top_reasons %}
+        <li class="dashboard-breakdown-row" title="{{ item.name }}: {{ item.value|intcomma }} tickets, {{ item.share_label }} do total do per&iacute;odo">
+          <span class="rank-number">{{ forloop.counter|stringformat:'02d' }}</span><span class="dashboard-breakdown-name">{% if perms.configuracoes.view_cockpit and item.cockpit_url %}<a href="{{ item.cockpit_url }}">{{ item.name }}</a>{% else %}{{ item.name }}{% endif %}</span>
+          <i class="dashboard-breakdown-track"><b data-value="{{ item.value }}" data-max="{{ top_reasons.0.value }}"></b></i><strong>{{ item.value|intcomma }}</strong><small>{{ item.share_label }}</small>
+        </li>
+        {% empty %}<li class="provider-empty">Nenhum ticket no per&iacute;odo selecionado.</li>{% endfor %}
+      </ol>
+      <small class="dashboard-data-note">Motivo informado no campo de encerramento do espelho OTRS. N&atilde;o classificado aparece quando houver.</small>
+    </article>
     <article class="dash-panel dash-card states-panel"><header><div><span class="panel-kicker">CONCENTRAÇÃO DA BASE</span><h2>Top 10 Estados com mais Links</h2></div><small class="demo-note">CMDB · snapshot atual</small></header><ol class="state-ranking dashboard-state-grid">{% for item in top_states %}<li class="state-rank"><span class="rank-number">{{ forloop.counter|stringformat:'02d' }}</span><img class="state-flag" src="{% static item.flag %}" alt="Bandeira de {{ item.name }}" width="24" height="16" loading="lazy"><span class="state-name">{{ item.name }}</span><span class="state-code-badge">{{ item.code }}</span><strong>{{ item.value|intcomma }}<small>links</small></strong><i class="state-bar"><b data-value="{{ item.value }}" data-max="{{ top_states.0.value }}"></b></i></li>{% empty %}<li>Nenhum estado classificado.</li>{% endfor %}</ol></article>
-    <article class="dash-panel dash-card providers-panel"><header><div><span class="panel-kicker">PROVEDORES CMDB</span><h2>Provedores com mais Links</h2></div><small class="demo-note">Top 10 · snapshot atual</small></header><ol class="provider-ranking" aria-label="Top 10 provedores com mais Links">{% for item in top_providers %}<li class="provider-rank"><span class="rank-number">{{ forloop.counter|stringformat:'02d' }}</span><span class="provider-name" title="{{ item.name }}">{{ item.name }}</span><strong>{{ item.value|intcomma }}<small>links</small></strong><i class="state-bar"><b data-value="{{ item.value }}" data-max="{{ top_providers.0.value }}"></b></i></li>{% empty %}<li class="provider-empty">Nenhum provedor resolvido no snapshot atual.</li>{% endfor %}</ol></article>
+    <article class="dash-panel dash-card providers-panel"><header><div><span class="panel-kicker">PROVEDORES CMDB</span><h2>Provedores com mais Links</h2></div><small class="demo-note">Top 10 · snapshot atual</small></header><ol class="provider-ranking" aria-label="Top 10 provedores com mais Links">{% for item in top_providers %}<li class="provider-rank"><span class="rank-number">{{ forloop.counter|stringformat:'02d' }}</span>{% if item.logo_url %}<img class="provider-logo" src="{{ item.logo_url }}" alt="" width="32" height="32" loading="lazy">{% else %}<span class="provider-logo provider-logo--fallback" aria-hidden="true">{{ item.logo_initials }}</span>{% endif %}<span class="provider-name" title="{{ item.name }}">{{ item.name }}</span><strong>{{ item.value|intcomma }}<small>links</small></strong><i class="state-bar"><b data-value="{{ item.value }}" data-max="{{ top_providers.0.value }}"></b></i></li>{% empty %}<li class="provider-empty">Nenhum provedor resolvido no snapshot atual.</li>{% endfor %}</ol></article>
   </div>
   <div class="chart-tooltip" data-chart-tooltip role="tooltip" hidden></div>
 </section>

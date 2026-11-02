@@ -17,6 +17,7 @@ from aplicativos.integracoes.services.analytics import (
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
 from aplicativos.integracoes.services.semantics import provider_label
 from aplicativos.painel.services.analytics import AnalyticsQueryService
+from aplicativos.painel.services.provider_logos import provider_logo
 
 
 VALID_STATES = AnalyticsQueryService.OPERATIONAL_VALID_STATES
@@ -56,12 +57,13 @@ PRIORITY_GROUPS = {
     "high": {"alto", "high"},
     "critical": {"critico", "critical"},
 }
-ACTIVE_DEPLOYMENT_STATES = ("Operacional", "Operational")
-
-
 def _plain(value):
     return "".join(char for char in unicodedata.normalize("NFKD", str(value or "").casefold())
                    if not unicodedata.combining(char)).strip()
+
+
+def _provider_name_key(value):
+    return " ".join(_plain(value).split())
 
 
 def _local_bound(day):
@@ -227,30 +229,57 @@ class RankingService:
         links = list(links_qs.select_related("operator").order_by("pk"))
         links_by_id = {link.pk: link for link in links}
         provider_links = defaultdict(list)
+        provider_names = {}
+        provider_ids = defaultdict(set)
         for link in links:
-            if link.operator_id and link.operator.is_present_in_source:
-                provider_links[link.operator_id].append(link)
+            provider_name = (link.operator.name or "").strip() if link.operator_id else ""
+            if not provider_name:
+                continue
+            provider_key = _provider_name_key(provider_name)
+            provider_links[provider_key].append(link)
+            provider_names.setdefault(provider_key, provider_name)
+            provider_ids[provider_key].add(link.operator_id)
 
-        # Exposure is the current operational inventory, grouped in the database.
-        # Unknown, canceled and maintenance states are not treated as active.
-        active_links_qs = links_qs.filter(
-            Q(deployment_state__iexact=ACTIVE_DEPLOYMENT_STATES[0])
-            | Q(deployment_state__iexact=ACTIVE_DEPLOYMENT_STATES[1])
+        # Match the Dashboard's current CMDB snapshot: every present link counts,
+        # grouped by the resolved provider name, regardless of deployment state.
+        inventory_groups = list(
+            links_qs.filter(operator__isnull=False).exclude(operator__name="")
+            .values("operator__name").annotate(links=Count("pk", distinct=True)).order_by()
         )
-        active_link_groups = list(active_links_qs.values(
-            "operator_id", "operator__name", "operator__is_present_in_source",
-        ).annotate(links_active=Count("pk")).order_by())
-        active_links_total = sum(group["links_active"] for group in active_link_groups)
-        active_links_by_provider = {
-            group["operator_id"]: group["links_active"]
-            for group in active_link_groups
-            if group["operator_id"] and group["operator__is_present_in_source"]
+        deployment_active_links_total = links_qs.filter(
+            Q(deployment_state__iexact="Operacional")
+            | Q(deployment_state__iexact="Operational")
+        ).count()
+        inventory_links_by_provider = defaultdict(int)
+        for group in inventory_groups:
+            provider_key = _provider_name_key(group["operator__name"])
+            inventory_links_by_provider[provider_key] += group["links"]
+            provider_names[provider_key] = group["operator__name"].strip()
+        operational_groups = list(
+            links_qs.filter(
+                Q(deployment_state__iexact="Operacional")
+                | Q(deployment_state__iexact="Operational"),
+                operator__isnull=False,
+            ).exclude(operator__name="").values("operator__name")
+            .annotate(links=Count("pk", distinct=True)).order_by()
+        )
+        deployment_active_links_by_provider = defaultdict(int)
+        for group in operational_groups:
+            deployment_active_links_by_provider[_provider_name_key(group["operator__name"])] += group["links"]
+        provider_id_by_name = {
+            key: min(ids) for key, ids in provider_ids.items() if ids
         }
-        identified_active_links = sum(active_links_by_provider.values())
-        active_links_unidentified = max(0, active_links_total - identified_active_links)
-        active_provider_link_counts = sorted(active_links_by_provider.values(), reverse=True)
-        top10_links = sum(active_provider_link_counts[:10])
-        top10_link_concentration = round(top10_links / active_links_total * 100, 1) if active_links_total else 0.0
+        provider_primary_id = {
+            operator_id: provider_id_by_name[key]
+            for key, ids in provider_ids.items() for operator_id in ids
+        }
+        inventory_links_total = len(links)
+        identified_inventory_links = sum(inventory_links_by_provider.values())
+        active_links_unidentified = max(0, inventory_links_total - identified_inventory_links)
+        top10_links = sum(sorted(inventory_links_by_provider.values(), reverse=True)[:10])
+        top10_link_concentration = (
+            round(top10_links / inventory_links_total * 100, 1) if inventory_links_total else 0.0
+        )
 
         start_at, end_exclusive = _period_bounds(date_from, date_to)
         trend_month_start = date_to.replace(day=1)
@@ -334,7 +363,8 @@ class RankingService:
                     high_critical_ids.add(ticket_id)
 
             providers = {}
-            for operator_id, links_for_provider in provider_links.items():
+            for provider_key, links_for_provider in provider_links.items():
+                operator_id = provider_id_by_name[provider_key]
                 provider_ticket_ids = set()
                 related_ticket_ids = set()
                 affected_link_ids = set()
@@ -388,16 +418,17 @@ class RankingService:
                             resolution_durations.append(duration)
                 providers[operator_id] = {
                     "id": operator_id,
-                    "name": links_for_provider[0].operator.name,
-                    "links_total": total,
-                    "links_active": active_links_by_provider.get(operator_id, 0),
+                    "name": provider_names.get(provider_key) or links_for_provider[0].operator.name,
+                    "links_total": inventory_links_by_provider.get(provider_key, total),
+                    "links_active": inventory_links_by_provider.get(provider_key, total),
+                    "deployment_active_links": deployment_active_links_by_provider.get(provider_key, 0),
                     "tickets": tickets_count,
                     "links_affected": affected,
                     "affected_rate": affected / total if total else 0,
                     "tickets_per_100_links": tickets_count / total * 100 if total else 0,
                     "tickets_per_100_active_links": (
-                        round(tickets_count / active_links_by_provider[operator_id] * 100, 1)
-                        if active_links_by_provider.get(operator_id) else None
+                        round(tickets_count / inventory_links_by_provider[provider_key] * 100, 1)
+                        if inventory_links_by_provider.get(provider_key) else None
                     ),
                     "avg_resolution_hours": (
                         sum(resolution_durations) / len(resolution_durations) if resolution_durations else None
@@ -484,8 +515,8 @@ class RankingService:
             row["trend"] = "worse" if delta > 2 else "better" if delta < -2 else "stable"
             row["trend_label"] = "Piorou" if row["trend"] == "worse" else "Melhorou" if row["trend"] == "better" else "Estável"
             row["sample_small"] = row["links_total"] < SMALL_SAMPLE_LINK_THRESHOLD
-            row["share"] = round(row["links_total"] / len(links) * 100, 1) if links else 0
-            row["active_share"] = round(row["links_active"] / active_links_total * 100, 1) if active_links_total else 0
+            row["share"] = round(row["links_total"] / inventory_links_total * 100, 1) if inventory_links_total else 0
+            row["active_share"] = round(row["links_active"] / inventory_links_total * 100, 1) if inventory_links_total else 0
             row["affected_rate_pct"] = round(row["affected_rate"] * 100, 1)
             row["recurrent_rate_pct"] = round(row["recurrent_rate"] * 100, 1)
             row["over_24h_rate_pct"] = round(row["over_24h_rate"] * 100, 1)
@@ -500,7 +531,9 @@ class RankingService:
                 row["avg_resolution_display"] = f"{resolution_hours}h {resolution_minutes:02d}m"
             else:
                 row["avg_resolution_display"] = "—"
-            row["logo"] = "".join(part[0] for part in row["name"].split()[:2]).upper()
+            logo = provider_logo(row["name"])
+            row["logo"] = logo["initials"]
+            row["logo_url"] = logo["url"]
             row["projects"] = sorted({link.business_project for link in row["links_for_provider"] if link.business_project})
             row["clients"] = sorted({link.contracting_client for link in row["links_for_provider"] if link.contracting_client})
             row["states"] = sorted({link.state for link in row["links_for_provider"] if link.state})
@@ -581,10 +614,11 @@ class RankingService:
             "ranked_links_total": len(link_rows),
             "ranked_links_all": link_rows,
             "ticket_export_rows": ticket_export_rows,
-            "links_total": len(links),
-            "links_active": active_links_total,
+            "links_total": inventory_links_total,
+            "links_active": inventory_links_total,
+            "deployment_active_links_total": deployment_active_links_total,
             "active_links_unidentified": active_links_unidentified,
-            "active_provider_count": len(active_links_by_provider),
+            "active_provider_count": len(inventory_links_by_provider),
             "top10_links": top10_links,
             "top10_link_concentration": top10_link_concentration,
             "provider_count": len(rows),
@@ -602,7 +636,8 @@ class RankingService:
             "end": date_to,
             "total_tickets_by_provider": sum(row["tickets"] for row in rows),
             "detail": cls._provider_detail(
-                current_rows_map.get(int(detail_provider_id)) if detail_provider_id and str(detail_provider_id).isdigit() else None,
+                current_rows_map.get(provider_primary_id.get(int(detail_provider_id), int(detail_provider_id)))
+                if detail_provider_id and str(detail_provider_id).isdigit() else None,
                 tickets, link_tickets, ticket_page=detail_ticket_page, ticket_page_size=detail_ticket_page_size, now=now,
             ) if detail_provider_id else None,
             "available_months": cls._available_months(user),

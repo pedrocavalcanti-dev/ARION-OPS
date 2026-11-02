@@ -1,0 +1,12 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% block quality_content %}
+<header class="quality-page-header quality-page-header--simple">
+  <div><p class="quality-eyebrow">ARION OPS <span>/</span> NOC ATACADO <span>/</span> QUALIDADE</p><h1>{{ page_title }}</h1><p class="quality-page-subtitle">{{ page_subtitle }}</p></div>
+</header>
+<section class="quality-prepared-state" aria-labelledby="quality-prepared-title">
+  <span class="quality-prepared-state__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 20 6v5c0 5-3.4 8.2-8 10-4.6-1.8-8-5-8-10V6z"/><path d="m8.5 12 2.3 2.3 4.8-5"/></svg></span>
+  <h2 id="quality-prepared-title">Estrutura preparada</h2>
+  <p>O design desta área será implementado na próxima etapa.</p>
+  <a href="{% url 'qualidade:dashboard' %}">Voltar à visão geral <span aria-hidden="true">→</span></a>
+</section>
+{% endblock %}

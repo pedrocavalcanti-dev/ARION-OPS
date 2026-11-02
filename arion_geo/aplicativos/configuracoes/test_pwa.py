@@ -54,7 +54,7 @@ class PwaDeliveryTests(SimpleTestCase):
         self.assertIn("no-store", response["Cache-Control"])
         payload = response.json()
         catalog = release_catalog()
-        self.assertEqual(catalog["version"], "1.2.0")
+        self.assertEqual(catalog["version"], "1.3.0")
         self.assertEqual(payload["version"], catalog["version"])
         self.assertEqual(payload["released_at"], catalog["current_release"]["released_at"])
         self.assertEqual(payload["release_title"], catalog["current_release"]["title"])

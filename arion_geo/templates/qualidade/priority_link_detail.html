@@ -1,0 +1,105 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% block title %}ARION OPS · {{ link.designation_display }} · Links prioritários{% endblock %}
+{% block quality_title %}{{ link.designation_display }}{% endblock %}
+{% block extra_js %}{{ block.super }}{% if can_manage_orders %}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script>{% endif %}{% endblock %}
+{% block quality_content %}
+<div class="quality-link-detail">
+  <a class="quality-link-back" href="{% url 'qualidade:links_prioritarios' %}?period={{ period }}&amp;state={{ operational_state_filter }}"><span aria-hidden="true">←</span> Links prioritários</a>
+
+  <header class="quality-link-heading">
+    <div>
+      <p class="quality-eyebrow">ARION OPS <span>/</span> QUALIDADE <span>/</span> LINKS PRIORITÁRIOS</p>
+      <h1>{{ link.designation_display }}</h1>
+      <p class="quality-link-heading__context">
+        {{ link.contracting_client|default:"Cliente não informado" }}
+        {% if link.project_display %}<span>·</span>{{ link.project_display }}{% endif %}
+        {% if link.provider_name %}<span>·</span>{{ link.provider_name }}{% endif %}
+        {% if link.state %}<span>·</span>{{ link.state }}{% endif %}
+      </p>
+      <p class="quality-link-ci">CI {{ link.source_config_item_id }}</p>
+      <span class="quality-operational-state{% if is_active_recurrence %} quality-operational-state--active{% elif is_stabilized %} quality-operational-state--stabilized{% elif operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ operational_state_label }}</span>
+    </div>
+    <span class="quality-link-period-label">Janela gerencial · {{ period }} dias</span>
+  </header>
+
+  <section class="quality-link-summary" aria-label="Resumo do circuito">
+    <dl class="quality-link-facts">
+      <div><dt>Primeira ocorrência da janela</dt><dd>{% if first_occurrence %}{{ first_occurrence|date:"d/m/Y H:i" }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Última ocorrência</dt><dd>{% if last_occurrence %}{{ last_occurrence|date:"d/m/Y H:i" }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Operadora / ISP</dt><dd>{{ link.provider_name|default:"—" }}</dd></div>
+      <div><dt>UF</dt><dd>{{ link.state|default:"—" }}</dd></div>
+    </dl>
+    <dl class="quality-link-episode-summary" aria-label="Estado operacional do episódio">
+      <div><dt>Episódio atual</dt><dd>{% if current_episode_number %}{{ current_episode_number|stringformat:"02d" }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Início</dt><dd>{% if current_episode_started_at %}{{ current_episode_started_at|date:"d/m/Y" }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Sequência operacional</dt><dd>{{ operational_recurrence_level }}</dd></div>
+      <div><dt>Dias sem ocorrência</dt><dd>{% if current_episode_days_since_last != None %}{{ current_episode_days_since_last }}{% else %}—{% endif %}</dd></div>
+    </dl>
+    <div class="quality-link-metrics">
+      <article><span>Ocorrências válidas</span><strong>{{ valid_occurrence_count }}</strong><small>Tickets contabilizados após as regras de exclusão.</small></article>
+      <article><span>Reincidências na janela</span><strong>{{ recurrence_count }}</strong><small>{{ period }} dias gerenciais · episódio atual: {{ current_episode_recurrence_count }} reincidência{{ current_episode_recurrence_count|pluralize }}{% if is_active_recurrence %} · ativo{% elif is_stabilized %} · estabilizado{% elif operational_state == "NEW_EPISODE" %} · novo episódio{% else %} · ocorrência isolada{% endif %}</small></article>
+      <article><span>Mesma causa confirmada</span><strong>{{ same_cause_recurrences }}</strong><small>A classificação depende da revisão da Qualidade.</small></article>
+      <article><span>Nível da Qualidade</span><strong>{{ link.level_label }}</strong><small>Contagem da janela não define o nível formal da OQ.</small></article>
+    </div>
+    <section class="quality-link-order" aria-label="Ordem de Qualidade relacionada">
+      <div>
+        <p class="quality-eyebrow">ORDEM DE QUALIDADE</p>
+        {% if link.active_order_code %}
+          <h2>{{ link.active_order_code }}</h2>
+          <p>{{ link.status_label }}{% if link.active_priority %}<span>·</span>{{ link.priority_label }}{% endif %}</p>
+        {% else %}
+          <h2>Nenhuma OQ ativa</h2>
+          <p>Nenhuma OQ ativa para este circuito.</p>
+        {% endif %}
+      </div>
+      {% if link.active_order_code %}
+        <a class="quality-link-action" href="{% url 'qualidade:ordem_detail' codigo=link.active_order_code %}">Abrir OQ</a>
+      {% elif can_manage_orders %}
+        <button class="quality-link-action" type="button" data-quality-create-order data-link-id="{{ link.pk }}" data-link-label="{{ link.designation_display }} · CI {{ link.source_config_item_id }}" data-client="{{ link.contracting_client }}" data-project="{{ link.project_display }}" data-provider-name="{{ link.provider_name }}" data-uf="{{ link.state }}">Criar OQ</button>
+      {% endif %}
+    </section>
+  </section>
+
+  <section class="quality-link-history" aria-labelledby="quality-link-history-title">
+    <header class="quality-link-history__header">
+      <div><p class="quality-eyebrow">INVESTIGAÇÃO DO CIRCUITO</p><h2 id="quality-link-history-title">Histórico de ocorrências</h2><p>Tickets espelhados do OTRS relacionados a este CI, dentro da janela selecionada.</p></div>
+      <div class="quality-link-history__counts"><span>{{ valid_history_count }} válidas</span><span>{{ excluded_history_count }} não contabilizadas</span></div>
+    </header>
+    <form id="quality-link-history-filters" class="quality-link-history-filters" method="get" action="{% url 'qualidade:priority_link_detail' identificador=link.source_config_item_id %}">
+      <label><span>Período</span><select name="period">{% for value,label in period_options %}<option value="{{ value }}"{% if period == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label><span>Exibir</span><select name="history"><option value="all"{% if history_filter == 'all' %} selected{% endif %}>Todos os tickets</option><option value="valid"{% if history_filter == 'valid' %} selected{% endif %}>Válidos</option><option value="excluded"{% if history_filter == 'excluded' %} selected{% endif %}>Não contabilizados</option></select></label>
+      <label><span>Ordem</span><select name="direction"><option value="recent"{% if direction == 'recent' %} selected{% endif %}>Mais recentes</option><option value="oldest"{% if direction == 'oldest' %} selected{% endif %}>Mais antigas</option></select></label>
+      <button type="submit">Aplicar</button>
+    </form>
+    {% if tickets %}
+      <ol class="quality-link-timeline">
+        {% for ticket in tickets %}
+          <li class="quality-link-timeline__item{% if not ticket.is_valid_occurrence %} is-excluded{% endif %}">
+            <span class="quality-link-timeline__marker" aria-hidden="true"></span>
+            <article class="quality-ticket-entry">
+              <header>
+                <div><time datetime="{{ ticket.source_created_at|date:'c' }}">{{ ticket.source_created_at|date:"d/m/Y H:i" }}</time>{% if ticket.sequence_label %}<span class="quality-ticket-sequence">{{ ticket.sequence_label }}</span>{% endif %}</div>
+                <span class="quality-ticket-validity{% if not ticket.is_valid_occurrence %} is-excluded{% endif %}">{{ ticket.exclusion_label }}</span>
+              </header>
+              <h3 title="{{ ticket.title|default:'Ticket sem título' }}">{{ ticket.ticket_number }} <span>·</span> {{ ticket.title|default:"Ticket sem título" }}</h3>
+              <dl>
+                <div><dt>Fila</dt><dd>{{ ticket.queue_name|default:"—" }}</dd></div>
+                <div><dt>Estado</dt><dd>{{ ticket.external_state_name|default:"—" }}</dd></div>
+                <div><dt>Responsável OTRS</dt><dd>{% if ticket.responsible_user_id %}{{ ticket.responsible_user_id }}{% else %}—{% endif %}</dd></div>
+                <div><dt>Motivo</dt><dd>{{ ticket.reason_display }}</dd></div>
+                <div><dt>Causa raiz revisada</dt><dd>{{ ticket.root_cause_display }}</dd></div>
+                {% if ticket.same_cause_label %}<div><dt>Revisão da causa</dt><dd>{{ ticket.same_cause_label }}</dd></div>{% endif %}
+              </dl>
+              {% if ticket.otrs_url %}<a class="quality-ticket-open" href="{{ ticket.otrs_url }}" target="_blank" rel="noopener noreferrer">Abrir no OTRS <span aria-hidden="true">↗</span></a>{% endif %}
+            </article>
+          </li>
+        {% endfor %}
+      </ol>
+      {% include "qualidade/_pagination.html" %}
+    {% else %}
+      <div class="quality-list-empty"><strong>Nenhum ticket encontrado nesta janela.</strong><p>Ajuste o período ou o filtro para consultar outros tickets espelhados deste circuito.</p></div>
+    {% endif %}
+  </section>
+</div>
+{% if can_manage_orders %}{% include "qualidade/_create_order_dialog.html" %}{% endif %}
+{% endblock %}

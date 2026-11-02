@@ -16,16 +16,15 @@ from aplicativos.integracoes.services.analytics import LinkQueryService, PeriodS
 from .services import RankingService
 
 SORT_OPTIONS = (
-    ("links_active", "Mais links ativos"),
+    ("links_active", "Mais links na CMDB"),
     ("tickets_per_100_active_links", "Chamados / 100 links"),
-    ("risk_score", "Índice ARION"),
+    ("risk_score", "Indicador operacional"),
     ("impact_noc_score", "Maior impacto no NOC"),
     ("tickets", "Mais chamados"),
     ("affected_rate", "Maior % da base afetada"),
     ("recurrent_links", "Mais reincidentes"),
     ("tickets_over_24h", "Mais chamados >24h"),
     ("backlog_current", "Maior backlog"),
-    ("links_total", "Mais links CMDB"),
     ("avg_resolution_hours", "Maior tempo médio"),
 )
 SORT_KEYS = {key for key, _ in SORT_OPTIONS}

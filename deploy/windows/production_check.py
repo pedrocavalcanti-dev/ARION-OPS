@@ -163,11 +163,14 @@ def main() -> int:
     log_root = PROJECT_ROOT / "var" / "logs"
     check(log_root.is_dir() and os.access(log_root, os.W_OK), "diretório de logs", "presente e gravável" if log_root.is_dir() and os.access(log_root, os.W_OK) else "crie/proteja var/logs")
 
-    check(settings.SECURE_SSL_REDIRECT is True, "HTTPS redirect")
+    check(settings.SECURE_PROXY_SSL_HEADER == ("HTTP_X_FORWARDED_PROTO", "https"),
+          "SECURE_PROXY_SSL_HEADER", "HTTP_X_FORWARDED_PROTO=https")
+    check(settings.SECURE_SSL_REDIRECT is True, "HTTPS redirect", "ativo via proxy HTTPS confiável")
     check(settings.SESSION_COOKIE_SECURE is True and settings.CSRF_COOKIE_SECURE is True,
           "cookies Secure")
     check(settings.SESSION_COOKIE_HTTPONLY is True and settings.CSRF_COOKIE_HTTPONLY is False,
           "cookies HttpOnly", "sessão protegida; CSRF legível pelo AJAX same-origin")
+    check(settings.SECURE_HSTS_SECONDS >= 3600, "HSTS max-age", f"{settings.SECURE_HSTS_SECONDS}s")
     check(settings.SECURE_HSTS_PRELOAD is False and settings.SECURE_HSTS_INCLUDE_SUBDOMAINS is False,
           "HSTS gradual", "sem preload/includeSubDomains automáticos")
     check(bool(settings.ARION_CSP_REPORT_ONLY), "CSP", "Report-Only")

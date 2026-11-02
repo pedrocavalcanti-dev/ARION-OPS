@@ -1,0 +1,114 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% load static %}
+{% block title %}ARION OPS · Contatos e escalonamentos{% endblock %}
+{% block quality_title %}Contatos{% endblock %}
+{% block extra_js %}{{ block.super }}<script defer src="{% arion_bundle_js 'js/qualidade/contacts.js' %}"></script>{% endblock %}
+{% block quality_content %}
+<main class="quality-contacts-page">
+  <header class="quality-page-header">
+    <div><p class="quality-eyebrow">MATRIZ OPERACIONAL</p><h1>{{ page_title }}</h1><p class="quality-page-subtitle">Centralize os responsáveis de operadoras, clientes e áreas internas utilizados pela Qualidade.</p>{% include "qualidade/partials/guide_trigger.html" %}</div>
+    {% if can_manage_contacts %}<button class="quality-action-button" type="button" data-quality-contact-new>+ Novo contato</button>{% endif %}
+  </header>
+
+  <section class="quality-contact-summary" aria-label="Resumo dos contatos">
+    <span><strong>{{ active_count }}</strong> ativos</span><span><strong>{{ external_count }}</strong> externos</span><span><strong>{{ internal_count }}</strong> internos</span>
+  </section>
+
+  <form class="quality-contact-toolbar" method="get" aria-label="Buscar e filtrar contatos">
+    <label class="quality-search-field"><span class="quality-sr-only">Buscar nome, empresa, projeto ou forma de contato</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{ selected.q }}" placeholder="Buscar nome, empresa, projeto..."></label>
+    <details class="quality-list-filter-details"{% if selected.company or selected.region or selected.client or selected.project or selected.contact_type or selected.level or selected.status %} open{% endif %}>
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Filtros</summary>
+      <div class="quality-list-filter-panel">
+        <label>Empresa / ISP<select name="company"><option value="">Todas</option>{% for item in filter_options.company %}<option value="{{ item }}"{% if selected.company == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>Região<select name="region"><option value="">Todas</option>{% for item in filter_options.region %}<option value="{{ item }}"{% if selected.region == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>Cliente<select name="client"><option value="">Todos</option>{% for item in filter_options.client %}<option value="{{ item }}"{% if selected.client == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>Projeto<select name="project"><option value="">Todos</option>{% for item in filter_options.project %}<option value="{{ item }}"{% if selected.project == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+        <label>Tipo<select name="contact_type"><option value="">Todos</option>{% for value,label in filter_options.contact_type %}<option value="{{ value }}"{% if selected.contact_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>Escalonamento<select name="level"><option value="">Todos</option>{% for value,label in filter_options.level %}<option value="{{ value }}"{% if selected.level == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>Status<select name="status"><option value="">Todos</option><option value="active"{% if selected.status == "active" %} selected{% endif %}>Ativos</option><option value="inactive"{% if selected.status == "inactive" %} selected{% endif %}>Inativos</option></select></label>
+        <div class="quality-list-filter-actions"><a href="{% url 'qualidade:contatos' %}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
+      </div>
+    </details>
+    <label class="quality-contact-page-size"><span>Por página</span><select name="per_page"><option value="25"{% if page_size == 25 %} selected{% endif %}>25</option><option value="50"{% if page_size == 50 %} selected{% endif %}>50</option><option value="100"{% if page_size == 100 %} selected{% endif %}>100</option></select></label>
+    <button class="quality-list-submit" type="submit">Buscar</button>
+  </form>
+
+  {% if contacts %}
+    <section class="quality-contact-table-wrap" aria-label="Contatos e escalonamentos">
+      <table class="quality-contact-table">
+        <thead><tr><th>Contato</th><th>Empresa</th><th>Contexto</th><th>Tipo</th><th>Escalonamento</th><th>Contato direto</th><th>Status</th><th>Ações</th></tr></thead>
+        <tbody>
+          {% for contact in contacts %}
+            <tr class="{% if not contact.active %}is-inactive{% endif %}">
+              <td><button class="quality-contact-open" type="button" data-quality-contact-detail data-name="{{ contact.name }}" data-role="{{ contact.role }}" data-company="{{ contact.company_display }}" data-region="{{ contact.region }}" data-client="{{ contact.client }}" data-project="{{ contact.project_display }}" data-contact-type="{{ contact.contact_type_label }}" data-level="{{ contact.escalation_label }}" data-email="{{ contact.email }}" data-phone="{{ contact.phone }}" data-teams="{{ contact.teams }}" data-notes="{{ contact.notes }}" data-active="{{ contact.active|yesno:'Ativo,Inativo' }}"><strong>{{ contact.name }}</strong>{% if contact.is_demo %} <span class="quality-demo-badge">Demonstração local</span>{% endif %}<small>{{ contact.role|default:"Função não informada" }}</small></button></td>
+              <td>{{ contact.company_display }}</td>
+              <td><strong>{{ contact.client|default:"Todos os clientes" }}</strong><small>{{ contact.project_display }}{% if contact.region %} · {{ contact.region }}{% endif %}</small></td>
+              <td>{{ contact.contact_type_label }}</td>
+              <td><span class="quality-contact-level">{{ contact.escalation_label }}</span></td>
+              <td>{% if contact.email %}<span>{{ contact.email }}</span>{% endif %}{% if contact.phone %}<small>{{ contact.phone }}</small>{% elif contact.teams %}<small>Teams · {{ contact.teams }}</small>{% endif %}{% if not contact.email and not contact.phone and not contact.teams %}<span>—</span>{% endif %}</td>
+              <td><span class="quality-contact-status{% if not contact.active %} is-inactive{% endif %}">{{ contact.active|yesno:"Ativo,Inativo" }}</span></td>
+              <td>
+                {% if can_manage_contacts %}
+                  <details class="quality-contact-actions">
+                    <summary aria-label="Ações de {{ contact.name }}">•••</summary>
+                    <div>
+                      <button type="button" data-quality-contact-edit data-contact-id="{{ contact.pk }}" data-name="{{ contact.name }}" data-company="{{ contact.company_display }}" data-region="{{ contact.region }}" data-client="{{ contact.client }}" data-project="{{ contact.project_display }}" data-contact-type="{{ contact.contact_type }}" data-role="{{ contact.role }}" data-email="{{ contact.email }}" data-phone="{{ contact.phone }}" data-teams="{{ contact.teams }}" data-notes="{{ contact.notes }}" data-level="{{ contact.escalation_level }}" data-active="{{ contact.active|yesno:'true,false' }}">Editar</button>
+                      <form method="post" action="{% url 'qualidade:contato_status' contact_id=contact.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="active" value="{% if contact.active %}false{% else %}true{% endif %}"><button type="submit">{% if contact.active %}Desativar{% else %}Reativar{% endif %}</button></form>
+                    </div>
+                  </details>
+                {% else %}<span class="quality-muted-value">—</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    <section class="quality-contact-cards" aria-label="Contatos e escalonamentos">
+      {% for contact in contacts %}
+        <article class="quality-contact-card{% if not contact.active %} is-inactive{% endif %}">
+          <header><button class="quality-contact-open" type="button" data-quality-contact-detail data-name="{{ contact.name }}" data-role="{{ contact.role }}" data-company="{{ contact.company_display }}" data-region="{{ contact.region }}" data-client="{{ contact.client }}" data-project="{{ contact.project_display }}" data-contact-type="{{ contact.contact_type_label }}" data-level="{{ contact.escalation_label }}" data-email="{{ contact.email }}" data-phone="{{ contact.phone }}" data-teams="{{ contact.teams }}" data-notes="{{ contact.notes }}" data-active="{{ contact.active|yesno:'Ativo,Inativo' }}"><strong>{{ contact.name }}</strong><small>{{ contact.role|default:"Função não informada" }}</small></button><span class="quality-contact-status{% if not contact.active %} is-inactive{% endif %}">{{ contact.active|yesno:"Ativo,Inativo" }}</span>{% if contact.is_demo %}<span class="quality-demo-badge">Demonstração local</span>{% endif %}</header>
+          <p class="quality-contact-card__context">{{ contact.company_display }} · {{ contact.contact_type_label }}</p>
+          <p>{{ contact.client|default:"Todos os clientes" }} · {{ contact.project_display }}{% if contact.region %} · {{ contact.region }}{% endif %}</p>
+          <div class="quality-contact-card__details">{% if contact.email %}<a href="mailto:{{ contact.email }}">{{ contact.email }}</a>{% endif %}{% if contact.phone %}<a href="tel:{{ contact.phone }}">{{ contact.phone }}</a>{% endif %}{% if contact.teams %}<span>Teams · {{ contact.teams }}</span>{% endif %}<strong>{{ contact.escalation_label }}</strong></div>
+          {% if can_manage_contacts %}<footer><button type="button" data-quality-contact-edit data-contact-id="{{ contact.pk }}" data-name="{{ contact.name }}" data-company="{{ contact.company_display }}" data-region="{{ contact.region }}" data-client="{{ contact.client }}" data-project="{{ contact.project_display }}" data-contact-type="{{ contact.contact_type }}" data-role="{{ contact.role }}" data-email="{{ contact.email }}" data-phone="{{ contact.phone }}" data-teams="{{ contact.teams }}" data-notes="{{ contact.notes }}" data-level="{{ contact.escalation_level }}" data-active="{{ contact.active|yesno:'true,false' }}">Editar</button><form method="post" action="{% url 'qualidade:contato_status' contact_id=contact.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="active" value="{% if contact.active %}false{% else %}true{% endif %}"><button type="submit">{% if contact.active %}Desativar{% else %}Reativar{% endif %}</button></form></footer>{% endif %}
+        </article>
+      {% endfor %}
+    </section>
+    {% if page_obj.paginator.num_pages > 1 %}<nav class="quality-pagination" aria-label="Paginação de contatos"><span>{{ page_obj.start_index }}–{{ page_obj.end_index }} de {{ page_obj.paginator.count }}</span><div>{% if page_obj.has_previous %}<a href="?{{ page_query }}&amp;page={{ page_obj.previous_page_number }}">Anterior</a>{% endif %}<strong>Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</strong>{% if page_obj.has_next %}<a href="?{{ page_query }}&amp;page={{ page_obj.next_page_number }}">Próxima</a>{% endif %}</div></nav>{% endif %}
+  {% else %}
+    <div class="quality-list-empty"><strong>Nenhum contato encontrado.</strong><p>Contatos associados ao seu escopo serão exibidos aqui. Registros inativos permanecem disponíveis para consulta.</p>{% if can_manage_contacts %}<button type="button" class="quality-action-button" data-quality-contact-new>+ Novo contato</button>{% endif %}</div>
+  {% endif %}
+</main>
+
+<dialog class="quality-dialog quality-contact-detail-drawer" id="quality-contact-detail" aria-labelledby="quality-contact-detail-title">
+  <section class="quality-contact-detail-content"><header class="quality-dialog__header"><div><p class="quality-eyebrow">CONTATO OPERACIONAL</p><h2 id="quality-contact-detail-title" data-contact-detail-field="name">Contato</h2><p data-contact-detail-field="role">Cargo não informado</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+    <dl class="quality-contact-detail-facts">
+      <div><dt>Empresa</dt><dd data-contact-detail-field="company"></dd></div><div><dt>Região</dt><dd data-contact-detail-field="region"></dd></div>
+      <div><dt>Cliente</dt><dd data-contact-detail-field="client"></dd></div><div><dt>Projeto</dt><dd data-contact-detail-field="project"></dd></div>
+      <div><dt>Tipo</dt><dd data-contact-detail-field="contactType"></dd></div><div><dt>Escalonamento</dt><dd data-contact-detail-field="level"></dd></div>
+      <div><dt>E-mail</dt><dd data-contact-detail-field="email"></dd></div><div><dt>Telefone</dt><dd data-contact-detail-field="phone"></dd></div>
+      <div><dt>Teams</dt><dd data-contact-detail-field="teams"></dd></div><div><dt>Status</dt><dd data-contact-detail-field="active"></dd></div>
+      <div class="quality-contact-detail-facts__wide"><dt>Observações</dt><dd data-contact-detail-field="notes"></dd></div>
+    </dl>
+    {% if can_manage_contacts %}<footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Fechar</button><button type="button" class="quality-dialog__submit" data-quality-contact-detail-edit>Editar contato</button></footer>{% endif %}
+  </section>
+</dialog>
+
+{% if can_manage_contacts %}
+<dialog class="quality-dialog quality-contact-dialog" id="quality-contact-dialog" aria-labelledby="quality-contact-dialog-title">
+  <form method="post" action="{% url 'qualidade:contato_salvar' %}" class="quality-dialog__form" data-quality-contact-form>{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="contact_id" value="">
+    <header class="quality-dialog__header"><div><p class="quality-eyebrow">DIRETÓRIO DE QUALIDADE</p><h2 id="quality-contact-dialog-title">Novo contato</h2><p>Use os dados operacionais necessários para o escalonamento.</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+    <div class="quality-dialog__body quality-contact-form-grid">
+      <label class="quality-dialog__field"><span>{{ contact_form.name.label }}</span>{{ contact_form.name }}</label><label class="quality-dialog__field"><span>{{ contact_form.role.label }}</span>{{ contact_form.role }}</label>
+      <label class="quality-dialog__field"><span>{{ contact_form.company.label }}</span>{{ contact_form.company }}</label><label class="quality-dialog__field"><span>{{ contact_form.region.label }}</span>{{ contact_form.region }}</label>
+      <label class="quality-dialog__field"><span>{{ contact_form.client.label }}</span>{{ contact_form.client }}</label><label class="quality-dialog__field"><span>{{ contact_form.project.label }}</span>{{ contact_form.project }}</label>
+      <label class="quality-dialog__field"><span>{{ contact_form.contact_type.label }}</span>{{ contact_form.contact_type }}</label><label class="quality-dialog__field"><span>{{ contact_form.escalation_level.label }}</span>{{ contact_form.escalation_level }}</label>
+      <label class="quality-dialog__field"><span>{{ contact_form.email.label }}</span>{{ contact_form.email }}</label><label class="quality-dialog__field"><span>{{ contact_form.phone.label }}</span>{{ contact_form.phone }}</label>
+      <label class="quality-dialog__field quality-dialog__field--wide"><span>{{ contact_form.teams.label }}</span>{{ contact_form.teams }}</label><label class="quality-dialog__field quality-dialog__field--wide"><span>{{ contact_form.notes.label }}</span>{{ contact_form.notes }}</label>
+      <label class="quality-dialog__field quality-dialog__field--wide"><span class="quality-checkbox-row">{{ contact_form.active }} Contato ativo</span></label>
+    </div>
+    <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Salvar contato</button></footer>
+  </form>
+</dialog>
+{% endif %}
+{% endblock %}

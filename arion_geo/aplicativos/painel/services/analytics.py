@@ -1,5 +1,6 @@
 """Analytics over the local CMDB and OTRS mirrors only."""
 import calendar
+from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone as datetime_timezone
 import unicodedata
 from zoneinfo import ZoneInfo
@@ -7,6 +8,8 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
 from django.db.models import Case, CharField, Count, Value, When
+from django.urls import reverse
+from django.utils import timezone
 
 from aplicativos.integracoes.models import (
     IntegrationRun, IntegrationSyncState, OTRSTicket, OTRSTicketConfigItem,
@@ -18,11 +21,14 @@ from aplicativos.integracoes.services.analytics import (
     PeriodService, TicketQueryService, count_affected_links,
     operational_resolution_expression,
 )
+from aplicativos.integracoes.services.link_business_identity import BusinessIdentityRules
 from aplicativos.integracoes.services.cancellation import (
     ACTIVE_CANCELLATION_STAGES, CANCELLATION_STAGE_LABELS,
     cancellation_queue_filter, cancellation_stage_expression,
 )
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
+from aplicativos.integracoes.services.project_names import canonical_project_name, display_project_name
+from .provider_logos import provider_logo
 
 STATE_NAMES = {
     "AC": "Acre", "AL": "Alagoas", "AM": "Amazonas", "AP": "Amapá", "BA": "Bahia",
@@ -224,8 +230,8 @@ class AnalyticsQueryService:
         "pending_tickets": "Pendentes",
         "scheduled_tickets": "Agendados",
         "resolved_tickets": "Resolvidos no per\u00edodo",
-        "closed_tickets": "Tickets em CLOSED, resolvidos no per\u00edodo",
-        "resolved_closed_tickets": "Resolvidos + CLOSED",
+        "closed_tickets": "Resolvidos no per\u00edodo",
+        "resolved_closed_tickets": "Resolvidos",
         "canceled_tickets": "Cancelados no per\u00edodo",
         "links_affected": "Links afetados no per\u00edodo",
         "recurrences": "Links reincidentes",
@@ -288,7 +294,7 @@ class AnalyticsQueryService:
     CANCELLATION_QUEUE_NAMES = TicketQueryService.CANCELLATION_QUEUE_NAMES
     STAGE_LABELS = CANCELLATION_STAGE_LABELS
     ORIGIN_LABELS = {"SUPPORT": "Suporte", "CANCELLATION": "Cancelamentos"}
-    FILTERS = FILTERS | {"stage", "origin", "project", "age_bucket"}
+    FILTERS = FILTERS | {"stage", "origin", "project", "age_bucket", "responsibility", "responsible", "queue"}
     DIMENSIONS = DIMENSIONS | {"cancellation_stage": "Etapa do cancelamento", "operational_origin": "Origem", "project": "Projeto / cliente"}
     LINK_FILTERS = LINK_FILTERS | {"project": "config_items__cmdb_link__business_project"}
     LINK_GROUPS = LINK_GROUPS | {"project": "config_items__cmdb_link__business_project"}
@@ -298,6 +304,8 @@ class AnalyticsQueryService:
 
         query = self.normalize_query(payload)
         metric, group, scope = query["metric"], query["group_by"], query["scope"]
+        include_cancelled = query["include_cancelled"]
+        include_improcedente = query["include_improcedente"]
         start, end, filters = query["start"], query["end"], query["filters"]
         start_at, end_exclusive = _date_boundaries(start, end)
         grain, buckets = _time_buckets(start, end)
@@ -310,26 +318,36 @@ class AnalyticsQueryService:
         ).order_by()
         scoped_tickets = self._scope_tickets(scoped_tickets, scope)
         operational_rows = self._apply_filters(scoped_tickets, allowed_links, filters)
+        # The service splits manager-visible flow from the current operational
+        # stock while keeping both on this same scoped and filtered queryset.
+        stock_rows = operational_rows.exclude(responsibility_normalized="IMPROCEDENTE")
+
         metric_universe = self._metric_universe(scoped_tickets, metric)
-        if scope != "support" and metric == "tickets":
-            metric_universe = scoped_tickets.filter(
-                Q(business_status__in=(*self.OPERATIONAL_VALID_STATES, "CANCELED"))
-                | Q(_operational_stage="UNKNOWN"),
-            )
+        if metric == "tickets" or (include_cancelled and metric in {"links_affected", "recurrences"}):
+            included_states = self.OPERATIONAL_VALID_STATES + (("CANCELED",) if include_cancelled else ())
+            valid_scope = Q(business_status__in=included_states)
+            if scope != "support":
+                valid_scope |= Q(_operational_stage="UNKNOWN")
+            metric_universe = scoped_tickets.filter(valid_scope)
         elif scope != "support" and metric == "backlog":
             metric_universe = scoped_tickets.filter(is_present_in_queue=True).filter(
                 Q(business_status__in=BUSINESS_OPEN_STATUSES)
                 | Q(_operational_stage="UNKNOWN"),
             )
+        if not include_improcedente or metric == "backlog":
+            metric_universe = metric_universe.exclude(responsibility_normalized="IMPROCEDENTE")
         if metric in {"resolved_tickets", "closed_tickets", "resolved_closed_tickets"}:
             metric_universe = metric_universe.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression(),
             })
         options = self._options(metric_universe, allowed_links)
         filtered = self._apply_filters(metric_universe, allowed_links, filters)
-        history_meta = self._backlog_history_meta(scoped_tickets)
+        history_meta = self._backlog_history_meta(stock_rows)
         operational = self._operational_summary(
             operational_rows, scope, start, end, metric, history_meta,
+            stock_rows=stock_rows,
+            include_cancelled=include_cancelled,
+            include_improcedente=include_improcedente,
         )
         date_field = self._metric_date_field(metric)
         if metric in self.SNAPSHOT_METRICS:
@@ -415,7 +433,10 @@ class AnalyticsQueryService:
             **ticket_data,
             "period_status_counts": period_status_counts,
             "source_sync": self._source_sync_status(),
-            "metric_semantics": self._metric_semantics(metric, scope=scope),
+            "metric_semantics": self._metric_semantics(
+                metric, scope=scope, include_cancelled=include_cancelled,
+                include_improcedente=include_improcedente,
+            ),
             "period_date_label": ("snapshot atual" if metric == "backlog"
                                   else "data de resolu\u00e7\u00e3o" if metric in {"resolved_tickets", "closed_tickets", "resolved_closed_tickets"}
                                   else "data de cancelamento" if metric == "canceled_tickets"
@@ -423,6 +444,8 @@ class AnalyticsQueryService:
             "provider_count": len(options["provider"]), "options": options,
             "normalized_query": {"scope": scope, "metric": metric, "start": start.isoformat(), "end": end.isoformat(),
                                  "group_by": group, "filters": filters,
+                                 "include_cancelled": include_cancelled,
+                                 "include_improcedente": include_improcedente,
                                  "selected_month": temporal["selected_month"] if temporal else None},
             "meta": {"demo": False, "period_semantics": date_field,
                      "backlog_is_current_snapshot": metric in self.SNAPSHOT_METRICS,
@@ -506,14 +529,18 @@ class AnalyticsQueryService:
         return result
 
     @classmethod
-    def _operational_summary(cls, rows, scope, start, end, metric, history_meta):
+    def _operational_summary(cls, rows, scope, start, end, metric, history_meta, *,
+                             stock_rows=None, include_cancelled=False, include_improcedente=False):
         from django.db.models import Avg, Case, CharField, Count, DateTimeField, DurationField, ExpressionWrapper, F, Q, Value, When
         from django.utils import timezone
 
         active_filter = Q(business_status__in=BUSINESS_OPEN_STATUSES)
         if scope != "support":
             active_filter |= Q(_operational_stage="UNKNOWN")
-        active = rows.filter(active_filter)
+        stock_rows = stock_rows if stock_rows is not None else rows.exclude(
+            responsibility_normalized="IMPROCEDENTE",
+        )
+        active = stock_rows.filter(active_filter)
         status_rows = list(active.values("_operational_origin", "business_status").annotate(
             total=Count("pk", distinct=True),
         ))
@@ -539,14 +566,15 @@ class AnalyticsQueryService:
             ledger_filter |= Q(_operational_stage="UNKNOWN")
         ledger_rows = rows.filter(ledger_filter)
         closing_date = _operational_closure_expression()
-        ledger = ledger_rows.annotate(_operational_closed_at=closing_date)
+        stock_ledger = stock_rows.filter(ledger_filter).annotate(_operational_closed_at=closing_date)
+        flow_ledger = ledger_rows.annotate(_operational_closed_at=closing_date)
 
         history_start = history_meta.get("history_start")
         history_available = bool(
             history_meta.get("history_complete") and history_start
             and start >= history_start and end <= as_of.date()
         )
-        baseline = ledger.filter(source_created_at__lt=start_at).filter(
+        baseline = stock_ledger.filter(source_created_at__lt=start_at).filter(
             Q(_operational_closed_at__isnull=True)
             | (Q(_operational_closed_at__gte=start_at)
                & Q(_operational_closed_at__gte=F("source_created_at")))
@@ -558,24 +586,54 @@ class AnalyticsQueryService:
                 return {}
             key_case = _period_case(field, buckets)
             return {
-                (item["bucket"], item["_operational_origin"]): item["total"]
+                (item["bucket"], item["_operational_origin"], item["business_status"],
+                 item["responsibility_normalized"]): item["total"]
                 for item in event_rows.annotate(bucket=key_case).exclude(bucket__isnull=True)
-                .values("bucket", "_operational_origin")
+                .values("bucket", "_operational_origin", "business_status", "responsibility_normalized")
                 .annotate(total=Count("pk", distinct=True))
             }
 
-        entries = ledger.filter(source_created_at__gte=start_at, source_created_at__lt=observed_end)
-        entry_values = aggregate_event(entries, "source_created_at")
-        closed = ledger.filter(business_status__in=("RESOLVED", "CLOSED", "CANCELED"))
-        closed = closed.filter(_operational_closed_at__gte=start_at, _operational_closed_at__lt=observed_end)
-        closed = closed.filter(_operational_closed_at__gte=F("source_created_at"))
-        closed_values = aggregate_event(closed, "_operational_closed_at")
+        entries = flow_ledger.filter(source_created_at__gte=start_at, source_created_at__lt=observed_end)
+        entry_groups = aggregate_event(entries, "source_created_at")
+        terminal_rows = flow_ledger.filter(business_status__in=("RESOLVED", "CLOSED", "CANCELED"))
+        terminal_rows = terminal_rows.filter(_operational_closed_at__gte=start_at, _operational_closed_at__lt=observed_end)
+        terminal_rows = terminal_rows.filter(_operational_closed_at__gte=F("source_created_at"))
+        terminal_groups = aggregate_event(terminal_rows, "_operational_closed_at")
 
+        def collect_event(groups, states, *, allow_improper):
+            totals = {}
+            for (bucket, origin, status, responsibility), count in groups.items():
+                if states is not None and status not in states:
+                    continue
+                if responsibility == "IMPROCEDENTE" and not allow_improper:
+                    continue
+                key = (bucket, origin)
+                totals[key] = totals.get(key, 0) + count
+            return totals
+
+        entry_states = set(valid_statuses)
+        if scope != "support":
+            entry_states.add("UNKNOWN")
+        if not include_cancelled and metric != "canceled_tickets":
+            entry_states.discard("CANCELED")
+        flow_improper = include_improcedente and metric != "backlog"
+        entry_values = collect_event(entry_groups, entry_states, allow_improper=flow_improper)
+        closed_values = collect_event(terminal_groups, {"RESOLVED", "CLOSED"}, allow_improper=flow_improper)
+        canceled_values = collect_event(
+            terminal_groups, {"CANCELED"} if include_cancelled or metric == "canceled_tickets" else set(),
+            allow_improper=flow_improper,
+        )
+        stock_entry_values = collect_event(entry_groups, None, allow_improper=False)
+        stock_closure_values = collect_event(terminal_groups, None, allow_improper=False)
         entries_total = sum(entry_values.values())
         closed_total = sum(closed_values.values())
-        average_duration = closed.filter(
-            _operational_closed_at__gte=F("source_created_at"),
-        ).aggregate(
+        canceled_total = sum(canceled_values.values())
+        resolved = flow_ledger.filter(business_status__in=("RESOLVED", "CLOSED"))
+        resolved = resolved.filter(_operational_closed_at__gte=start_at, _operational_closed_at__lt=observed_end)
+        resolved = resolved.filter(_operational_closed_at__gte=F("source_created_at"))
+        if not flow_improper:
+            resolved = resolved.exclude(responsibility_normalized="IMPROCEDENTE")
+        average_duration = resolved.aggregate(
             average=Avg(ExpressionWrapper(
                 F("_operational_closed_at") - F("source_created_at"),
                 output_field=DurationField(),
@@ -590,17 +648,23 @@ class AnalyticsQueryService:
             entry_cancel = entry_values.get((key, "CANCELLATION"), 0)
             closed_support = closed_values.get((key, "SUPPORT"), 0)
             closed_cancel = closed_values.get((key, "CANCELLATION"), 0)
+            canceled_support = canceled_values.get((key, "SUPPORT"), 0)
+            canceled_cancel = canceled_values.get((key, "CANCELLATION"), 0)
             entry_count = entry_support + entry_cancel
             closed_count = closed_support + closed_cancel
+            canceled_count = canceled_support + canceled_cancel
             backlog_start = running_backlog
-            running_backlog += entry_count - closed_count
+            stock_entry_count = stock_entry_values.get((key, "SUPPORT"), 0) + stock_entry_values.get((key, "CANCELLATION"), 0)
+            stock_closure_count = stock_closure_values.get((key, "SUPPORT"), 0) + stock_closure_values.get((key, "CANCELLATION"), 0)
+            running_backlog += stock_entry_count - stock_closure_count
             point_has_observed_data = bucket_start < observed_end
             series.append({
                 "key": key, "label": label,
-                "entries": entry_count, "closed": closed_count,
-                "balance": entry_count - closed_count,
+                "entries": entry_count, "closed": closed_count, "canceled": canceled_count,
+                "balance": entry_count - closed_count - canceled_count,
                 "support_entries": entry_support, "support_closed": closed_support,
                 "cancellation_entries": entry_cancel, "cancellation_closed": closed_cancel,
+                "support_canceled": canceled_support, "cancellation_canceled": canceled_cancel,
                 "backlog_start": backlog_start if history_available and point_has_observed_data else None,
                 "backlog": running_backlog if history_available and point_has_observed_data else None,
             })
@@ -633,7 +697,8 @@ class AnalyticsQueryService:
         open_count = sum(item.get("OPEN", 0) for item in by_origin_status.values())
         pending_count = sum(item.get("PENDING", 0) + item.get("SCHEDULED", 0) for item in by_origin_status.values())
         older_than_day = sum(item["total"] for item in aging[3:])
-        balance = entries_total - closed_total
+        balance = entries_total - closed_total - canceled_total
+        stock_balance = sum(stock_entry_values.values()) - sum(stock_closure_values.values())
         backlog_initial = baseline_count if history_available else None
         backlog_final = running_backlog if history_available else None
         history_message = ""
@@ -657,9 +722,9 @@ class AnalyticsQueryService:
             backlog_final = total_active
 
         variation_percent = (
-            round(balance * 100 / backlog_initial, 1)
+            round(stock_balance * 100 / backlog_initial, 1)
             if backlog_initial not in (None, 0)
-            else (0 if backlog_initial == 0 and balance == 0 else None)
+            else (0 if backlog_initial == 0 and stock_balance == 0 else None)
         )
         final_label = "Backlog atual" if end == as_of.date() else "Backlog final"
 
@@ -676,7 +741,8 @@ class AnalyticsQueryService:
         flow_primary = [
             kpi("Backlog inicial", backlog_initial, "tickets no início do período"),
             kpi("Novos", entries_total, "tickets criados no período"),
-            kpi("Encerrados", closed_total, "tickets que saíram do estoque"),
+            kpi("Resolvidos", closed_total, "tickets em RESOLVED ou CLOSED"),
+            *([kpi("Cancelados", canceled_total, "tickets cancelados no período")] if include_cancelled or metric == "canceled_tickets" else []),
             kpi(final_label, backlog_final, "tickets no fim do período"),
         ]
         if scope == "cancellation":
@@ -691,12 +757,13 @@ class AnalyticsQueryService:
             secondary = [
                 kpi("Backlog inicial", backlog_initial, "tickets no início do período"),
                 kpi("Novos", entries_total, "tickets criados no período"),
-                kpi("Encerrados", closed_total, "tickets que saíram do estoque"),
+                kpi("Resolvidos", closed_total, "tickets em RESOLVED ou CLOSED"),
+                *([kpi("Cancelados", canceled_total, "tickets cancelados no período")] if include_cancelled or metric == "canceled_tickets" else []),
                 kpi(final_label, backlog_final, "tickets no fim do período"),
                 kpi("Variação líquida", balance, "Novos − encerrados", help_text=(
                     "Diferença entre tickets criados e encerrados no período. "
                     "Valor positivo: mais tickets entraram do que saíram. "
-                    "Valor negativo: mais tickets foram encerrados do que criados."
+                    "Valor negativo: mais tickets foram resolvidos ou cancelados do que criados."
                 )),
                 kpi("Variação %", variation_percent, "% do backlog inicial"),
                 kpi("Tempo médio de resolução", average_hours, "horas"),
@@ -708,7 +775,7 @@ class AnalyticsQueryService:
                 kpi("Variação líquida", balance, "Novos − encerrados", help_text=(
                     "Diferença entre tickets criados e encerrados no período. "
                     "Valor positivo: mais tickets entraram do que saíram. "
-                    "Valor negativo: mais tickets foram encerrados do que criados."
+                    "Valor negativo: mais tickets foram resolvidos ou cancelados do que criados."
                 )),
                 kpi("Variação %", variation_percent, "% do backlog inicial"),
                 kpi("Tempo médio de resolução", average_hours, "horas"),
@@ -725,7 +792,7 @@ class AnalyticsQueryService:
         elif scope == "cancellation":
             aging = [{**item, "support": 0, "total": item["cancellation"]} for item in aging]
         period = {
-            "entries": entries_total, "closed": closed_total, "balance": balance,
+            "entries": entries_total, "closed": closed_total, "canceled": canceled_total, "balance": balance,
             "net": balance, "variation_percent": variation_percent,
             "average_resolution_hours": average_hours,
             "backlog_initial": backlog_initial, "backlog_final": backlog_final,
@@ -733,6 +800,7 @@ class AnalyticsQueryService:
         }
         return {
             "primary_kpis": primary, "secondary_kpis": secondary,
+            "include_cancelled": include_cancelled, "include_improcedente": include_improcedente,
             "series": series, "grain": grain, "granularity": grain, "aging": aging,
             "stages": [{"key": key, "label": label, "queue": queue,
                         "value": stage_counts[key]}
@@ -772,34 +840,67 @@ class AnalyticsQueryService:
 
     @classmethod
     def _provider_quality(cls, rows, links):
-        from django.db.models import Count, Exists, OuterRef
-        from aplicativos.integracoes.models import OTRSTicketConfigItem
+        from django.db.models import Count, Q
+        from aplicativos.integracoes.models import OTRSTicket, OTRSTicketConfigItem
 
-        total = rows.values("pk").distinct().count()
-        relations = OTRSTicketConfigItem.objects.filter(
-            ticket_id=OuterRef("pk"), is_present_in_source=True,
+        # Reduce the filtered ticket set to unique IDs before joining its CMDB
+        # relations. The former four correlated EXISTS count queries became
+        # expensive on wider date ranges and could exceed MySQL's read timeout.
+        quality_rows = OTRSTicket.objects.filter(
+            pk__in=rows.order_by().values("pk"),
+        ).order_by().values("pk").annotate(
+            _relation_count=Count(
+                "config_items__pk",
+                filter=Q(config_items__is_present_in_source=True),
+                distinct=True,
+            ),
+            _link_count=Count(
+                "config_items__pk",
+                filter=Q(config_items__is_present_in_source=True, config_items__cmdb_link__isnull=False),
+                distinct=True,
+            ),
+            _valid_link_count=Count(
+                "config_items__pk",
+                filter=Q(
+                    config_items__is_present_in_source=True,
+                    config_items__cmdb_link__is_present_in_source=True,
+                    config_items__cmdb_link__in=links,
+                ),
+                distinct=True,
+            ),
+            _provider_count=Count(
+                "config_items__pk",
+                filter=(
+                    Q(
+                        config_items__is_present_in_source=True,
+                        config_items__cmdb_link__is_present_in_source=True,
+                        config_items__cmdb_link__in=links,
+                        config_items__cmdb_link__operator__isnull=False,
+                    ) & ~Q(config_items__cmdb_link__operator__name="")
+                ),
+                distinct=True,
+            ),
         )
-        valid_link = relations.filter(cmdb_link__is_present_in_source=True, cmdb_link__in=links)
-        valid_provider = valid_link.filter(cmdb_link__operator__isnull=False).exclude(cmdb_link__operator__name="")
-        classified_ids = OTRSTicketConfigItem.objects.filter(
-            ticket_id__in=rows.values("pk"), is_present_in_source=True,
-            cmdb_link__is_present_in_source=True, cmdb_link__in=links,
-        ).exclude(cmdb_link__operator__isnull=True).exclude(cmdb_link__operator__name="").values("ticket_id")
-        identified = rows.filter(pk__in=classified_ids).values("pk").distinct().count()
-        unclassified = max(total - identified, 0)
-        quality_rows = rows.annotate(
-            _has_relation=Exists(relations),
-            _has_link=Exists(relations.filter(cmdb_link__isnull=False)),
-            _has_valid_link=Exists(valid_link),
-            _has_provider=Exists(valid_provider),
-        )
-        unresolved = quality_rows.filter(_has_provider=False)
+        total = identified = 0
         causes = {
-            "no_config_item": unresolved.filter(_has_relation=False).values("pk").distinct().count(),
-            "missing_mirror": unresolved.filter(_has_relation=True, _has_link=False).values("pk").distinct().count(),
-            "invalid_link": unresolved.filter(_has_link=True, _has_valid_link=False).values("pk").distinct().count(),
-            "link_without_provider": unresolved.filter(_has_valid_link=True).values("pk").distinct().count(),
+            "no_config_item": 0,
+            "missing_mirror": 0,
+            "invalid_link": 0,
+            "link_without_provider": 0,
         }
+        for item in quality_rows.iterator(chunk_size=1000):
+            total += 1
+            if item["_provider_count"]:
+                identified += 1
+            elif not item["_relation_count"]:
+                causes["no_config_item"] += 1
+            elif not item["_link_count"]:
+                causes["missing_mirror"] += 1
+            elif not item["_valid_link_count"]:
+                causes["invalid_link"] += 1
+            else:
+                causes["link_without_provider"] += 1
+        unclassified = max(total - identified, 0)
         provider_groups = OTRSTicketConfigItem.objects.filter(
             ticket_id__in=rows.values("pk"), is_present_in_source=True,
             cmdb_link__is_present_in_source=True, cmdb_link__in=links,
@@ -1094,8 +1195,10 @@ class AnalyticsQueryService:
                 raw = row.get("dimension", "")
                 label = cls._dimension_label(dimension, raw)
                 value = row["value"]
+                logo = provider_logo(raw) if dimension == "provider" else None
                 entries.append({"key": str(raw), "label": label, "value": value,
                                 "share": row.get("share", round(value * 100 / denominator, 1) if denominator else 0),
+                                **({"logo_url": logo["url"], "logo_initials": logo["initials"]} if logo else {}),
                                 "previous_value": next((item["value"] for item in previous_grouped if item["label"] == label), None)
                                 if not complementary and dimension == group else None})
             if not entries:
@@ -1119,7 +1222,7 @@ class AnalyticsQueryService:
 
         if rows is not None and links is not None:
             complementary_count = 0
-            for dimension in ("uf", "status", "priority", "source_state", "sla"):
+            for dimension in ("provider", "uf", "status", "termination_reason", "priority", "source_state", "sla"):
                 if dimension == group or filters.get(fixed.get(dimension, "")):
                     continue
                 rows_by_dimension = cls._grouped(rows, metric, dimension, links, ())
@@ -1129,9 +1232,9 @@ class AnalyticsQueryService:
                 if spec:
                     specs.append(spec)
                     complementary_count += 1
-                if complementary_count == 2:
+                if complementary_count == 3:
                     break
-        return specs[:4]
+        return specs[:5]
 
     @staticmethod
     def _chart_unit(metric):
@@ -1319,6 +1422,8 @@ class AnalyticsQueryService:
                 continue
             if canonical in {"uf", "status", "stage", "origin", "age_bucket"}:
                 normalized = normalized.upper()
+            elif canonical == "responsibility":
+                normalized = normalized.upper()
             elif canonical == "termination_reason":
                 normalized = ClosingReasonCanonicalizer.key(normalized)
             filters[canonical] = normalized
@@ -1327,17 +1432,41 @@ class AnalyticsQueryService:
         if filters.get("origin") and filters["origin"] not in cls.ORIGIN_LABELS:
             raise ValueError("Origem operacional inválida.")
         if filters.get("age_bucket") and (
-            filters["age_bucket"] != "OVER_24H" or scope != "cancellation" or metric != "backlog"
+            filters["age_bucket"] != "OVER_24H" or scope not in {"support", "cancellation", "general"} or metric != "backlog"
         ):
-            raise ValueError("O filtro de idade acima de 24h só está disponível no backlog de Cancelamentos.")
+            raise ValueError("O filtro de idade acima de 24h s\u00f3 est\u00e1 dispon\u00edvel no backlog atual.")
+        if filters.get("responsibility") not in (None, "PROCEDENTE", "IMPROCEDENTE"):
+            raise ValueError("Proced\u00eancia inv\u00e1lida.")
+        if filters.get("responsible") not in (None, "assigned", "unassigned"):
+            raise ValueError("Filtro de respons\u00e1vel inv\u00e1lido.")
+        if filters.get("queue") and len(filters["queue"]) > 250:
+            raise ValueError("Fila inv\u00e1lida.")
         compare = payload.get("compare_to") or None
         if compare:
             _month_date(compare)
         selected_month = payload.get("selected_month") or None
         if selected_month:
             selected_month = _month_date(selected_month).strftime("%Y-%m")
+        def option_enabled(key):
+            value = payload.get(key, True)
+            if isinstance(value, bool):
+                return value
+            if value in (1, "1", "true", "True", "on", "yes"):
+                return True
+            if value in (0, "0", "false", "False", "off", "no", None, ""):
+                return False
+            raise ValueError("Op\u00e7\u00e3o gerencial inv\u00e1lida.")
+
+        include_cancelled = option_enabled("include_cancelled")
+        include_improcedente = option_enabled("include_improcedente")
+        if metric == "backlog":
+            include_improcedente = False
+        elif filters.get("responsibility") == "IMPROCEDENTE":
+            include_improcedente = True
         return {"scope": scope, "metric": metric, "group_by": group, "start": start, "end": end,
-                "filters": filters, "compare_to": compare, "selected_month": selected_month}
+                "filters": filters, "compare_to": compare, "selected_month": selected_month,
+                "include_cancelled": include_cancelled,
+                "include_improcedente": include_improcedente}
 
     @staticmethod
     def _month_end(month_start):
@@ -1346,25 +1475,34 @@ class AnalyticsQueryService:
         return next_month - timedelta(days=1)
 
     @classmethod
-    def _metric_semantics(cls, metric, *, scope="support"):
+    def _metric_semantics(cls, metric, *, scope="support", include_cancelled=True,
+                          include_improcedente=True):
+        note = ""
+        if not include_cancelled or (not include_improcedente and metric != "backlog"):
+            excluded = []
+            if not include_cancelled:
+                excluded.append("cancelados")
+            if not include_improcedente and metric != "backlog":
+                excluded.append("improcedentes")
+            note = " Registros exclu\u00eddos: " + "; ".join(excluded) + "."
         if metric == "tickets":
             if scope != "support":
-                return "Data de cria\u00e7\u00e3o; inclui estados operacionais v\u00e1lidos e CANCELED. Tickets ativos sem etapa reconhecida permanecem no recorte."
-            return "Data de cria\u00e7\u00e3o; inclui apenas estados operacionais v\u00e1lidos. CANCELED e UNKNOWN ficam de fora."
+                return "Data de cria\u00e7\u00e3o; inclui estados operacionais v\u00e1lidos e cancelados conforme a op\u00e7\u00e3o. Tickets ativos sem etapa reconhecida permanecem no recorte." + note
+            return "Data de cria\u00e7\u00e3o; inclui estados operacionais v\u00e1lidos, cancelados e improcedentes por padr\u00e3o, conforme a sem\u00e2ntica da m\u00e9trica." + note
         if metric in {"open_tickets", "pending_tickets", "scheduled_tickets"}:
             status = cls.METRIC_STATUS[metric]
-            return f"Data de cria\u00e7\u00e3o no per\u00edodo; tickets atualmente no estado {status}. CANCELED e UNKNOWN ficam de fora."
+            return f"Data de cria\u00e7\u00e3o no per\u00edodo; tickets atualmente no estado {status}. CANCELED e UNKNOWN ficam de fora." + note
         if metric == "resolved_closed_tickets":
-            return "Data de resolu\u00e7\u00e3o operacional no per\u00edodo (resolved_at; fallback terminal_state_at); estados RESOLVED e CLOSED, sem CANCELED."
+            return "Data de resolu\u00e7\u00e3o operacional no per\u00edodo (resolved_at; fallback terminal_state_at); estados RESOLVED e CLOSED, sem CANCELED." + note
         if metric in {"resolved_tickets", "closed_tickets"}:
-            return "Data de resolu\u00e7\u00e3o operacional no per\u00edodo (resolved_at; fallback terminal_state_at); estado OTRS atual correspondente, sem CANCELED."
+            return "Data de resolu\u00e7\u00e3o operacional no per\u00edodo (resolved_at; fallback terminal_state_at); estado OTRS atual correspondente, sem CANCELED." + note
         if metric == "canceled_tickets":
-            return "Data de cancelamento no per\u00edodo; estado CANCELED, em m\u00e9trica espec\u00edfica."
+            return "Data de cancelamento no per\u00edodo; estado CANCELED, em m\u00e9trica espec\u00edfica." + note
         if metric == "backlog" and scope != "support":
-            return "Snapshot atual; inclui OPEN, PENDING, SCHEDULED e tickets ativos sem etapa reconhecida, identificados separadamente."
+            return "Snapshot atual; inclui OPEN, PENDING, SCHEDULED e tickets ativos sem etapa reconhecida, identificados separadamente." + note
         if metric in cls.SNAPSHOT_METRICS:
-            return "Snapshot atual da fila; datas n\u00e3o restringem o resultado."
-        return "Data de cria\u00e7\u00e3o no per\u00edodo."
+            return "Snapshot atual da fila; datas n\u00e3o restringem o resultado." + note
+        return "Data de cria\u00e7\u00e3o no per\u00edodo." + note
 
     @staticmethod
     def _comparison(filtered, query, links, current_value):
@@ -1413,10 +1551,15 @@ class AnalyticsQueryService:
         query = {}
         for key, field in (("status", "business_status"), ("source_state", "external_state_name"),
                            ("service", "service_name"), ("sla", "sla_name"),
-                           ("stage", "_operational_stage"), ("origin", "_operational_origin")):
+                           ("stage", "_operational_stage"), ("origin", "_operational_origin"),
+                           ("queue", "queue_name"), ("responsibility", "responsibility_normalized")):
             if filters.get(key):
                 query[field] = filters[key]
         filtered = tickets.filter(**query) if query else tickets
+        if filters.get("responsible") == "unassigned":
+            filtered = filtered.filter(Q(responsible_user_id__isnull=True) | Q(responsible_user_id=0))
+        elif filters.get("responsible") == "assigned":
+            filtered = filtered.filter(responsible_user_id__gt=0)
         if filters.get("age_bucket") == "OVER_24H":
             filtered = filtered.filter(
                 business_status__in=BUSINESS_OPEN_STATUSES,
@@ -1661,6 +1804,14 @@ class AnalyticsQueryService:
         result["stage"] = [{"value": key, "label": label} for key, label in cls.STAGE_LABELS.items()]
         result["origin"] = [{"value": key, "label": label} for key, label in cls.ORIGIN_LABELS.items()]
         result["age_bucket"] = [{"value": "OVER_24H", "label": "Mais de 24h"}]
+        result["responsibility"] = [
+            {"value": "IMPROCEDENTE", "label": "Improcedente"},
+            {"value": "PROCEDENTE", "label": "Procedente"},
+        ]
+        result["responsible"] = [
+            {"value": "assigned", "label": "Atribu\u00eddo"},
+            {"value": "unassigned", "label": "Sem respons\u00e1vel"},
+        ]
         result["status"] = [
             {"value": value, "label": cls.STATUS_LABELS[value]}
             for value in tickets.values_list("business_status", flat=True).distinct().order_by("business_status")
@@ -1670,6 +1821,7 @@ class AnalyticsQueryService:
             {"value": value, "label": cls.SOURCE_STATE_LABELS.get(value.casefold(), value)}
             for value in tickets.exclude(external_state_name="").values_list("external_state_name", flat=True).distinct().order_by("external_state_name")
         ]
+        result["queue"] = list(tickets.exclude(queue_name="").values_list("queue_name", flat=True).distinct().order_by("queue_name"))
         result["service"] = list(tickets.exclude(service_name="").values_list("service_name", flat=True).distinct().order_by("service_name"))
         result["priority"] = list(tickets.exclude(priority_name="").values_list("priority_name", flat=True).distinct().order_by("priority_name"))
         result["sla"] = list(tickets.exclude(sla_name="").values_list("sla_name", flat=True).distinct().order_by("sla_name"))
@@ -1694,7 +1846,188 @@ class DashboardAnalyticsService:
     """Build the executive Dashboard from scoped local CMDB and NOC mirrors."""
 
     @staticmethod
+    def _percent_label(value, total):
+        percent = (value * 100 / total) if total else 0
+        return f"{percent:.1f}".replace(".", ",") + "%"
+
+    @staticmethod
+    def _age_label(seconds):
+        total_hours = max(int(seconds // 3600), 0)
+        days, hours = divmod(total_hours, 24)
+        if days:
+            return f"{days}d {hours}h" if hours else f"{days}d"
+        if total_hours:
+            return f"{total_hours}h"
+        return "<1h"
+
+    @classmethod
+    def _aging_snapshot(cls, open_tickets, now):
+        labels = ("Até 24h", "24–48h", "48–72h", "Acima de 72h")
+        counts = [0, 0, 0, 0]
+        open_count = missing_dates = 0
+        oldest_seconds = None
+        hours_24 = 24 * 60 * 60
+        for created_at in open_tickets.order_by().values_list("source_created_at", flat=True).iterator(chunk_size=1000):
+            open_count += 1
+            if created_at is None:
+                missing_dates += 1
+                continue
+            age_seconds = max((now - created_at).total_seconds(), 0)
+            oldest_seconds = age_seconds if oldest_seconds is None else max(oldest_seconds, age_seconds)
+            if age_seconds <= hours_24:
+                counts[0] += 1
+            elif age_seconds <= hours_24 * 2:
+                counts[1] += 1
+            elif age_seconds <= hours_24 * 3:
+                counts[2] += 1
+            else:
+                counts[3] += 1
+        over_72 = counts[3]
+        return {
+            "open_count": open_count,
+            "over_72": over_72,
+            "over_72_percent": over_72 * 100 / open_count if open_count else 0,
+            "over_72_percent_label": cls._percent_label(over_72, open_count),
+            "oldest_label": cls._age_label(oldest_seconds) if oldest_seconds is not None else "—",
+            "missing_dates": missing_dates,
+            "bands": [
+                {"label": label, "value": count, "tone": tone}
+                for label, count, tone in zip(
+                    labels, counts, ("green", "teal", "orange", "rose"),
+                )
+            ],
+        }
+
+    @classmethod
+    def _client_distribution(cls, links, total_links):
+        counts = {
+            "claro": 0, "vivo": 0, "algar": 0, "other": 0,
+            "unidentified": 0,
+        }
+        for row in links.order_by().values("contracting_client").annotate(value=Count("pk")):
+            raw_client = row["contracting_client"] or ""
+            client = BusinessIdentityRules.client_for_token(raw_client) or raw_client.strip()
+            key = client.casefold() if client else "unidentified"
+            bucket = key if key in {"claro", "vivo", "algar"} else "other" if client else "unidentified"
+            counts[bucket] += row["value"]
+
+        labels = {
+            "claro": "Claro", "vivo": "Vivo", "algar": "Algar",
+            "other": "Outras", "unidentified": "Cliente não identificado",
+        }
+        return [
+            {
+                "key": key,
+                "label": labels[key],
+                "value": value,
+                "share_label": cls._percent_label(value, total_links),
+                "share": value * 100 / total_links if total_links else 0,
+            }
+            for key, value in counts.items()
+        ]
+
+    @classmethod
+    def _project_rows(cls, period_tickets, links, total_tickets):
+        relations = OTRSTicketConfigItem.objects.filter(
+            ticket_id__in=period_tickets.order_by().values("pk"),
+            is_present_in_source=True,
+            cmdb_link__is_present_in_source=True,
+            cmdb_link__in=links,
+        ).order_by().values_list(
+            "ticket_id", "cmdb_link__business_project", "cmdb_link__contracting_client",
+            "cmdb_link__legacy_project",
+        ).distinct()
+        ticket_projects = defaultdict(set)
+        for ticket_id, project, client, legacy_project in relations.iterator(chunk_size=1000):
+            raw_name = project or legacy_project or client
+            canonical = canonical_project_name(raw_name) if raw_name else ""
+            ticket_projects[ticket_id].add(canonical)
+
+        counts = defaultdict(int)
+        unclassified = max(total_tickets - len(ticket_projects), 0)
+        for project_names in ticket_projects.values():
+            display_names = {
+                display_project_name(name) for name in project_names if name
+            }
+            classified = {
+                name for name in display_names
+                if name.casefold() not in {"não classificado", "nao classificado"}
+            }
+            if not classified:
+                unclassified += 1
+                continue
+            for name in classified:
+                counts[name] += 1
+        if unclassified:
+            counts["Não classificado"] += unclassified
+
+        rows = [
+            {"name": name, "value": value}
+            for name, value in counts.items()
+        ]
+        rows.sort(key=lambda item: (-item["value"], item["name"].casefold()))
+        visible = rows[:5]
+        unclassified_row = next(
+            (row for row in rows if row["name"].casefold() == "não classificado"), None,
+        )
+        if unclassified_row and unclassified_row not in visible:
+            visible.append(unclassified_row)
+        return [
+            {
+                **row,
+                "share_label": cls._percent_label(row["value"], total_tickets),
+                "share": row["value"] * 100 / total_tickets if total_tickets else 0,
+            }
+            for row in visible
+        ]
+
+    @classmethod
+    def _reason_rows(cls, period_tickets, total_tickets, start, end):
+        annotated = ClosingReasonCanonicalizer.annotate_key(
+            period_tickets.order_by(), field="closing_code_raw", output="dashboard_reason_key",
+        )
+        grouped = annotated.values("dashboard_reason_key").annotate(
+            value=Count("pk", distinct=True),
+        ).order_by("dashboard_reason_key")
+        counts = defaultdict(int)
+        keys = {}
+        for row in grouped:
+            key = row["dashboard_reason_key"] or ""
+            label = ClosingReasonCanonicalizer.display(key)
+            counts[label] += row["value"]
+            keys[label] = key
+
+        rows = [{"name": name, "value": value, "key": keys[name]} for name, value in counts.items()]
+        rows.sort(key=lambda item: (-item["value"], item["name"].casefold()))
+        visible = rows[:5]
+        unclassified = next(
+            (row for row in rows if row["name"].casefold() == "não classificado"), None,
+        )
+        if unclassified and unclassified not in visible:
+            visible.append(unclassified)
+
+        cockpit_path = reverse("cockpit")
+        result = []
+        for row in visible:
+            query = {
+                "scope": "support",
+                "metric": "tickets",
+                "group_by": "termination_reason",
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "termination_reason": row["key"],
+            }
+            result.append({
+                **row,
+                "share_label": cls._percent_label(row["value"], total_tickets),
+                "share": row["value"] * 100 / total_tickets if total_tickets else 0,
+                "cockpit_url": f"{cockpit_path}?{urlencode(query)}" if row["key"] else "",
+            })
+        return result
+
+    @staticmethod
     def build(*, user, start, end):
+        now = timezone.now()
         links = LinkQueryService.base(user)
         tickets = TicketQueryService.base(user, links=links)
         start_at, end_at = _date_boundaries(start, end)
@@ -1702,8 +2035,10 @@ class DashboardAnalyticsService:
         period_tickets = tickets.filter(source_created_at__gte=start_at, source_created_at__lt=end_at)
         current_tickets = tickets.filter(is_present_in_queue=True)
         business_open = TicketQueryService.business_open(queryset=current_tickets)
+        aging = DashboardAnalyticsService._aging_snapshot(business_open, now)
 
         total_links = links.count()
+        client_distribution = DashboardAnalyticsService._client_distribution(links, total_links)
         state_rows = list(
             links.filter(state__in=STATE_NAMES)
             .values("state").annotate(value=Count("pk"))
@@ -1722,10 +2057,15 @@ class DashboardAnalyticsService:
             .annotate(value=Count("pk", distinct=True))
             .order_by("-value", "operator__name")[:10]
         )
-        top_providers = [
-            {"name": row["operator__name"], "value": row["value"]}
-            for row in provider_rows
-        ]
+        top_providers = []
+        for row in provider_rows:
+            logo = provider_logo(row["operator__name"])
+            top_providers.append({
+                "name": row["operator__name"],
+                "value": row["value"],
+                "logo_url": logo["url"],
+                "logo_initials": logo["initials"],
+            })
 
         snapshot_status = {row["business_status"]: row["total"] for row in current_tickets.values(
             "business_status"
@@ -1738,6 +2078,8 @@ class DashboardAnalyticsService:
         links_affected = count_affected_links(business_open, links)
 
         calls = period_tickets.count()
+        top_projects = DashboardAnalyticsService._project_rows(period_tickets, links, calls)
+        top_reasons = DashboardAnalyticsService._reason_rows(period_tickets, calls, start, end)
         recurrence_base = OTRSTicketConfigItem.objects.filter(
             is_present_in_source=True,
             ticket__queue_name=TicketQueryService.QUEUE_NAME,
@@ -1778,14 +2120,23 @@ class DashboardAnalyticsService:
                 "repeat": recurring_by_month.get(month_key, 0),
             })
 
+        quality_pulse = None
+        if user.has_perm("qualidade.view_quality"):
+            from aplicativos.qualidade.services.dashboard import get_operational_pulse
+
+            quality_pulse = get_operational_pulse(
+                user, scope_links=links, base_tickets=tickets, now=now,
+            )
+
         return {
             "total_links": total_links,
+            "client_distribution": client_distribution,
             "state_count": len(state_rows),
             "top_states": top_states,
             "top_providers": top_providers,
             "calls": calls,
             "repeat": recurrence_total,
-            "business_open": business_open.count(),
+            "business_open": aging["open_count"],
             "open_count": open_count,
             "pending_count": pending_count,
             "scheduled_count": scheduled_count,
@@ -1795,4 +2146,8 @@ class DashboardAnalyticsService:
             "unknown_count": status_counts[OTRSStateMapping.BusinessStatus.UNKNOWN],
             "links_affected": links_affected,
             "monthly": monthly,
+            "aging": aging,
+            "quality_pulse": quality_pulse,
+            "top_projects": top_projects,
+            "top_reasons": top_reasons,
         }

@@ -36,11 +36,13 @@ def index(request):
         ),
     )
     access = {
+        "can_view_dashboard": request.user.has_perm("configuracoes.view_dashboard"),
         "can_view_chamados": request.user.has_perm("configuracoes.view_operational_tickets"),
         "can_view_base": request.user.has_perm("configuracoes.view_base"),
         "can_view_cockpit": request.user.has_perm("configuracoes.view_cockpit"),
         "can_view_map": request.user.has_perm("configuracoes.view_map"),
         "can_view_rankings": request.user.has_perm("configuracoes.view_rankings"),
+        "can_view_quality": request.user.has_perm("qualidade.view_quality"),
         "can_view_ari": request.user.has_perm("configuracoes.view_ari"),
         "can_view_integrations": request.user.has_perm("configuracoes.view_integrations"),
         "can_manage_users": request.user.has_perm("configuracoes.manage_users"),
@@ -51,7 +53,8 @@ def index(request):
         "can_view_system": request.user.has_perm("configuracoes.view_system_info"),
     }
     access["can_view_operation"] = any(access[key] for key in (
-        "can_view_chamados", "can_view_base", "can_view_cockpit", "can_view_map", "can_view_rankings", "can_view_ari",
+        "can_view_dashboard", "can_view_chamados", "can_view_base", "can_view_cockpit",
+        "can_view_map", "can_view_rankings", "can_view_quality", "can_view_ari",
     ))
     access["can_view_admin_area"] = any(access[key] for key in (
         "can_view_integrations", "can_manage_users", "can_manage_groups", "can_manage_scopes",
@@ -138,7 +141,7 @@ def _pdf_report(generated, generated_by, result, filter_rows):
     from html import escape
     from reportlab import __file__ as reportlab_file
     from reportlab.graphics.charts.barcharts import HorizontalBarChart, VerticalBarChart
-    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics.shapes import Drawing, Line, Rect, String
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT, TA_RIGHT
     from reportlab.lib.pagesizes import A4
@@ -170,6 +173,8 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         return Paragraph(escape(str(value if value is not None else "")), styles[style])
 
     def fmt(value):
+        if value is None:
+            return "N/D"
         if isinstance(value, float):
             return f"{value:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
         if isinstance(value, int):
@@ -208,10 +213,79 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         chart_obj.valueAxis.valueMax = max([1, *chart_obj.data[0]])
         chart_obj.valueAxis.valueStep = max(1, int(chart_obj.valueAxis.valueMax / 5))
         chart_obj.bars[0].fillColor = accent
+        chart_obj.barLabels.visible = len(chart_obj.data[0]) <= 12
+        chart_obj.barLabels.fontName = "ArionVera-Bold"
+        chart_obj.barLabels.fontSize = 6
+        chart_obj.barLabels.fillColor = colors.white
+        chart_obj.barLabelFormat = lambda value: fmt(value) if value else ""
         if horizontal:
             chart_obj.categoryAxis.reverseDirection = True
             chart_obj.barSpacing = 3
+        else:
+            chart_obj.barLabels.dy = 3
         drawing.add(chart_obj)
+        return drawing
+
+    def operational_chart(operational):
+        rows = operational.get("series", [])
+        if not rows:
+            return None
+        drawing = Drawing(content_width, 74 * mm)
+        width, height = content_width, 74 * mm
+        left, right, bottom, top = 30, width - 30, 22, height - 26
+        plot_width, plot_height = right - left, top - bottom
+        definitions = [("entries", "Novos", colors.HexColor("#287c83")),
+                       ("closed", "Resolvidos", colors.HexColor("#b45d68"))]
+        flow_max = max(1, *(int(row.get(key) or 0) for row in rows for key, _label, _color in definitions))
+        backlog_values = [row.get("backlog") for row in rows if row.get("backlog") is not None]
+        backlog_low = min(backlog_values, default=0)
+        backlog_high = max(backlog_values, default=1)
+        backlog_span = max(1, backlog_high - backlog_low)
+        slot = plot_width / len(rows)
+        group_width = min(13, slot * .7)
+        bar_gap = min(2, group_width * .08)
+        bar_width = max(1.2, (group_width - bar_gap * (len(definitions) - 1)) / len(definitions))
+        drawing.add(Line(left, bottom, right, bottom, strokeColor=line, strokeWidth=.5))
+        drawing.add(String(1, bottom - 1, "0", fontName="ArionVera", fontSize=5.5, fillColor=muted))
+        drawing.add(String(1, top - 3, fmt(flow_max), fontName="ArionVera", fontSize=5.5, fillColor=muted))
+        drawing.add(String(right + 2, bottom - 1, fmt(backlog_low), fontName="ArionVera", fontSize=5.5, fillColor=muted))
+        drawing.add(String(right + 2, top - 3, fmt(backlog_high), fontName="ArionVera", fontSize=5.5, fillColor=muted))
+        points = []
+        label_stride = max(1, (len(rows) + 11) // 12)
+        for index, row in enumerate(rows):
+            center = left + slot * (index + .5)
+            group_left = center - group_width / 2
+            for bar_index, (key, _label, color) in enumerate(definitions):
+                value = int(row.get(key) or 0)
+                bar_height = value / flow_max * plot_height
+                x = group_left + bar_index * (bar_width + bar_gap)
+                drawing.add(Rect(x, bottom, bar_width, bar_height, fillColor=color, strokeColor=None))
+                if len(rows) <= 12 and value:
+                    drawing.add(String(x + bar_width / 2, bottom + bar_height + 2, fmt(value),
+                                      textAnchor="middle", fontName="ArionVera-Bold", fontSize=5.4, fillColor=ink))
+            backlog = row.get("backlog")
+            if backlog is not None:
+                y = bottom + (float(backlog) - backlog_low) / backlog_span * plot_height
+                points.append((center, y, index, backlog))
+        for first, second in zip(points, points[1:]):
+            drawing.add(Line(first[0], first[1], second[0], second[1], strokeColor=colors.HexColor("#356aa0"), strokeWidth=1.3))
+        for x, y, index, value in points:
+            drawing.add(Rect(x - 1.4, y - 1.4, 2.8, 2.8, fillColor=colors.HexColor("#356aa0"), strokeColor=None))
+            if index == points[-1][2]:
+                drawing.add(String(x - 2, y + 4, fmt(value), textAnchor="end", fontName="ArionVera-Bold", fontSize=6, fillColor=colors.HexColor("#356aa0")))
+        for index, row in enumerate(rows):
+            if index % label_stride == 0 or index == len(rows) - 1:
+                label = str(row.get("label", ""))[:12]
+                drawing.add(String(left + slot * (index + .5), 7, label, textAnchor="middle",
+                                   fontName="ArionVera", fontSize=5.4, fillColor=muted))
+        legend_y = height - 10
+        legend_x = left
+        for _key, label, color in definitions:
+            drawing.add(Rect(legend_x, legend_y, 6, 6, fillColor=color, strokeColor=None))
+            drawing.add(String(legend_x + 8, legend_y, label, fontName="ArionVera", fontSize=6, fillColor=muted))
+            legend_x += 52 if label == "Resolvidos" else 43
+        drawing.add(Line(legend_x, legend_y + 3, legend_x + 10, legend_y + 3, strokeColor=colors.HexColor("#356aa0"), strokeWidth=1.3))
+        drawing.add(String(legend_x + 13, legend_y, "Backlog", fontName="ArionVera", fontSize=6, fillColor=muted))
         return drawing
 
     def monthly_calendar(spec):
@@ -249,7 +323,7 @@ def _pdf_report(generated, generated_by, result, filter_rows):
                 self.saveState()
                 self.setFont("ArionVera", 7)
                 self.setFillColor(muted)
-                self.drawString(16 * mm, 10 * mm, f"ARION ATACADO GEO | NOC ATACADO | {generated} | {generated_by}")
+                self.drawString(16 * mm, 10 * mm, f"ARION OPS | NOC ATACADO | {generated} | {generated_by}")
                 self.drawRightString(page_width - 16 * mm, 10 * mm, f"P\u00e1gina {self._pageNumber} de {total}")
                 self.restoreState()
                 super().showPage()
@@ -259,7 +333,7 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         canvas_obj.saveState()
         canvas_obj.setFont("ArionVera-Bold", 8)
         canvas_obj.setFillColor(ink)
-        canvas_obj.drawString(doc.leftMargin, page_height - 13 * mm, "ARION ATACADO GEO")
+        canvas_obj.drawString(doc.leftMargin, page_height - 13 * mm, "ARION OPS")
         canvas_obj.setFont("ArionVera", 8)
         canvas_obj.setFillColor(muted)
         canvas_obj.drawRightString(page_width - doc.rightMargin, page_height - 13 * mm, "NOC ATACADO / COCKPIT")
@@ -270,7 +344,7 @@ def _pdf_report(generated, generated_by, result, filter_rows):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm,
                             topMargin=23 * mm, bottomMargin=18 * mm,
-                            title=f"ARION ATACADO GEO - {result['description']['title']}", author=generated_by)
+                            title=f"ARION OPS - {result['description']['title']}", author=generated_by)
     story = [para("RELAT\u00d3RIO ANAL\u00cdTICO DO COCKPIT", "ArionMeta"),
              para(result["description"]["title"], "ArionTitle"),
              para(result["description"]["subtitle"], "ArionMeta"), Spacer(1, 4)]
@@ -287,8 +361,13 @@ def _pdf_report(generated, generated_by, result, filter_rows):
     if result.get("scope") != "support":
         story.append(para(result.get("metric_semantics", "Consulta operacional do escopo selecionado."), "ArionSmall"))
     else:
-        story.append(para("A m\u00e9trica exclui tickets cancelados e estados n\u00e3o classificados.", "ArionSmall")
-                     if result["metric"] != "canceled_tickets" else para("Consulta espec\u00edfica de tickets cancelados.", "ArionSmall"))
+        if result["metric"] == "canceled_tickets":
+            support_semantics = "Consulta espec\u00edfica de tickets cancelados."
+        elif result["normalized_query"]["include_cancelled"]:
+            support_semantics = "Cancelados inclu\u00eddos conforme a op\u00e7\u00e3o gerencial; estados n\u00e3o classificados permanecem fora."
+        else:
+            support_semantics = "A m\u00e9trica exclui tickets cancelados e estados n\u00e3o classificados por padr\u00e3o."
+        story.append(para(support_semantics, "ArionSmall"))
     if result.get("comparison"):
         comparison = result["comparison"]
         story.append(para(f"Per\u00edodo anterior ({comparison['previous_start']} a {comparison['previous_end']}): {fmt(comparison['previous_value'])}; varia\u00e7\u00e3o {fmt(comparison['absolute_change'])} ({fmt(comparison['percentage_change'])}%).", "ArionSmall"))
@@ -301,6 +380,16 @@ def _pdf_report(generated, generated_by, result, filter_rows):
             trend_text = f"{fmt(trend['absolute_change'])} {trend['unit']}" if trend["unit"] else f"{fmt(trend['percentage_change'])}%"
         kpi_rows.append([para(item["label"]), para(fmt(item["value"]), "ArionRight"), para(trend_text, "ArionRight")])
     story.append(table(kpi_rows, [content_width - 65 * mm, 30 * mm, 35 * mm]))
+    secondary_kpis = result.get("operational", {}).get("secondary_kpis", [])
+    if secondary_kpis:
+        story.append(para("Indicadores operacionais complementares", "ArionSection"))
+        secondary_rows = [[para("Indicador"), para("Valor", "ArionRight"), para("Base", "ArionRight")]]
+        secondary_rows.extend([
+            [para(item.get("label", "")), para(fmt(item.get("value")), "ArionRight"),
+             para(item.get("unit", ""), "ArionRight")]
+            for item in secondary_kpis
+        ])
+        story.append(table(secondary_rows, [content_width - 88 * mm, 34 * mm, 54 * mm]))
     quality = result.get("provider_quality", {})
     if quality.get("unresolved"):
         story.append(para(f"Qualidade dos v\u00ednculos CMDB: {fmt(quality['unresolved'])} tickets sem provedor identificado; cobertura de {fmt(quality['coverage_percent'])}%.", "ArionSmall"))
@@ -318,6 +407,38 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         summary = calendar_spec.get("summary", {})
         story.append(para(f"{fmt(summary.get('total', 0))} {calendar_spec.get('unit', 'tickets')} · m\u00e9dia por dia {fmt(summary.get('average_per_day', 0))} · maior dia {summary.get('peak_day') or 'sem ocorr\u00eancias'} ({fmt(summary.get('peak_value', 0))}) · {fmt(summary.get('days_with_occurrence', 0))} dias com ocorr\u00eancia", "ArionSmall"))
         story.append(monthly_calendar(calendar_spec))
+    operational = result.get("operational", {})
+    story.append(para("Evolu\u00e7\u00e3o operacional e backlog", "ArionSection"))
+    flow_chart = operational_chart({
+        **operational,
+        "include_cancelled": operational.get("include_cancelled") or result["metric"] == "canceled_tickets",
+    })
+    if flow_chart:
+        story.append(flow_chart)
+    flow_period = operational.get("period", {})
+    flow_rows = [
+        [para("Backlog inicial"), para(fmt(flow_period.get("backlog_initial")), "ArionRight")],
+        [para("Novos"), para(fmt(flow_period.get("entries", 0)), "ArionRight")],
+        [para("Resolvidos"), para(fmt(flow_period.get("closed", 0)), "ArionRight")],
+    ]
+    if operational.get("include_cancelled") or result["metric"] == "canceled_tickets":
+        flow_rows.append([para("Cancelados"), para(fmt(flow_period.get("canceled", 0)), "ArionRight")])
+    flow_rows.extend([
+        [para("Varia\u00e7\u00e3o l\u00edquida do fluxo"), para(fmt(flow_period.get("balance", 0)), "ArionRight")],
+        [para("Backlog final / snapshot atual"), para(fmt(flow_period.get("backlog_final")), "ArionRight")],
+    ])
+    story.append(table([[para("Fluxo"), para("Valor", "ArionRight")], *flow_rows],
+                       [content_width - 34 * mm, 34 * mm]))
+    story.append(para("Aging do estoque atual - Snapshot atual", "ArionSection"))
+    story.append(para("O aging considera somente tickets ativos; op\u00e7\u00f5es de cancelados ou improcedentes n\u00e3o alteram este snapshot.", "ArionSmall"))
+    aging_rows = [[para("Faixa"), para("Suporte", "ArionRight"), para("Cancelamentos", "ArionRight"), para("Total", "ArionRight")]]
+    aging_rows.extend([
+        [para(item.get("label", "")), para(fmt(item.get("support", 0)), "ArionRight"),
+         para(fmt(item.get("cancellation", 0)), "ArionRight"), para(fmt(item.get("total", 0)), "ArionRight")]
+        for item in operational.get("aging", [])
+    ])
+    if len(aging_rows) > 1:
+        story.append(table(aging_rows, [content_width - 98 * mm, 31 * mm, 38 * mm, 29 * mm]))
     dimension_specs = [item for item in chart_specs if item.get("type") in {"ranking", "horizontal_bar", "compact_distribution"}]
     if dimension_specs:
         story.append(PageBreak())
@@ -336,6 +457,9 @@ def _pdf_report(generated, generated_by, result, filter_rows):
             story.append(chart(spec))
     story.append(PageBreak())
     story.append(para("ANEXO - TICKETS DO RESULTADO", "ArionSection"))
+    shown = len(result.get("tickets", []))
+    total_tickets = int(result.get("ticket_result_total", shown))
+    story.append(para(f"Exibindo {fmt(shown)} de {fmt(total_tickets)} tickets; limite do PDF: 100 registros.", "ArionSmall"))
     ticket_table = [[para("Ticket"), para("Data base"), para("Status"), para("Motivo"), para("Raw OTRS"), para("Provedor"), para("UF"), para("Prioridade")]]
     ticket_table += [[para(row["ticket"]), para(row["base_date"]), para(row["status"]), para(row["reason"]), para(row.get("closing_code_raw", "")),
                       para(row["provider"]), para(row["uf"]), para(row["priority"])] for row in result.get("tickets", [])]
@@ -346,7 +470,7 @@ def _pdf_report(generated, generated_by, result, filter_rows):
 
 def _safe_spreadsheet_text(value):
     text = str(value)
-    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+    return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
 
 
 @login_required
@@ -367,7 +491,9 @@ def analytics_export(request):
         payload["ticket_page"] = 1
         payload["ticket_page_size"] = 100
         payload.pop("ticket_search", None)
-        result = AnalyticsQueryService().query(payload, user=request.user, include_all_rows=True)
+        result = AnalyticsQueryService().query(
+            payload, user=request.user, include_all_rows=export_format != "pdf",
+        )
         from django.utils import timezone
         from django.utils.text import slugify
         generated_at = timezone.localtime()
@@ -378,6 +504,8 @@ def analytics_export(request):
             "status": "Status", "source_state": "Situa\u00e7\u00e3o OTRS", "provider": "Provedor", "uf": "UF",
             "sla": "SLA", "priority": "Prioridade", "service": "Servi\u00e7o", "termination_reason": "Motivo",
             "stage": "Etapa", "origin": "Origem", "project": "Projeto / cliente",
+            "responsibility": "Proced\u00eancia", "responsible": "Respons\u00e1vel", "queue": "Fila",
+            "age_bucket": "Aging",
         }
         raw_filters = result["normalized_query"]["filters"]
         options = result["options"]
@@ -385,6 +513,10 @@ def analytics_export(request):
         scope_label = {"support": "Suporte", "cancellation": "Cancelamentos", "general": "Geral"}.get(result["scope"], result["scope"])
         filter_rows = [("Contexto", scope_label), ("Per\u00edodo", period_text), ("Base temporal", result["period_date_label"]),
                        ("M\u00e9trica", result["metric_label"])]
+        if not result["normalized_query"]["include_cancelled"]:
+            filter_rows.append(("Cancelados", "Exclu\u00eddos da an\u00e1lise"))
+        if not result["normalized_query"]["include_improcedente"]:
+            filter_rows.append(("Improcedentes", "Exclu\u00eddos da an\u00e1lise"))
         for key, label in filter_labels.items():
             selected = raw_filters.get(key)
             if selected in (None, "", "all"):
@@ -429,7 +561,7 @@ def analytics_export(request):
             workbook = Workbook()
             summary = workbook.active
             summary.title = "Resumo"
-            summary.append(["ARION ATACADO GEO - NOC ATACADO - Cockpit"])
+            summary.append(["ARION OPS - NOC ATACADO - Cockpit"])
             summary["A1"].font = Font(bold=True, size=14)
             summary.append(["An\u00e1lise", _safe_spreadsheet_text(result["description"]["title"])])
             summary.append(["Gerado por", _safe_spreadsheet_text(generated_by)])
@@ -488,7 +620,9 @@ def analytics_export(request):
                             description=f"Cockpit export {export_format.upper()}", result="SUCCESS",
                             metadata={"format": export_format, "filters": raw_filters, "start": result["start_date"],
                                       "end": result["end_date"], "group_by": result["group_by_label"],
-                                      "ticket_rows": len(result["tickets"])})
+                                      "ticket_rows": len(result["tickets"]),
+                                      "include_cancelled": result["normalized_query"]["include_cancelled"],
+                                      "include_improcedente": result["normalized_query"]["include_improcedente"]})
         return response
     except (ValueError, TypeError, json.JSONDecodeError):
         return api_error(request, "VALIDATION_ERROR", status=400)

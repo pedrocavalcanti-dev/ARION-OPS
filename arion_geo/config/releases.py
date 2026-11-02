@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 
-RELEASES_PATH = settings.BASE_DIR.parent / "docs" / "releases" / "releases.json"
+RELEASES_PATH = settings.BASE_DIR.parent / "docs" / "08-releases" / "releases.json"
 
 
 def release_catalog():

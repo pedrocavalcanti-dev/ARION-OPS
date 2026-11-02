@@ -15,6 +15,7 @@ MODULE_PERMISSIONS = (
     "view_dashboard", "view_cockpit", "save_analytics_views", "view_map",
     "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets",
     "view_ari", "import_cmdb", "export_base",
+    "view_quality", "manage_quality_orders",
 )
 ADMIN_PERMISSIONS = ("manage_users", "manage_groups", "manage_data_scopes", "view_audit_log", "view_integrations", "manage_integrations", "run_integrations", "inspect_integrations", "view_system_info")
 ALL_ACCESS_PERMISSIONS = MODULE_PERMISSIONS + ADMIN_PERMISSIONS
@@ -22,9 +23,9 @@ REPORTS_PERMISSIONS = ("view_reports", "edit_treatments", "override_treatments",
 
 ROLE_PERMISSIONS = {
     GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS,
-GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
-GROUP_ANALYST: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari"),
-GROUP_AUDITOR: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_audit_log"),
+GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality", "manage_quality_orders", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
+GROUP_ANALYST: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality"),
+GROUP_AUDITOR: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_audit_log"),
 }
 
 PERMISSION_LABELS = {
@@ -57,6 +58,8 @@ PERMISSION_LABELS = {
     "inspect_integrations": ("Administração", "Inspecionar fontes externas"),
     "view_system_info": ("Administração", "Visualizar informações do sistema"),
     "view_ari": ("ARI I.A", "Acessar a experiência em modo Preview"),
+    "view_quality": ("Qualidade", "Visualizar Qualidade Operacional"),
+    "manage_quality_orders": ("Qualidade", "Gerenciar Ordens de Qualidade"),
 }
 
 
@@ -64,9 +67,12 @@ def managed_permissions(using="default"):
     content_type = ContentType.objects.db_manager(using).get_for_model(GroupDataScope)
     report_model = GroupDataScope._meta.apps.get_model("relatorios", "PenaltyCompetence")
     report_content_type = ContentType.objects.db_manager(using).get_for_model(report_model)
+    quality_model = GroupDataScope._meta.apps.get_model("qualidade", "QualityOrder")
+    quality_content_type = ContentType.objects.db_manager(using).get_for_model(quality_model)
     return Permission.objects.using(using).filter(
         models.Q(content_type=content_type, codename__in=ALL_ACCESS_PERMISSIONS)
         | models.Q(content_type=report_content_type, codename__in=REPORTS_PERMISSIONS)
+        | models.Q(content_type=quality_content_type, codename__in=("view_quality", "manage_quality_orders"))
     )
 
 
@@ -76,6 +82,8 @@ def bootstrap_access(*, using="default"):
     create_permissions(app_config, verbosity=0, interactive=False, using=using)
     reports_app_config = GroupDataScope._meta.apps.get_app_config("relatorios")
     create_permissions(reports_app_config, verbosity=0, interactive=False, using=using)
+    quality_app_config = GroupDataScope._meta.apps.get_app_config("qualidade")
+    create_permissions(quality_app_config, verbosity=0, interactive=False, using=using)
     available = {permission.codename: permission for permission in managed_permissions(using)}
     for name, codenames in ROLE_PERMISSIONS.items():
         group, _ = Group.objects.using(using).get_or_create(name=name)

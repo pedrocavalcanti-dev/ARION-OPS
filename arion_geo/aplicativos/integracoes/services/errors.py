@@ -84,3 +84,7 @@ class OTRSDriverError(IntegrationError):
 
 class OTRSDatabaseError(IntegrationError):
     safe_message = "Não foi possível consultar a estrutura do banco OTRS."
+
+
+class OTRSTLSRequiredError(IntegrationError):
+    safe_message = "Conexão OTRS para host remoto exige TLS configurado ou túnel local em loopback (127.0.0.1)."

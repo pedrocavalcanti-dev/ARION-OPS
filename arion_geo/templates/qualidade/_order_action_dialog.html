@@ -1,0 +1,17 @@
+<dialog class="quality-dialog quality-dialog--compact" id="quality-order-action-dialog" aria-labelledby="quality-order-action-title" data-quality-update-url="{% url 'qualidade:ordem_update' 'OQ_CODE' %}">
+  <div class="quality-dialog__form">
+    <header class="quality-dialog__header"><div><p class="quality-eyebrow">AÇÕES DA OQ</p><h2 id="quality-order-action-title">Atualizar Ordem de Qualidade</h2><p data-quality-action-code></p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+    <div class="quality-dialog__body">
+      <form method="post" action="" data-quality-owner-form hidden>
+        {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="field" value="owner">
+        <label class="quality-dialog__field quality-dialog__field--wide"><span>Responsável</span>{{ owner_action_form.owner }}</label>
+        <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Salvar responsável</button></footer>
+      </form>
+      <form method="post" action="" data-quality-priority-form hidden>
+        {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><input type="hidden" name="field" value="priority">
+        <label class="quality-dialog__field quality-dialog__field--wide"><span>Prioridade</span>{{ priority_action_form.priority }}</label>
+        <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit">Salvar prioridade</button></footer>
+      </form>
+    </div>
+  </div>
+</dialog>
