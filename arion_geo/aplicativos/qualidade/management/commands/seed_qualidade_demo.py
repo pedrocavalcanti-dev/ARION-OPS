@@ -1,3 +1,5 @@
+"""SOMENTE DESENVOLVIMENTO LOCAL — Nunca executar automaticamente nem utilizar em produção."""
+
 from datetime import timedelta
 
 from django.conf import settings
@@ -66,7 +68,7 @@ DEMO_MANUAL_LEVELS = (
 
 
 class Command(BaseCommand):
-    help = "Cria ou remove um conjunto pequeno de dados demonstrativos locais da Qualidade."
+    help = "SOMENTE DESENVOLVIMENTO LOCAL: cria ou remove um conjunto pequeno de dados demonstrativos locais da Qualidade."
 
     def add_arguments(self, parser):
         parser.add_argument(

@@ -76,7 +76,7 @@ def build_xlsx(data, filters, providers, podium, generated_at, generated_by):
     workbook = Workbook()
     summary = workbook.active
     summary.title = "Resumo"
-    summary.append(["ARION ATACADO GEO · NOC ATACADO"])
+    summary.append(["ARION OPS · NOC ATACADO"])
     summary.append(["Ranking operacional de provedores"])
     summary.append(["Período", filters["date_from"], "até", filters["date_to"]])
     summary.append(["Visão", _view_label(filters)])
@@ -206,7 +206,7 @@ def build_pdf(data, filters, providers, podium, generated_at, generated_by):
         return block
 
     mode = _ranking_label(filters)
-    story = [p("ARION ATACADO GEO", "ArionReportTitle"), p("NOC ATACADO · Ranking operacional de provedores", "ArionReportSub")]
+    story = [p("ARION OPS", "ArionReportTitle"), p("NOC ATACADO · Ranking operacional de provedores", "ArionReportSub")]
     metadata = [
         [p("Período"), p(f"{filters['date_from']} a {filters['date_to']}")],
         [p("Visão"), p(_view_label(filters))], [p("Ordenação"), p(mode)],
@@ -245,7 +245,7 @@ def build_pdf(data, filters, providers, podium, generated_at, generated_by):
         canvas.line(12 * mm, 10 * mm, page_size[0] - 12 * mm, 10 * mm)
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(palette["muted"])
-        canvas.drawString(12 * mm, 6 * mm, "ARION ATACADO GEO · NOC ATACADO · Espelhos locais OTRS/CMDB · Somente leitura")
+        canvas.drawString(12 * mm, 6 * mm, "ARION OPS · NOC ATACADO · Espelhos locais OTRS/CMDB · Somente leitura")
         canvas.drawRightString(page_size[0] - 12 * mm, 6 * mm, f"Página {doc.page}")
         canvas.restoreState()
 

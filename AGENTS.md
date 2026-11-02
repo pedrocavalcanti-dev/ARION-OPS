@@ -1,8 +1,8 @@
-# ARION ATACADO GEO — Agent Instructions
+# ARION OPS — Agent Instructions
 
 ## 1. Projeto
 
-ARION ATACADO GEO é uma plataforma Django de inteligência operacional para o NOC Atacado.
+ARION OPS é uma plataforma Django de inteligência operacional para o NOC Atacado.
 
 A aplicação centraliza consulta, análise, exploração e visualização de dados operacionais.
 
@@ -10,7 +10,7 @@ A aplicação centraliza consulta, análise, exploração e visualização de da
 
 OTRS / CMDB é a fonte oficial dos dados.
 
-O Arion Atacado Geo NÃO substitui o OTRS/CMDB e NÃO deve ser tratado como uma segunda fonte oficial.
+O ARION OPS NÃO substitui o OTRS/CMDB e NÃO deve ser tratado como uma segunda fonte oficial.
 
 O banco local funciona como:
 
@@ -28,7 +28,7 @@ fonte oficial e registro técnico.
 BI / Relatórios:
 reporting periódico, governança e apresentações formais.
 
-ARION ATACADO GEO:
+ARION OPS:
 exploração operacional diária, consulta rápida, visualização e análise interativa.
 
 ---
@@ -804,10 +804,10 @@ NÃO leia toda a pasta automaticamente.
 
 Principais documentos:
 
-- `docs/ESTADO-ATUAL.md`
-- `docs/ARQUITETURA.md`
-- `docs/FONTES-DE-DADOS.md`
-- `docs/DIRETRIZES-DE-INTERFACE.md`
+- `docs/01-projeto/estado-atual.md`
+- `docs/02-arquitetura/arquitetura.md`
+- `docs/02-arquitetura/fontes-de-dados.md`
+- `docs/04-interface/diretrizes-de-interface.md`
 - arquivos específicos da feature em questão
 
 Atualize documentação apenas quando a implementação mudar:
@@ -823,7 +823,7 @@ Não transformar documentação em changelog de cada pequena alteração.
 
 # 38. CURRENT-STATE
 
-`docs/ESTADO-ATUAL.md` deve representar o estado ATUAL do projeto.
+`docs/01-projeto/estado-atual.md` deve representar o estado ATUAL do projeto.
 
 Atualize informação antiga em vez de apenas acumular histórico.
 

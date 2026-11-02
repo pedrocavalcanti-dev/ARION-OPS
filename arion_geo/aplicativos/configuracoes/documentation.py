@@ -12,35 +12,35 @@ from django.urls import reverse
 DOCS_ROOT = (Path(settings.BASE_DIR).parent / "docs").resolve()
 DOCUMENTS = {
     # title, description, category, Markdown path, explicit search terms
-    "projeto": ("Projeto", "Objetivo, público e limites do ARION ATACADO GEO", "Começar", "PROJETO.md", "produto NOC Atacado operação inteligência operacional"),
-    "estado-atual": ("Estado Atual", "Matriz verificável de módulos, fontes e capacidades", "Começar", "ESTADO-ATUAL.md", "status feature matrix ativo backlog snapshot"),
-    "roadmap": ("Roadmap", "Itens concluídos na versão 1.2.0 e evolução futura", "Começar", "ROADMAP.md", "release 1.2.0 identidade ARION OPS Cockpit exposição incidência Top 10 provedores Links chamados ANOP ETIT"),
-    "arquitetura": ("Arquitetura", "Aplicativos, camadas, fluxos e relações entre fontes", "Começar", "ARQUITETURA.md", "apps services views templates worker desenho fluxo"),
-    "fontes-de-dados": ("Fontes de Dados", "Fontes oficiais, mirrors, escopo e freshness", "Começar", "FONTES-DE-DADOS.md", "CMDB OTRS MySQL espelho mirror read-only Data Scope"),
-    "autenticacao": ("Autenticação e Sessão", "Login, sessão Django e proteção de rotas", "Funcionalidades", "funcionalidades/autenticacao.md", "login logout sessão CSRF senha Django"),
-    "dashboard": ("Dashboard", "Indicadores executivos e recortes usados", "Funcionalidades", "funcionalidades/dashboard.md", "visão geral KPI painel chamados gráficos links provedores"),
-    "chamados": ("Chamados", "Fila NOC e acompanhamento local no ARION", "Funcionalidades", "funcionalidades/chamados.md", "TicketTracking ticket status nota evento prioridade recorrência fila NOC"),
-    "cockpit": ("Cockpit", "Análise operacional, consultas, views e exportações", "Funcionalidades", "funcionalidades/cockpit.md", "AnalyticsQuery Saved Views CSV filtros evidências séries"),
-    "relatorios": ("Central de Relatórios", "Claro Multas, cálculos, enriquecimento e tratativa", "Funcionalidades", "funcionalidades/relatorios.md", "Claro Multas PenaltyCompetence baseline pausa TMP efetivo ISP tratativa decisão auditoria"),
-    "qualidade": ("Qualidade Operacional", "Ordens, reincidências, ciclos RREIP e dashboard", "Funcionalidades", "funcionalidades/qualidade.md", "OQ Ordem de Qualidade ocorrência reincidência TQ Ticket de Qualidade RREIP monitoramento links prioritários Data Scope"),
-    "mapa": ("Mapa Operacional", "Agregações por UF, modos e critérios geográficos", "Funcionalidades", "funcionalidades/mapa.md", "mapa UF chamadas reincidência motivos geografia"),
-    "ranking-provedores": ("Ranking de Provedores", "Índice ARION, risco e desempenho por Provider/ISP", "Funcionalidades", "funcionalidades/rankings.md", "provedor ISP risco performance exposição incidência"),
-    "base": ("Base de Links", "Links e Providers/ISP do espelho CMDB", "Funcionalidades", "funcionalidades/base.md", "links provider operadora ISP ConfigItemID CMDB busca exportação"),
-    "ari": ("ARI", "Conversas, anexos e artefatos Preview", "Funcionalidades", "funcionalidades/ari.md", "assistente IA intelligence artificial preview artifacts LLM"),
-    "banco-de-dados": ("Banco de Dados e Modelos", "Banco local, schema, chaves e relacionamentos", "Dados e Integrações", "BANCO-DE-DADOS.md", "banco database MySQL SQLite models migrations schema tabelas ConfigItemID OTRSTicketConfigItem CMDBLinkMirror external_id ticket_number closing_code_raw GroupDataScope IntegrationLease CodigoFechamento FalhaMassiva TELMEX Provider DPAPI source_config_item_id"),
-    "otrs": ("OTRS", "Leitura da fila, estados, relações e Dynamic Fields", "Dados e Integrações", "OTRS.md", "OTRS ticket tn ticket.id ticket.tn ticket_number external_id Dynamic Field CodigoFechamento closing_code_raw FalhaMassiva status link_relation ConfigItemID"),
-    "cmdb": ("CMDB", "Objetos ConfigItem, identidade de negócio e mirror", "Dados e Integrações", "CMDB.md", "CMDB ServiceUp ConfigItemID source_config_item_id Number Links de internet Operadoras Provider ISP TELMEX projeto conta identidade confiança"),
-    "worker": ("Worker e Sincronização", "Cadências, FAST/FULL, leases e freshness", "Dados e Integrações", "WORKER-E-SINCRONIZACAO.md", "worker integration_worker FAST FULL cadência lease heartbeat cursor IntegrationLease IntegrationRun retry SyncState"),
-    "dicionario-de-dados": ("Dicionário de Dados", "Campos centrais, origens, chaves e semântica", "Dados e Integrações", "DICIONARIO-DE-DADOS.md", "TicketTracking CMDBLinkMirror OTRSTicketConfigItem ConfigItemID external_id ticket_number closing_code_raw source_config_item_id CodigoFechamento GroupDataScope IntegrationLease"),
-    "configuracoes": ("Configurações", "Conta, aparência e administração interna", "Administração", "funcionalidades/configuracoes.md", "Central Configurações preferências appearance UserPreference"),
-    "integracoes": ("Integrações", "Conectores, estado operacional e diagnóstico", "Administração", "funcionalidades/integracoes.md", "integrações conector status IntegrationRun CMDB OTRS"),
-    "usuarios-grupos-escopos": ("Usuários, Grupos e Escopos", "RBAC Django e Data Scope aplicado no backend", "Administração", "funcionalidades/usuarios-grupos-escopos.md", "RBAC permissions groups Data Scope ALL CUSTOM Operadora Projeto"),
-    "auditoria": ("Auditoria", "Eventos administrativos e sanitização", "Administração", "funcionalidades/auditoria.md", "AuditEvent AuditService histórico metadata sanitização"),
-    "tratamento-global-erros": ("Tratamento Global de Erros", "Handlers HTTP, APIs e diagnóstico", "Administração", "funcionalidades/tratamento-global-erros.md", "500 404 JSON CSRF middleware logging"),
-    "seguranca": ("Segurança", "Acesso, escopo, credenciais e limites", "Segurança e operação", "SEGURANCA.md", "security segredo credenciais read-only autorização sanitização"),
-    "testes-e-qa": ("Testes e QA", "Suítes, verificações e troubleshooting de testes", "Segurança e operação", "TESTES-E-QA.md", "test pytest Django check makemigrations QA SQLite MySQL"),
-    "implantacao-e-producao": ("Implantação e Produção", "Configuração web, banco e worker", "Segurança e operação", "IMPLANTACAO-E-PRODUCAO.md", "deploy produção Windows MySQL worker DPAPI"),
-    "diretrizes-de-interface": ("Diretrizes de Interface", "Tokens, componentes, temas e acessibilidade", "Padrões", "DIRETRIZES-DE-INTERFACE.md", "CSS tema claro escuro responsividade acessibilidade"),
+    "projeto": ("Projeto", "Objetivo, público e limites do ARION OPS", "Começar", "01-projeto/visao-geral.md", "produto NOC Atacado operação inteligência operacional"),
+    "estado-atual": ("Estado Atual", "Matriz verificável de módulos, fontes e capacidades", "Começar", "01-projeto/estado-atual.md", "status feature matrix ativo backlog snapshot"),
+    "roadmap": ("Roadmap", "Itens concluídos na versão 1.2.0 e evolução futura", "Começar", "01-projeto/roadmap.md", "release 1.2.0 identidade ARION OPS Cockpit exposição incidência Top 10 provedores Links chamados ANOP ETIT"),
+    "arquitetura": ("Arquitetura", "Aplicativos, camadas, fluxos e relações entre fontes", "Começar", "02-arquitetura/arquitetura.md", "apps services views templates worker desenho fluxo"),
+    "fontes-de-dados": ("Fontes de Dados", "Fontes oficiais, mirrors, escopo e freshness", "Começar", "02-arquitetura/fontes-de-dados.md", "CMDB OTRS MySQL espelho mirror read-only Data Scope"),
+    "autenticacao": ("Autenticação e Sessão", "Login, sessão Django e proteção de rotas", "Funcionalidades", "05-funcionalidades/autenticacao.md", "login logout sessão CSRF senha Django"),
+    "dashboard": ("Dashboard", "Indicadores executivos e recortes usados", "Funcionalidades", "05-funcionalidades/dashboard.md", "visão geral KPI painel chamados gráficos links provedores"),
+    "chamados": ("Chamados", "Fila NOC e acompanhamento local no ARION", "Funcionalidades", "05-funcionalidades/chamados.md", "TicketTracking ticket status nota evento prioridade recorrência fila NOC"),
+    "cockpit": ("Cockpit", "Análise operacional, consultas, views e exportações", "Funcionalidades", "05-funcionalidades/cockpit.md", "AnalyticsQuery Saved Views CSV filtros evidências séries"),
+    "relatorios": ("Central de Relatórios", "Claro Multas, cálculos, enriquecimento e tratativa", "Funcionalidades", "05-funcionalidades/relatorios.md", "Claro Multas PenaltyCompetence baseline pausa TMP efetivo ISP tratativa decisão auditoria"),
+    "qualidade": ("Qualidade Operacional", "Ordens, reincidências, ciclos RREIP e dashboard", "Funcionalidades", "05-funcionalidades/qualidade.md", "OQ Ordem de Qualidade ocorrência reincidência TQ Ticket de Qualidade RREIP monitoramento links prioritários Data Scope"),
+    "mapa": ("Mapa Operacional", "Agregações por UF, modos e critérios geográficos", "Funcionalidades", "05-funcionalidades/mapa.md", "mapa UF chamadas reincidência motivos geografia"),
+    "ranking-provedores": ("Ranking de Provedores", "Índice ARION, risco e desempenho por Provider/ISP", "Funcionalidades", "05-funcionalidades/rankings.md", "provedor ISP risco performance exposição incidência"),
+    "base": ("Base de Links", "Links e Providers/ISP do espelho CMDB", "Funcionalidades", "05-funcionalidades/base.md", "links provider operadora ISP ConfigItemID CMDB busca exportação"),
+    "ari": ("ARI", "Conversas, anexos e artefatos Preview", "Funcionalidades", "05-funcionalidades/ari.md", "assistente IA intelligence artificial preview artifacts LLM"),
+    "banco-de-dados": ("Banco de Dados e Modelos", "Banco local, schema, chaves e relacionamentos", "Dados e Integrações", "02-arquitetura/banco-de-dados.md", "banco database MySQL SQLite models migrations schema tabelas ConfigItemID OTRSTicketConfigItem CMDBLinkMirror external_id ticket_number closing_code_raw GroupDataScope IntegrationLease CodigoFechamento FalhaMassiva TELMEX Provider DPAPI source_config_item_id"),
+    "otrs": ("OTRS", "Leitura da fila, estados, relações e Dynamic Fields", "Dados e Integrações", "06-integracoes-e-dados/otrs.md", "OTRS ticket tn ticket.id ticket.tn ticket_number external_id Dynamic Field CodigoFechamento closing_code_raw FalhaMassiva status link_relation ConfigItemID"),
+    "cmdb": ("CMDB", "Objetos ConfigItem, identidade de negócio e mirror", "Dados e Integrações", "06-integracoes-e-dados/cmdb.md", "CMDB ServiceUp ConfigItemID source_config_item_id Number Links de internet Operadoras Provider ISP TELMEX projeto conta identidade confiança"),
+    "worker": ("Worker e Sincronização", "Cadências, FAST/FULL, leases e freshness", "Dados e Integrações", "02-arquitetura/worker-e-sincronizacao.md", "worker integration_worker FAST FULL cadência lease heartbeat cursor IntegrationLease IntegrationRun retry SyncState"),
+    "dicionario-de-dados": ("Dicionário de Dados", "Campos centrais, origens, chaves e semântica", "Dados e Integrações", "02-arquitetura/dicionario-de-dados.md", "TicketTracking CMDBLinkMirror OTRSTicketConfigItem ConfigItemID external_id ticket_number closing_code_raw source_config_item_id CodigoFechamento GroupDataScope IntegrationLease"),
+    "configuracoes": ("Configurações", "Conta, aparência e administração interna", "Administração", "05-funcionalidades/configuracoes.md", "Central Configurações preferências appearance UserPreference"),
+    "integracoes": ("Integrações", "Conectores, estado operacional e diagnóstico", "Administração", "05-funcionalidades/integracoes.md", "integrações conector status IntegrationRun CMDB OTRS"),
+    "usuarios-grupos-escopos": ("Usuários, Grupos e Escopos", "RBAC Django e Data Scope aplicado no backend", "Administração", "05-funcionalidades/usuarios-grupos-e-escopos.md", "RBAC permissions groups Data Scope ALL CUSTOM Operadora Projeto"),
+    "auditoria": ("Auditoria", "Eventos administrativos e sanitização", "Administração", "05-funcionalidades/auditoria.md", "AuditEvent AuditService histórico metadata sanitização"),
+    "tratamento-global-erros": ("Tratamento Global de Erros", "Handlers HTTP, APIs e diagnóstico", "Administração", "05-funcionalidades/tratamento-global-de-erros.md", "500 404 JSON CSRF middleware logging"),
+    "seguranca": ("Segurança", "Acesso, escopo, credenciais e limites", "Segurança e operação", "03-seguranca-e-qualidade/seguranca.md", "security segredo credenciais read-only autorização sanitização"),
+    "testes-e-qa": ("Testes e QA", "Suítes, verificações e troubleshooting de testes", "Segurança e operação", "03-seguranca-e-qualidade/testes-e-qa.md", "test pytest Django check makemigrations QA SQLite MySQL"),
+    "implantacao-e-producao": ("Implantação e Produção", "Configuração web, banco e worker", "Segurança e operação", "02-arquitetura/implantacao-e-producao.md", "deploy produção Windows MySQL worker DPAPI"),
+    "diretrizes-de-interface": ("Diretrizes de Interface", "Tokens, componentes, temas e acessibilidade", "Padrões", "04-interface/diretrizes-de-interface.md", "CSS tema claro escuro responsividade acessibilidade"),
 }
 CATEGORY_ORDER = ("Começar", "Funcionalidades", "Dados e Integrações", "Administração", "Segurança e operação", "Padrões")
 
@@ -56,7 +56,7 @@ def _document_url(target):
     if not target_path:
         return "#" + parsed[1] if len(parsed) == 2 else None
     normalized_target = target_path.replace("\\", "/").strip("/")
-    if normalized_target.casefold() == "funcionalidades":
+    if normalized_target.casefold() in {"funcionalidades", "05-funcionalidades"}:
         return reverse("configuracoes:documentation") + "#home-docs-modulos"
     document = _document_match(normalized_target)
     if document:
@@ -69,7 +69,7 @@ def _document_url(target):
 def _document_match(target_path):
     stem = Path(target_path.replace("\\", "/")).stem.casefold()
     for slug, item in DOCUMENTS.items():
-        if Path(item[3]).stem.casefold() == stem or (slug == "ranking-provedores" and stem == "ranking-provedores"):
+        if slug.casefold() == stem or Path(item[3]).stem.casefold() == stem or (slug == "ranking-provedores" and stem == "ranking-provedores"):
             return slug, item
     return None
 

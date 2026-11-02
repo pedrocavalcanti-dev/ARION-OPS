@@ -1,4 +1,4 @@
-"""Settings for the Arion Atacado Geo Django project."""
+"""Settings for the ARION OPS Django project."""
 
 import os
 from pathlib import Path

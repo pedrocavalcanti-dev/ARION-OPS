@@ -1,13 +1,15 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.pyo
+*.pyd
 
-# Virtual environment
+# Ambiente virtual
 .venv/
 venv/
 
-# Environment
+# Ambiente
 .env
 .env.*
 !.env.example
@@ -28,17 +30,19 @@ logs/
 .vscode/
 .idea/
 
-# Windows
+# Sistema operacional
 Thumbs.db
 Desktop.ini
+.DS_Store
 
-# Tests / Cache
+# Testes / Cache
 .pytest_cache/
 .coverage
 htmlcov/
 private_media/
+arion_geo/private_media/
 
-# Runtime/local database configuration
+# Runtime / build local
 var/
 node_modules/
 npm-debug.log*
@@ -46,7 +50,7 @@ npm-debug.log*
 arion_geo/static/arion_build/
 arion_geo/static/.arion-build-*/
 
-# Local Cloudflare Tunnel material
+# Cloudflare Tunnel local
 .cloudflared/
 *.cf-tunnel-token
 *.tunnel-token
@@ -54,9 +58,12 @@ arion_geo/static/.arion-build-*/
 deploy/windows/cloudflare/config.yml
 deploy/windows/cloudflare/*.json
 
-# Database exports and local backups
-*.sql
+# Temporários, exports e backups locais
+*.tmp
 *.bak
+*.old
+*.swp
+*.sql
 *.dump
 *.pem
 *.p12
