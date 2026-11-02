@@ -1,6 +1,108 @@
 {
-  "current_version": "1.2.0",
+  "current_version": "1.3.0",
   "releases": [
+    {
+      "version": "1.3.0",
+      "released_at": "2026-11-02",
+      "title": "ARION OPS 1.3.0 — Visão Operacional, Qualidade e Segurança",
+      "summary": "Uma evolução completa da análise operacional do NOC Atacado, com novos indicadores, gestão de qualidade, investigação avançada e validação de segurança da plataforma.",
+      "sections": [
+        {
+          "category": "Dashboard",
+          "items": [
+            "A Dashboard Geral foi consolidada como visão executiva da operação do NOC Atacado, reunindo total de links da CMDB, estados atendidos, tickets do período, links reincidentes e chamados abertos no momento.",
+            "A situação atual separa atendimento, pendências, agendamentos e links afetados, preservando a distinção entre snapshots atuais e recortes históricos por criação.",
+            "A evolução mensal relaciona o volume de chamados criados e a quantidade de links reincidentes em cada mês.",
+            "Novo bloco de Aging dos chamados abertos apresenta a distribuição do backlog por faixa de tempo (até 24h, 24–48h, 48–72h e acima de 72h), destacando o volume acima de 72 horas e o ticket mais antigo.",
+            "Nova distribuição da base por cliente apresenta a participação atual de Claro (incluindo TELMEX), Vivo, Algar e demais grupos utilizando o snapshot corrente da CMDB.",
+            "Chamados por projeto ganharam visão comparativa com nomes canônicos, e os principais motivos utilizam a classificação normalizada do OTRS com navegação contextual para o Cockpit.",
+            "Rankings de estados e provedores foram refinados, com suporte a logos institucionais dos provedores e fallback seguro para iniciais.",
+            "Todos os indicadores, gráficos e rankings aplicam Data Scope no backend antes das agregações."
+          ]
+        },
+        {
+          "category": "Cockpit",
+          "items": [
+            "O Cockpit foi consolidado como ferramenta de investigação operacional do NOC Atacado, preservando os contextos Suporte, Cancelamentos e Geral.",
+            "Novas consultas rápidas operacionais permitem acionar recortes imediatos para Pendência Financeira, Reincidência, Falha Massiva, Improcedentes, Procedentes, Alto / Crítico, Acima de 24h, Sem responsável, Em atendimento, Pendentes e Resolvidos.",
+            "Filtros avançados contemplam provedor, UF, status, situação OTRS, SLA, prioridade, serviço, motivo, projeto/cliente, fila, procedência, responsável e aging.",
+            "Cancelados e improcedentes permanecem incluídos por padrão na análise histórica aplicável e podem ser retirados através de Mais filtros, enquanto backlog atual e aging continuam representando exclusivamente o estoque operacional ativo.",
+            "Indicadores, evolução temporal, calendário mensal, distribuições, rankings e evidências paginadas utilizam o mesmo recorte analítico, priorizando a terminologia operacional “Resolvidos”.",
+            "A exportação PDF foi atualizada para refletir os filtros, opções gerenciais, indicadores e distribuições da consulta."
+          ]
+        },
+        {
+          "category": "Qualidade Operacional",
+          "items": [
+            "Novo módulo de Qualidade Operacional integrado ao ARION OPS, estruturando o acompanhamento de recorrências sem substituir OTRS ou CMDB como fontes oficiais.",
+            "A Visão geral apresenta novas reincidências, links reincidentes ativos, links estabilizados, Ordens de Qualidade (OQs), ciclos em monitoramento e efetividade do RREIP.",
+            "A carteira de Links Prioritários identifica circuitos ativos, estabilizados e totais a partir dos episódios calculados sobre os espelhos OTRS e CMDB.",
+            "As Ordens de Qualidade (OQs) formalizam o acompanhamento de problemas recorrentes com abas de Resumo, Ocorrências, Tratativas, Monitoramento e Histórico.",
+            "O Monitoramento RREIP acompanha a estabilidade dos circuitos após o tratamento, e a formação de episódios utiliza janela operacional fixa de 30 dias entre ocorrências válidas.",
+            "A classificação R1–R5 representa criticidade e complexidade operacional definida humanamente pela Qualidade, e não simples contagem automática de reincidências.",
+            "Diretório de contatos e escalonamentos, linha do tempo auditada, sidebar própria recolhível e interface responsiva completam o fluxo operacional sob RBAC e Data Scope."
+          ]
+        },
+        {
+          "category": "Rankings",
+          "items": [
+            "O Ranking de provedores passou a utilizar o mesmo snapshot atual da CMDB adotado pela Dashboard, garantindo consistência de contagem entre os módulos.",
+            "No snapshot validado desta release, a base CMDB contava com 3.446 links presentes, valor sujeito naturalmente às futuras sincronizações da origem.",
+            "A quantidade de links do provedor representa a exposição atual da base, enquanto os chamados continuam respeitando o período selecionado.",
+            "Mantidas as perspectivas Mais links, Maior risco, Melhor desempenho e Sem ocorrências, com Data Scope aplicado no backend.",
+            "O antigo Índice ARION passou a ser apresentado como Indicador operacional, mantendo caráter auxiliar e sujeito a refinamento conjunto com Engenharia e Operações.",
+            "As exportações PDF e XLSX utilizam as mesmas contagens, componentes e exposição da CMDB apresentados na interface."
+          ]
+        },
+        {
+          "category": "Experiência e navegação",
+          "items": [
+            "A página Inicial foi consolidada como portal dos principais módulos operacionais, integrando Dashboard e Qualidade ao fluxo principal do NOC Atacado.",
+            "A área Sobre o ARION OPS foi refinada com descrição institucional da plataforma, tecnologias utilizadas, governança, contexto NOC Atacado e versão dinâmica.",
+            "Mantida a identificação institucional de autoria — Concepção e desenvolvimento: Pedro Cavalcanti — e o controle de acesso administrativo por perfil e permissões."
+          ]
+        },
+        {
+          "category": "Documentação",
+          "items": [
+            "A Central de Documentação foi reorganizada em estrutura oficial numerada em português, separando visão geral, arquitetura, segurança, padrões, funcionalidades por módulo, integrações e estudos.",
+            "Busca textual, índice contextual e navegação lateral foram refinados, com suporte a diagramas interativos e temas claro e escuro.",
+            "Adicionada a página executiva Validação de Segurança, além de histórico versionado de auditorias e relatórios técnicos de segurança."
+          ]
+        },
+        {
+          "category": "Segurança",
+          "items": [
+            "A V1.3.0 passou por uma rodada dedicada de validação de segurança combinando revisão white-box, testes ativos controlados em ambiente local e validações passivas da superfície pública, assistida por múltiplos modelos avançados de inteligência artificial como apoio à análise de código e geração de cenários de teste.",
+            "Foram avaliados vetores como SQL Injection, XSS, CSRF, IDOR, Broken Access Control, Privilege Escalation, Mass Assignment, Open Redirect, Session Fixation, exposição de secrets, uploads maliciosos, Path Traversal, Formula Injection e SSRF.",
+            "Criada baseline automatizada de regressão com 34 testes de segurança aprovados, encerrando a avaliação com 0 vulnerabilidades críticas, altas, médias ou baixas abertas no código.",
+            "Implementado rate limiting de autenticação e validados os controles de sessão, logout, CSRF, RBAC, Data Scope, proteção contra IDOR, neutralização de Formula Injection em exportações e validação de extensão, magic bytes e Path Traversal em uploads.",
+            "A integração CMDB exige HTTPS, o conector OTRS permanece estritamente somente leitura com exigência de TLS para conexões remotas, o MySQL opera com usuário dedicado de privilégios restritos e a produção opera em arquitetura Cloudflare → Tunnel → Waitress (127.0.0.1) → Django.",
+            "Publicados o relatório técnico, a auditoria versionada, o manifesto e a página executiva de validação — Segurança validada no escopo e na versão avaliados."
+          ]
+        },
+        {
+          "category": "Dados e integrações",
+          "items": [
+            "O ARION OPS permanece como camada operacional e analítica, mantendo OTRS e CMDB como fontes oficiais e priorizando os espelhos locais para consultas e agregações.",
+            "O conector OTRS permanece estritamente somente leitura e a CMDB segue utilizada para inventário e enriquecimento operacional.",
+            "A canonicalização de projetos e clientes foi consolidada entre Cockpit, Dashboard, Qualidade e Rankings para reduzir duplicidades de nomenclatura, com Data Scope aplicado antes das agregações e detalhes."
+          ]
+        },
+        {
+          "category": "Interface",
+          "items": [
+            "Refinamentos de responsividade, temas claro e escuro, alinhamento de cards e tabelas de rankings, novos gráficos Apache ECharts locais, logos de provedores, melhorias nos filtros e ajustes de navegação da Central de Documentação e PWA."
+          ]
+        },
+        {
+          "category": "ARI I.A",
+          "items": [
+            "O módulo ARI I.A permanece explícito em modo Preview local, sem conexão ativa a fontes operacionais externas, com refinamentos de estados visuais do chat e validação estrita de anexos."
+          ]
+        }
+      ]
+    },
     {
       "version": "1.2.0",
       "released_at": "2026-10-30",

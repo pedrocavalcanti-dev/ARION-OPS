@@ -1,29 +1,246 @@
-﻿# Segurança
+# Arquitetura de Segurança — ARION OPS
 
-## Identidade, permissão e escopo
+**Produto:** ARION OPS — NOC ATACADO
+**Versão de referência:** `1.3.0` (`docs/08-releases/releases.json` / `arion_geo/config/releases.py`)
+**Empresa:** ARION Serviços de Telecomunicações
+**Concepção e desenvolvimento:** Pedro Cavalcanti
+**Declaração institucional:** Segurança validada no escopo e na versão avaliados.
 
-Autenticação usa Django Auth. RBAC usa Groups/Permissions e cada operação é verificada no servidor; esconder link/botão não protege endpoint. Data Scope é aplicado no backend antes de filtros do usuário, agregações, ranking, paginação, detalhes, APIs e exports. Em CUSTOM, Cliente/Operadora e Projeto se cruzam por AND; dimensão ausente ou lista vazia não amplia acesso. Superuser técnico é global e dispensa `GroupDataScope`.
+---
 
-## Fronteira das fontes
+## 1. Visão geral
 
-Conector MySQL OTRS configura sessão read-only e limita as queries. Chamados, analytics, Ranking, Mapa e Base não escrevem em OTRS/CMDB nem consultam fontes remotas durante requests. CMDB usa Search/Get; sincronizador valida snapshot antes de reconciliar ausência. Queries não leem senha, tokens, artigos ou corpo de mensagens.
+O **ARION OPS** adota uma arquitetura de defesa em profundidade (*defense-in-depth*) voltada à proteção de dados operacionais do NOC Atacado, combinando isolamento de rede em loopback, autenticação com proteção contra força bruta, rotação e proteção de sessões, controle de acesso baseado em perfis (**RBAC**), segregação obrigatória de dados no backend (**Data Scope**), proteção contra falsificação de requisição (**CSRF**), leitura estrita nas integrações externas (**OTRS** e **CMDB**) e trilha de auditoria sanitizada.
 
-Credenciais de portal/PPPoE não são persistidas nos mirrors CMDB. Username de portal não pertence ao model atual `CMDBOperatorMirror`. Segredos de Integration são mascarados e ciphertext não volta à UI. DPAPI no Windows vincula segredo ao usuário de execução; mudança de conta/máquina exige cadastrar novamente.
+---
 
-## Sessão, upload e exportação
+## 2. Modelo de confiança
 
-Forms seguem proteção CSRF e validação Django; interface não é fronteira de autorização. ARI permite até cinco anexos por request, limita cada arquivo a 20 MiB e o total a 40 MiB durante o recebimento e na camada de serviço; valida tipo, nome e ownership antes de servir anexos de storage privado. Exports repetem Data Scope e CSV neutraliza valores interpretados como fórmula. Não publicar senha, token, cookie, Authorization, connection string ou PII desnecessária em docs, logs, audit metadata ou exemplos.
+- **Fonte oficial de verdade:** O OTRS e a CMDB permanecem como sistemas de registro oficiais. O banco local do ARION OPS (`arion_ops` no MySQL 8) atua como espelho sincronizado, cache operacional e camada analítica.
+- **Integrações estritamente somente leitura:** O ARION OPS nunca executa escritas (`INSERT`, `UPDATE`, `DELETE`, `ALTER`, `DROP`) no banco remoto do OTRS nem mutações na API da CMDB.
+- **Fronteira de rede:** Nenhum processo Python/Django nem o banco MySQL devem ser expostos diretamente à internet pública. Todo acesso externo atravessa a borda HTTPS do Cloudflare e o agente local `cloudflared`.
 
-## Auditoria e observabilidade
+---
 
-Eventos importantes passam por `AuditService`, com sanitização recursiva de metadata. Auditoria é histórico, não debug log; não deve guardar credenciais nem corpo de nota. Logs técnicos mantêm contexto mínimo, sem segredo. Worker usa `IntegrationLease` com token, heartbeat e expiração.
+## 3. HTTPS e Cloudflare
 
-## Produção
+A topologia de produção segue o fluxo:
 
-Production exige `DEBUG=False`, chave externa forte, hosts explícitos, origens CSRF HTTPS, MySQL loopback não-root, Waitress em `127.0.0.1`, cookies seguros e HTTPS via Tunnel. CSP permanece Report-Only para validar Mapbox; HSTS inicia em 3600 segundos sem preload/subdomínios. Respostas dinâmicas são `private, no-store`; Cloudflare deve bypassar cache em páginas/APIs e cachear somente static.
+```text
+Internet
+  ↓ (HTTPS obrigatório)
+Cloudflare (WAF / TLS Edge / HSTS)
+  ↓
+Cloudflare Tunnel (cloudflared)
+  ↓ (HTTP apenas no loopback interno 127.0.0.1:8100)
+Waitress (--listen=127.0.0.1:8100 --trusted-proxy=127.0.0.1)
+  ↓
+Django (SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https"))
+```
 
-Secrets locais de integração e do banco usam DPAPI current-user. Web e Worker precisam rodar sob a mesma conta Windows dedicada que cadastrou os secrets. Não copiar ciphertext DPAPI para outra conta ou máquina: recadastrar no host novo.
+- **Desenvolvimento local (`ARION_ENV=development`):**
+  - Utiliza `http://127.0.0.1:8000` (ou `localhost`). HTTP em loopback local é permitido e esperado para desenvolvimento, sem exigir certificado TLS em `127.0.0.1`.
+  - `SECURE_SSL_REDIRECT = False` e `SECURE_HSTS_SECONDS = 0`.
+- **Produção pública (`ARION_ENV=production`):**
+  - HTTPS é obrigatório para todos os usuários externos.
+  - O Django reconhece o protocolo original via `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")`, habilita `SECURE_SSL_REDIRECT = True` para redirecionar requisições HTTP externas para HTTPS sem gerar loop no túnel e emite `Strict-Transport-Security: max-age=31536000` (sem `includeSubDomains` e sem `preload` automáticos).
+  - Na borda Cloudflare (`SSL/TLS -> Edge Certificates`), recomenda-se manter ativos **Always Use HTTPS** e **HSTS**.
 
-Cloudflare WAF, bot protection, rate limiting/login challenge, DNS, Tunnel health e Security Events exigem configuração/revisão na conta e podem depender do plano. Access é opção futura e não está ativado. O Tunnel é outbound; não abrir publicamente 8000, 3306, 80 ou 443. Backup MySQL completo fica fora do web root; restore exige parada manual de Web/Worker, backup explícito do destino e confirmação operacional.
+---
 
-Consulte [Implantação](..\02-arquitetura\implantacao-e-producao.md) para os comandos, transferência MySQL e roteiro manual. Os scripts preparam a máquina local, mas não criam Tunnel/DNS nem executam deploy remoto.
+## 4. Waitress / loopback
+
+- O supervisor de produção (`deploy/windows/run_process.py`) inicia o servidor WSGI **Waitress** escutando exclusivamente em loopback (`--listen=127.0.0.1:<porta>`).
+- O Waitress é iniciado com `--trusted-proxy=127.0.0.1`, `--trusted-proxy-count=1`, `--trusted-proxy-headers=x-forwarded-for x-forwarded-proto x-forwarded-host` e `--clear-untrusted-proxy-headers`.
+- Dessa forma, somente o agente local `cloudflared` (em `127.0.0.1`) pode fornecer cabeçalhos de encaminhamento (`X-Forwarded-Proto`, `X-Forwarded-For`), impedindo falsificação de cabeçalhos e mantendo `expose_tracebacks=False`.
+
+---
+
+## 5. Autenticação
+
+- Baseada no sistema nativo `django.contrib.auth` com hash **PBKDF2-SHA256** e validadores de complexidade (`UserAttributeSimilarityValidator`, `MinimumLengthValidator`, `CommonPasswordValidator`, `NumericPasswordValidator`).
+- **Prevenção contra enumeração de usuários:** A view e o formulário de login (`LoginForm` em `arion_geo/aplicativos/autenticacao/forms.py`) retornam a mesma mensagem genérica neutra para usuário inexistente, senha incorreta, conta inativa ou tentativa temporariamente bloqueada.
+- **Proteção contra Open Redirect:** O redirecionamento pós-login valida o parâmetro `next` com `url_has_allowed_host_and_scheme`, rejeitando URLs externas.
+
+---
+
+## 6. Sessões
+
+- **Rotação contra Session Fixation:** O identificador de sessão (`sessionid`) é rotacionado automaticamente após autenticação bem-sucedida e o hash de sessão é atualizado na troca de senha (`update_session_auth_hash`).
+- **Invalidação no Logout:** O endpoint `/logout/` aceita exclusivamente `POST` protegido por CSRF, destrói a sessão no servidor e limpa caches de navegação.
+- **Flags dos cookies:**
+  - `SESSION_COOKIE_HTTPONLY = True`
+  - `SESSION_COOKIE_SAMESITE = "Lax"`
+  - `SESSION_COOKIE_AGE = 28800` (8 horas)
+  - `SESSION_COOKIE_SECURE = True` e `CSRF_COOKIE_SECURE = True` (ativados automaticamente quando `ARION_ENV=production`).
+
+---
+
+## 7. CSRF
+
+- `CsrfViewMiddleware` está ativo globalmente em `MIDDLEWARE`.
+- **Zero uso de `csrf_exempt`:** Nenhum endpoint da aplicação desabilita a verificação CSRF.
+- Requisições AJAX/JSON enviam `X-CSRFToken`. Em produção (`ARION_ENV=production`), `CSRF_TRUSTED_ORIGINS` exige origens explícitas com esquema `https://`, sem wildcards, todas pertencentes a `ALLOWED_HOSTS`.
+- Falhas de CSRF são tratadas por `config.errors.csrf_failure`, que registra o evento de forma sanitizada (sem vazar tokens ou credenciais embutidas em URLs).
+
+---
+
+## 8. Rate limiting
+
+- O login possui proteção local baseada no cache do Django (`arion_geo/aplicativos/autenticacao/throttle.py`), sem dependência externa adicional:
+  - **Por par `(IP normalizado, usuário normalizado)`:** bloqueio temporário após `5` falhas consecutivas (`ARION_LOGIN_MAX_FAILURES = 5`) na janela de `900` segundos / 15 minutos (`ARION_LOGIN_THROTTLE_SECONDS = 900`).
+  - **Por IP de origem:** bloqueio temporário após `20` falhas (`ARION_LOGIN_MAX_IP_FAILURES = 20`) na mesma janela de 15 minutos.
+- Enquanto o bloqueio temporário estiver ativo, `LoginForm.clean()` interrompe a tentativa antes de acionar `authenticate()` e retorna a mesma mensagem genérica de falha de login.
+- Um login bem-sucedido limpa imediatamente os contadores associados via `clear_login_failures()`.
+- O IP do cliente só aceita `HTTP_CF_CONNECTING_IP` quando `ARION_PRODUCTION=True` e a conexão TCP imediata provém do loopback (`127.0.0.1` / `::1`).
+
+---
+
+## 9. RBAC
+
+- O controle funcional é implementado com **Django Groups** e **Permissions** gerenciados em `arion_geo/aplicativos/configuracoes/access_control.py` e aplicados no backend por `@login_required` e `@access_required("<permissão>")`.
+- Perfis operacionais padrão:
+  - **Administrador do Sistema**
+  - **Gestor**
+  - **Analista NOC**
+  - **Consulta / Auditoria**
+- **Proteção anti-lockout administrativo:** As views de edição de usuários e grupos impedem a desativação ou remoção de permissões do último Administrador do Sistema ativo.
+- **Proteção contra Mass Assignment:** Todos os formulários (`AccountForm`, `UserCreateForm`, `UserUpdateForm`, `AccessGroupForm`) declaram explicitamente os campos permitidos, ignorando parâmetros como `is_superuser` ou `is_staff`.
+
+---
+
+## 10. Data Scope
+
+- O **Data Scope** (`GroupDataScope` e `DataScopeService` em `arion_geo/aplicativos/configuracoes/data_scope.py`) define quais dados operacionais cada grupo pode visualizar:
+  - Modo `ALL`: visão global da operação.
+  - Modo `CUSTOM`: interseção restrita às **Operadoras permitidas** (`allowed_operators`) e **Projetos permitidos** (`allowed_projects`).
+- **Aplicação obrigatória no backend:** O escopo é aplicado ao `QuerySet` antes de buscas, filtros de query string, cálculo de KPIs, agregações geográficas do Mapa, listagens paginadas, detalhes de itens e exportações CSV/XLSX/PDF.
+- **Proteção contra IDOR:** Tentativas de acesso direto por ID/CI a links ou recursos fora do escopo do usuário (ou a conversas do ARI pertencentes a outro usuário) retornam `404 Not Found`.
+
+---
+
+## 11. Banco MySQL
+
+- Em produção e desenvolvimento local com espelhos reais, o ARION OPS utiliza **MySQL 8.x** conectado em loopback (`127.0.0.1:3306`).
+- **Princípio de menor privilégio:** A aplicação utiliza a conta dedicada `arion@localhost` (bloqueando uso de `root` em `ARION_ENV=production`), com privilégios restritos exclusivamente ao schema `arion_ops.*` e sem `SUPER`, `FILE` ou `GRANT OPTION`.
+- **Parametrização SQL:** O projeto utiliza o ORM do Django e queries parametrizadas (`%s`), sem uso de `.raw()`, `.extra()` ou `RawSQL`.
+- **Hardening de rede local:** Recomenda-se manter `bind-address=127.0.0.1` e `mysqlx-bind-address=127.0.0.1` no `my.ini`, verificável de forma somente leitura pelo script `deploy/windows/hardening-mysql.ps1`.
+
+---
+
+## 12. OTRS
+
+- O cliente `OTRSReadOnlyClient` (`arion_geo/aplicativos/integracoes/clients/otrs.py`) impõe múltiplas barreiras técnicas de somente leitura:
+  1. Executa `SET SESSION TRANSACTION READ ONLY` imediatamente ao abrir a conexão;
+  2. Permite apenas instruções iniciadas por `SELECT` (ou `SHOW`/`DESCRIBE` internos), rejeitando `;` e qualquer palavra-chave de escrita ou efeito colateral (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `GRANT`, `INTO OUTFILE`, `SLEEP`, `GET_LOCK`);
+  3. Valida nomes de tabelas e colunas contra o catálogo descoberto em `information_schema` e regex estrita `^[A-Za-z0-9_$]+$`;
+  4. Bloqueia e mascara colunas/tabelas sensíveis (`pw`, `password`, `token`, `secret`, `session`, `customer_user`, `article`, `a_body`, `internal_note`).
+- **Proteção preventiva de TLS (*fail-closed*):** Para conexões em loopback (`127.0.0.1`, `localhost`, `::1`), o modo local é permitido. Para qualquer host remoto, `OTRSReadOnlyClient` e `OTRSConfigurationForm` exigem `use_tls=True` com validação de certificado (`ssl.CERT_REQUIRED`, TLS 1.2+), recusando conexões remotas em texto claro (`OTRSTLSRequiredError`).
+
+---
+
+## 13. CMDB
+
+- O cliente `CMDBClient` (`arion_geo/aplicativos/integracoes/clients/cmdb.py`) e o formulário `CMDBConfigurationForm` (`arion_geo/aplicativos/integracoes/forms.py`) exigem obrigatoriamente URLs com esquema `https://` e hostname válido, rejeitando `http://`, credenciais embutidas na URL, query strings ou fragmentos.
+- A validação de certificado TLS (`verify_tls=True` por padrão) utiliza `ssl.create_default_context()`.
+- O sanitizador `CMDBClient.sanitize_item()` filtra atributos sensíveis (`Password`, `PortalPassword`, `SenhaPPOE`, `UsuarioPortalOperadora`, `SessionCookie`) antes de qualquer exibição diagnóstica.
+- As senhas de integração são armazenadas cifradas (`secret_ciphertext`) e nunca são reexibidas na interface (`PasswordInput(render_value=False)`).
+
+---
+
+## 14. Exportações
+
+- **Prevenção contra Formula Injection (CSV / XLSX):** Todos os módulos de exportação (`arion_geo/aplicativos/base_links/views.py`, `arion_geo/aplicativos/painel/views.py`, `arion_geo/aplicativos/rankings/exports.py` e `arion_geo/aplicativos/relatorios/services/exports.py`) neutralizam células textuais que iniciem (mesmo após espaços, tabulações ou quebras de linha via `.lstrip()`) com `=`, `+`, `-` ou `@`, prefixando um apóstrofo (`'`).
+- **Prevenção contra injeção em PDF:** A geração de relatórios PDF via ReportLab (`arion_geo/aplicativos/rankings/exports.py`) escapa todos os textos dinâmicos com `xml.sax.saxutils.escape` antes de construir objetos `Paragraph`.
+
+---
+
+## 15. Uploads
+
+- O módulo de anexos do ARI (`arion_geo/aplicativos/ari/file_security.py`) e o handler `AriAttachmentQuotaHandler` (`arion_geo/config/upload_limits.py`) aplicam:
+  - Limites de tamanho por arquivo (`20 MB`), quantidade máxima por mensagem (`5` anexos) e cota total (`40 MB`);
+  - Whitelist estrita de extensões (`.pdf`, `.xlsx`, `.csv`, `.txt`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`), bloqueando `.svg`, `.html`, `.exe`, `.bat`, `.ps1`, `.js` e duplas extensões suspeitas (como `.pdf.exe`);
+  - Validação de assinatura binária (*magic bytes* `%PDF-`, estrutura ZIP/OOXML `[Content_Types].xml`, cabeçalhos PNG/JPEG/GIF/WEBP);
+  - Sanitização de nome de arquivo contra *Path Traversal* (`PurePosixPath` + `get_valid_filename`);
+  - Armazenamento em diretório privado (`MEDIA_ROOT = var/private_media`), servido exclusivamente por views autenticadas que verificam a titularidade da conversa e enviam `X-Content-Type-Options: nosniff`.
+
+---
+
+## 16. PWA / Cache
+
+- O middleware `ProductionSecurityHeadersMiddleware` (`arion_geo/config/middleware.py`) define `Cache-Control: private, no-store` em todas as páginas HTML autenticadas e respostas JSON da API.
+- O Service Worker (`arion_geo/static/pwa/service-worker.js`) armazena em cache apenas recursos estáticos sob `/static/` e o shell offline neutro (`offline.html`), nunca persistindo dados operacionais autenticados para consulta offline.
+- `localStorage` e `sessionStorage` são utilizados exclusivamente para preferências visuais de interface (tema claro/escuro, recolhimento de painéis e aviso de versão PWA), sem armazenar tokens ou segredos.
+
+---
+
+## 17. Headers
+
+Todas as respostas da aplicação incluem cabeçalhos defensivos padronizados:
+
+- `X-Frame-Options: DENY`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()`
+- `X-Request-ID: REQ-<hex>` (correlação de diagnóstico sem exposição de stack trace)
+- `Strict-Transport-Security: max-age=31536000` (em produção sob HTTPS)
+- `Content-Security-Policy-Report-Only` nas páginas HTML globais e `Content-Security-Policy: sandbox` estrito na visualização de artefatos HTML do ARI.
+
+---
+
+## 18. Logging e auditoria
+
+- **Auditoria administrativa (`AuditService` em `arion_geo/aplicativos/auditoria/services.py`):** Registra alterações de conta, senha, usuários, grupos, permissões, escopos de dados e integrações, sanitizando recursivamente chaves sensíveis (`password`, `senha`, `token`, `secret`, `cookie`, `credential`, `authorization`, `sessionid`, `apikey`, `privatekey`).
+- **Logs de processo e erros (`deploy/windows/run_process.py` e `arion_geo/config/errors.py`):** Filtram variáveis sensíveis do ambiente (`<redacted>`) e substituem falhas `4xx`/`5xx` por páginas e payloads JSON padronizados sem expor stack traces, caminhos internos ou SQL ao usuário.
+
+---
+
+## 19. Testes de segurança
+
+O projeto mantém uma baseline executável de testes de regressão de segurança em `arion_geo/config/test_security.py`, complementada por `arion_geo/aplicativos/integracoes/test_clients.py` e `arion_geo/aplicativos/base_links/tests.py`.
+
+Para executar a suíte de segurança e a verificação de configuração local:
+
+```powershell
+.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py test config.test_security aplicativos.integracoes.test_clients aplicativos.base_links.tests.SpreadsheetExportSafetyTests
+.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py auditar_seguranca
+```
+
+---
+
+## 20. Processo de release
+
+Antes de cada fechamento de versão e publicação em produção, devem ser executados:
+
+1. `.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py check`
+2. `.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py makemigrations --check --dry-run`
+3. `.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py auditar_seguranca`
+4. `.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py test config.test_security aplicativos.integracoes.test_clients aplicativos.base_links.tests.SpreadsheetExportSafetyTests`
+5. `powershell -ExecutionPolicy Bypass -File .\deploy\windows\production-check.ps1` (no host de produção com `.env` de produção e `collectstatic` atualizado)
+6. Registro do manifesto e certificado técnico da release em `docs/03-seguranca-e-qualidade/auditorias/`.
+
+---
+
+## 21. Auditorias executadas
+
+### V1.3.0 — 02/11/2026
+
+- **Tipo:** White-box + testes ativos controlados em ambiente local + validação passiva de produção.
+- **Commit auditado:** `8cf5fb883bf946bf78b40cc0dcf71a92421e1652` (`feature/central-relatorios`)
+- **Resultado:** Segurança validada no escopo e na versão avaliados.
+- **Críticos abertos:** `0`
+- **Altos abertos:** `0`
+- **Médios abertos no código:** `0`
+- **Baixos abertos no código:** `0` (`1` item de infraestrutura local mitigado e documentado)
+- **Principais correções aplicadas e retestadas:**
+  - Neutralização de *Formula Injection* em todas as exportações CSV/XLSX (`SEC-001`);
+  - Exigência estrita de HTTPS no cliente e formulário da CMDB (`SEC-002`);
+  - Hardening de `SECURE_PROXY_SSL_HEADER`, `SECURE_SSL_REDIRECT=True`, `SECURE_HSTS_SECONDS=31536000` e `--trusted-proxy=127.0.0.1` no Waitress (`SEC-003` / `SEC-007`);
+  - Implementação de *rate limiting* local de login via cache com mensagens genéricas (`SEC-004`);
+  - Validação preventiva *fail-closed* de TLS para conexões remotas do OTRS (`SEC-005`);
+  - Script de diagnóstico somente leitura para hardening do MySQL local (`deploy/windows/hardening-mysql.ps1`, `SEC-006`).
+- **Artefatos da auditoria:**
+  - Relatório completo: `docs/03-seguranca-e-qualidade/relatorios/relatorio-de-seguranca-v1.md` e `.pdf`
+  - Baseline versionada: `docs/03-seguranca-e-qualidade/auditorias/auditoria-seguranca-v1.3.0-2026-11-02.md`
+  - Manifesto legível por máquina: `docs/03-seguranca-e-qualidade/auditorias/manifesto-seguranca-v1.3.0.json`

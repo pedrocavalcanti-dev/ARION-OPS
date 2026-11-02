@@ -1,0 +1,34 @@
+{
+  "produto": "ARION OPS",
+  "versao": "1.3.0",
+  "data": "2026-11-02",
+  "escopo": "NOC ATACADO",
+  "empresa": "ARION Serviços de Telecomunicações",
+  "responsavel": "Pedro Cavalcanti",
+  "git_branch": "feature/central-relatorios",
+  "git_commit": "8cf5fb883bf946bf78b40cc0dcf71a92421e1652",
+  "python_version": "3.12.10",
+  "django_version": "5.2.18",
+  "mysql_version": "8.4.7",
+  "waitress_version": "3.0.2",
+  "sistema_operacional": "Windows (win32)",
+  "metodologia": [
+    "white-box",
+    "testes ativos locais",
+    "validação passiva de produção"
+  ],
+  "resultado": {
+    "critico": 0,
+    "alto": 0,
+    "medio": 0,
+    "baixo": 0,
+    "mitigado_infraestrutura": 1,
+    "informativo_aceito": 1,
+    "corrigidos_na_auditoria": 6
+  },
+  "pendencias_infraestrutura_externa": [
+    "Ativar Always Use HTTPS e HSTS no painel Cloudflare (SSL/TLS -> Edge Certificates) e reiniciar o serviço Waitress em janela de deploy para aplicar os novos parâmetros de proxy confiável."
+  ],
+  "status": "VALIDADO_NO_ESCOPO_TESTADO",
+  "declaracao_institucional": "Segurança validada no escopo e na versão avaliados."
+}

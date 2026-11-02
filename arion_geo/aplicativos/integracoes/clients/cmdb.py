@@ -34,7 +34,7 @@ class CMDBClient:
 
     def __init__(self, *, base_url, username, password, timeout=15, verify_tls=True, batch_size=50, opener=None):
         parsed = urlsplit((base_url or "").strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if parsed.scheme.casefold() != "https" or not parsed.netloc or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise IntegrationNotConfigured()
         if not username or not password:
             raise IntegrationNotConfigured()

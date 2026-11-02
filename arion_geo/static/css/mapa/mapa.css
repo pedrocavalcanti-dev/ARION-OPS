@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Mapa Geográfico — Arion Atacado Geo
+   Mapa Geográfico — ARION OPS
    ========================================================================== */
 .geo-body { overflow: hidden; }
 .geo-body .main-content { height:calc(100dvh - var(--arion-global-header-height,60px)); min-height:0; overflow:hidden; }

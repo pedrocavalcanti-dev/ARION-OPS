@@ -14,7 +14,7 @@ DOCUMENTS = {
     # title, description, category, Markdown path, explicit search terms
     "projeto": ("Projeto", "Objetivo, público e limites do ARION OPS", "Começar", "01-projeto/visao-geral.md", "produto NOC Atacado operação inteligência operacional"),
     "estado-atual": ("Estado Atual", "Matriz verificável de módulos, fontes e capacidades", "Começar", "01-projeto/estado-atual.md", "status feature matrix ativo backlog snapshot"),
-    "roadmap": ("Roadmap", "Itens concluídos na versão 1.2.0 e evolução futura", "Começar", "01-projeto/roadmap.md", "release 1.2.0 identidade ARION OPS Cockpit exposição incidência Top 10 provedores Links chamados ANOP ETIT"),
+    "roadmap": ("Roadmap", "Itens concluídos na versão 1.3.0 e evolução futura", "Começar", "01-projeto/roadmap.md", "release 1.3.0 1.2.0 identidade ARION OPS Cockpit exposição incidência Top 10 provedores Links chamados ANOP ETIT"),
     "arquitetura": ("Arquitetura", "Aplicativos, camadas, fluxos e relações entre fontes", "Começar", "02-arquitetura/arquitetura.md", "apps services views templates worker desenho fluxo"),
     "fontes-de-dados": ("Fontes de Dados", "Fontes oficiais, mirrors, escopo e freshness", "Começar", "02-arquitetura/fontes-de-dados.md", "CMDB OTRS MySQL espelho mirror read-only Data Scope"),
     "autenticacao": ("Autenticação e Sessão", "Login, sessão Django e proteção de rotas", "Funcionalidades", "05-funcionalidades/autenticacao.md", "login logout sessão CSRF senha Django"),
@@ -37,7 +37,10 @@ DOCUMENTS = {
     "usuarios-grupos-escopos": ("Usuários, Grupos e Escopos", "RBAC Django e Data Scope aplicado no backend", "Administração", "05-funcionalidades/usuarios-grupos-e-escopos.md", "RBAC permissions groups Data Scope ALL CUSTOM Operadora Projeto"),
     "auditoria": ("Auditoria", "Eventos administrativos e sanitização", "Administração", "05-funcionalidades/auditoria.md", "AuditEvent AuditService histórico metadata sanitização"),
     "tratamento-global-erros": ("Tratamento Global de Erros", "Handlers HTTP, APIs e diagnóstico", "Administração", "05-funcionalidades/tratamento-global-de-erros.md", "500 404 JSON CSRF middleware logging"),
-    "seguranca": ("Segurança", "Acesso, escopo, credenciais e limites", "Segurança e operação", "03-seguranca-e-qualidade/seguranca.md", "security segredo credenciais read-only autorização sanitização"),
+    "validacao-de-seguranca": ("Validação de Segurança", "Resumo executivo da avaliação de segurança da V1", "Segurança e operação", "03-seguranca-e-qualidade/validacao-de-seguranca.md", "validação segurança executivo V1.3.0 controles aprovados RBAC Data Scope CSRF"),
+    "seguranca": ("Arquitetura de Segurança", "Acesso, escopo, credenciais e limites", "Segurança e operação", "03-seguranca-e-qualidade/seguranca.md", "security segredo credenciais read-only autorização sanitização"),
+    "auditoria-v1-3-0": ("Auditoria V1.3.0", "Baseline de segurança versionada da release 1.3.0", "Segurança e operação", "03-seguranca-e-qualidade/auditorias/auditoria-seguranca-v1.3.0-2026-11-02.md", "auditoria baseline 1.3.0 matriz vetores validado"),
+    "relatorio-seguranca-v1": ("Relatório Técnico", "Relatório completo da avaliação defensiva da V1", "Segurança e operação", "03-seguranca-e-qualidade/relatorios/relatorio-de-seguranca-v1.md", "relatório técnico pentest achados SEC-001 retestes"),
     "testes-e-qa": ("Testes e QA", "Suítes, verificações e troubleshooting de testes", "Segurança e operação", "03-seguranca-e-qualidade/testes-e-qa.md", "test pytest Django check makemigrations QA SQLite MySQL"),
     "implantacao-e-producao": ("Implantação e Produção", "Configuração web, banco e worker", "Segurança e operação", "02-arquitetura/implantacao-e-producao.md", "deploy produção Windows MySQL worker DPAPI"),
     "diretrizes-de-interface": ("Diretrizes de Interface", "Tokens, componentes, temas e acessibilidade", "Padrões", "04-interface/diretrizes-de-interface.md", "CSS tema claro escuro responsividade acessibilidade"),
@@ -79,12 +82,12 @@ def _inline(text):
     badge_labels = {
         "OTRS", "CMDB", "ARION", "MIRROR", "RAW", "DERIVADO", "READ-ONLY",
         "LOCAL", "REMOTE", "LEGACY", "OPERATIONAL", "RECONSTRUÍVEL",
-        "PERSISTENTE", "SEGURANÇA",
+        "PERSISTENTE", "SEGURANÇA", "VALIDADO", "VALIDADO NO ESCOPO TESTADO",
     }
     badges = {}
 
     def stash_badge(match):
-        label = match.group(1).upper()
+        label = match.group(1).strip().upper()
         if label not in badge_labels:
             return match.group(0)
         token = f"DOCSBADGETOKEN{len(badges)}"
@@ -97,6 +100,8 @@ def _inline(text):
             "RECONSTRUÍVEL": "reconstructible",
             "PERSISTENTE": "persistent",
             "SEGURANÇA": "security",
+            "VALIDADO": "validated",
+            "VALIDADO NO ESCOPO TESTADO": "validated",
             "ARION": "local",
             "LOCAL": "local",
             "OPERATIONAL": "local",
@@ -104,7 +109,7 @@ def _inline(text):
         badges[token] = f'<span class="docs-badge docs-badge--{tone}">{label}</span>'
         return token
 
-    text = re.sub(r"\{\{badge:([\w-]+)\}\}", stash_badge, text)
+    text = re.sub(r"\{\{badge:([\w -]+)\}\}", stash_badge, text)
     escaped = html.escape(text, quote=False)
     escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
@@ -218,9 +223,9 @@ def render_markdown(source):
             while i < len(lines) and lines[i].startswith(">"):
                 quote.append(_inline(lines[i].removeprefix("> ").removeprefix(">")))
                 i += 1
-            label = re.match(r"<strong>(Fonte da verdade|Informação|Atenção|Importante|Segurança|Somente leitura|Backlog):</strong>", quote[0], re.I) if quote else None
+            label = re.match(r"<strong>(Fonte da verdade|Informação|Atenção|Importante|Segurança Validada|Segurança|Somente leitura|Backlog):</strong>", quote[0], re.I) if quote else None
             if label:
-                kind = {"fonte da verdade": "source-of-truth", "informação": "info", "atenção": "attention", "importante": "important", "segurança": "security", "somente leitura": "readonly", "backlog": "backlog"}[label.group(1).casefold()]
+                kind = {"fonte da verdade": "source-of-truth", "informação": "info", "atenção": "attention", "importante": "important", "segurança validada": "validated", "segurança": "security", "somente leitura": "readonly", "backlog": "backlog"}[label.group(1).casefold()]
                 output.append(f'<aside class="docs-callout docs-callout--{kind}" role="note">' + "".join(f"<p>{part}</p>" for part in quote if part) + "</aside>")
             else:
                 output.append("<blockquote>" + "".join(f"<p>{part}</p>" for part in quote if part) + "</blockquote>")

@@ -13,14 +13,18 @@ from aplicativos.configuracoes.data_scope import DataScopeService
 DUPLICATE_CLOSING_REASONS = ("Duplicado", "Chamado duplicado", "Ticket duplicado", "Duplicate")
 
 
-def quality_ticket_sets(user, *, scope_links=None, scoped_orders=None, start=None, end=None):
+def quality_ticket_sets(
+    user, *, scope_links=None, scoped_orders=None, base_tickets=None, start=None, end=None,
+):
     """Return mirrored tickets and the established operationally valid subset."""
     scope_links = scope_links if scope_links is not None else DataScopeService.filter_queryset(
         user,
         CMDBLinkMirror.objects.filter(is_present_in_source=True).select_related("operator"),
     )
     scoped_orders = scoped_orders if scoped_orders is not None else QualityDataScopeService.orders_for(user)
-    tickets = TicketQueryService.base(user, links=scope_links)
+    # Internal callers may reuse a base queryset that already passed through
+    # TicketQueryService, avoiding a second Data Scope resolution in one request.
+    tickets = base_tickets if base_tickets is not None else TicketQueryService.base(user, links=scope_links)
     if start is not None:
         tickets = tickets.filter(source_created_at__gte=start)
     if end is not None:

@@ -62,7 +62,6 @@
         <a class="user-menu-link" href="{% url 'configuracoes:account' %}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20v-1a7 7 0 0 1 14 0v1"/></svg>Minha conta</a>
         <a class="user-menu-link" href="{% url 'configuracoes:index' %}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 13v-2l2-1-2-4-2 1-2-1V4h-5v2L8 7 6 6l-2 4 2 1v2l-2 1 2 4 2-1 2 1v2h5v-2l2-1 2 1 2-4z"/></svg>Configurações</a>
         <a class="user-menu-link" href="{% url 'configuracoes:about' %}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg>Sobre o ARION OPS</a>
-        {% if perms.relatorios.view_reports %}<a class="user-menu-link" href="{% url 'relatorios:dashboard' %}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V12M10 19V7M16 19V4M22 19H2"/></svg>Relatórios</a>{% endif %}
         <a class="user-menu-link" href="{% url 'configuracoes:documentation-releases' %}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg>Atualiza&ccedil;&otilde;es e vers&otilde;es</a>
         <div class="menu-divider" role="presentation"></div>
         <div class="menu-section">

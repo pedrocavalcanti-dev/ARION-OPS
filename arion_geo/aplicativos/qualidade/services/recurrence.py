@@ -101,7 +101,9 @@ def build_occurrence_episodes(occurrences, *, now=None, window_days=QUALITY_RREI
     return tuple(result)
 
 
-def build_quality_recurrence_analysis(user, *, scope_links=None, scoped_orders=None, now=None):
+def build_quality_recurrence_analysis(
+    user, *, scope_links=None, scoped_orders=None, base_tickets=None, now=None,
+):
     """Load valid mirror tickets once and derive per-circuit episode context.
 
     The mirror is the source for operational occurrences. QualityOccurrence records
@@ -114,7 +116,8 @@ def build_quality_recurrence_analysis(user, *, scope_links=None, scoped_orders=N
     )
     scoped_orders = scoped_orders if scoped_orders is not None else QualityDataScopeService.orders_for(user)
     ticket_sets = quality_ticket_sets(
-        user, scope_links=scope_links, scoped_orders=scoped_orders, end=now,
+        user, scope_links=scope_links, scoped_orders=scoped_orders,
+        base_tickets=base_tickets, end=now,
     )
     valid_tickets = ticket_sets["valid_tickets"].exclude(source_created_at__isnull=True)
     relations = OTRSTicketConfigItem.objects.filter(

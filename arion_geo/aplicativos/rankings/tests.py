@@ -71,7 +71,7 @@ class RankingsMirrorTests(TestCase):
         self.assertEqual(response.context["tickets_valid"], 2)
         self.assertEqual(response.context["tickets_valid"], cockpit["value"])
         self.assertEqual(response.context["providers"][0]["tickets"], 2)
-        self.assertContains(response, "Índice ARION")
+        self.assertContains(response, "Indicador operacional")
 
     def test_canceled_and_unknown_do_not_change_ranking_drawer_history_or_exports(self):
         now = datetime(2026, 10, 25, 12, tzinfo=datetime_timezone.utc)
@@ -236,7 +236,7 @@ class RankingsMirrorTests(TestCase):
         self.assertEqual(provider["risk_label"], "Sem ocorrências")
         self.assertTrue(provider["no_occurrence"])
 
-    def test_active_exposure_excludes_canceled_maintenance_and_unknown_states(self):
+    def test_current_inventory_exposure_includes_every_deployment_state(self):
         extra_active = CMDBLinkMirror.objects.create(
             source_config_item_id="ci-active-2", operator=self.operator, deployment_state="operational",
         )
@@ -249,12 +249,15 @@ class RankingsMirrorTests(TestCase):
         )
         provider = next(row for row in data["providers"] if row["id"] == self.operator.pk)
         self.assertEqual(provider["links_total"], 6)
-        self.assertEqual(provider["links_active"], 2)
-        self.assertEqual(data["links_active"], 2)
+        self.assertEqual(provider["links_active"], 6)
+        self.assertEqual(data["links_active"], 6)
+        self.assertEqual(data["links_total"], 6)
+        self.assertEqual(data["deployment_active_links_total"], 2)
+        self.assertEqual(provider["deployment_active_links"], 2)
         self.assertEqual(data["active_provider_count"], 1)
         self.assertGreater(extra_active.pk, 0)
 
-    def test_exposure_incidence_is_per_100_active_links_and_zero_is_undefined(self):
+    def test_exposure_incidence_is_per_100_current_inventory_links(self):
         provider_a = CMDBOperatorMirror.objects.create(source_config_item_id="op-exposure-a", name="Provider A")
         provider_a_link = CMDBLinkMirror.objects.create(
             source_config_item_id="ci-exposure-a", operator=provider_a, deployment_state="Operacional",
@@ -287,8 +290,9 @@ class RankingsMirrorTests(TestCase):
         providers = {row["id"]: row for row in data["providers"]}
         self.assertEqual(providers[provider_a.pk]["tickets_per_100_active_links"], 20)
         self.assertEqual(providers[provider_b.pk]["tickets_per_100_active_links"], 100)
-        self.assertIsNone(providers[provider_zero.pk]["tickets_per_100_active_links"])
-        self.assertEqual(providers[provider_zero.pk]["links_active"], 0)
+        self.assertEqual(providers[provider_zero.pk]["tickets_per_100_active_links"], 100)
+        self.assertEqual(providers[provider_zero.pk]["links_active"], 1)
+        self.assertEqual(providers[provider_zero.pk]["deployment_active_links"], 0)
 
     def test_average_resolution_uses_terminal_tickets_resolved_in_period(self):
         old_created = datetime(2026, 9, 29, 12, tzinfo=datetime_timezone.utc)
@@ -319,7 +323,7 @@ class RankingsMirrorTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["filters"]["ranking_view"], "links")
         self.assertEqual(response.context["filters"]["top"], "20")
-        self.assertEqual(response.context["page_obj"].paginator.count, 21)
+        self.assertEqual(response.context["page_obj"].paginator.count, 22)
         self.assertEqual(len(response.context["page_obj"].object_list), 20)
         filtered = self.client.get(reverse("rankings:index"), {
             "view": "custom", "date_from": "2026-10-01", "date_to": "2026-10-24",
@@ -551,11 +555,12 @@ class RankingsMirrorTests(TestCase):
         self.assertEqual(workbook["Links"].max_row, 2)
         self.assertEqual(workbook["Tickets"].max_row, 2)
         ranking_headers = next(workbook["Ranking"].iter_rows(values_only=True))
-        self.assertIn("Índice ARION", ranking_headers)
+        self.assertIn("Indicador operacional", ranking_headers)
         self.assertNotIn("V2", " ".join(str(value) for value in ranking_headers))
         self.assertIn("Impacto no NOC /30", ranking_headers)
         self.assertIn("Chamados / link CMDB", ranking_headers)
-        self.assertIn("Chamados / 100 ativos", ranking_headers)
+        self.assertIn("Chamados / 100 links", ranking_headers)
+        self.assertIn("Em operação", ranking_headers)
         self.assertNotIn("Tickets / 100 links", ranking_headers)
         values = [cell for row in workbook["Links"].iter_rows(values_only=True) for cell in row]
         self.assertNotIn("ci-export-out", values)
@@ -572,6 +577,30 @@ class RankingsMirrorTests(TestCase):
         self.assertEqual(data["links_total"], 0)
         self.assertEqual(data["links_active"], 0)
         self.assertEqual(data["providers"], [])
+
+    def test_inventory_exposure_groups_provider_name_case_variants(self):
+        duplicate = CMDBOperatorMirror.objects.create(source_config_item_id="op-name-duplicate", name="operadora real")
+        duplicate_link = CMDBLinkMirror.objects.create(
+            source_config_item_id="ci-name-duplicate", operator=duplicate, deployment_state="Cancelado",
+        )
+        other_provider = CMDBOperatorMirror.objects.create(source_config_item_id="op-name-other", name="Outra operadora")
+        CMDBLinkMirror.objects.create(source_config_item_id="ci-name-other", operator=other_provider)
+        CMDBLinkMirror.objects.create(source_config_item_id="ci-name-unresolved", isp_raw="", operator=None)
+        self.make_ticket(links=[duplicate_link])
+
+        data = RankingService.build(
+            self.user, date_from=datetime(2026, 10, 1).date(), date_to=datetime(2026, 10, 24).date(),
+        )
+
+        provider = next(row for row in data["providers"] if row["name"].casefold() == "operadora real")
+        self.assertEqual(provider["links_active"], 2)
+        self.assertEqual(provider["links_total"], 2)
+        self.assertEqual(provider["tickets"], 1)
+        self.assertEqual(data["active_provider_count"], 2)
+        self.assertEqual(data["links_total"], 4)
+        self.assertEqual(data["top10_links"], 3)
+        self.assertEqual(data["top10_link_concentration"], 75)
+        self.assertEqual(data["active_links_unidentified"], 1)
 
 
 class RankingScoreTests(SimpleTestCase):

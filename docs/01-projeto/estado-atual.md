@@ -2,7 +2,7 @@
 
 Revisão estrutural em 02/11/2026. A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
 
-Versão interna registrada em `docs/08-releases/releases.json`: **1.2.0**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
+Versão interna registrada em `docs/08-releases/releases.json`: **1.3.0**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
 
 ## Matriz de módulos (IMPLEMENTADO)
 

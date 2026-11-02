@@ -58,7 +58,6 @@
     <section class="mobile-navigation__section">
       <h2>Sistema</h2>
       <nav aria-label="Sistema">
-        {% if perms.relatorios.view_reports %}<a href="{% url 'relatorios:dashboard' %}"{% if request.resolver_match.app_name == 'relatorios' %} aria-current="page"{% endif %}>Relatórios</a>{% endif %}
         <a href="{% url 'configuracoes:documentation-releases' %}">Atualizações e versões</a>
       </nav>
     </section>

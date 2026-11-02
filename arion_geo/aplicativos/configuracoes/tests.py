@@ -132,9 +132,13 @@ class AccountSettingsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "ARION OPS")
         self.assertContains(response, "Plataforma Operacional — NOC Atacado")
-        self.assertContains(response, "Desenvolvido por")
+        self.assertContains(response, "Concepção e desenvolvimento")
         self.assertContains(response, "Pedro Cavalcanti")
-        self.assertContains(response, "Versão 1.2.0")
+        self.assertContains(response, "Versão 1.3.0")
+        self.assertContains(response, "Django · MySQL · JavaScript · ECharts · Mapbox")
+        self.assertContains(response, "Controle de acesso · Data Scope · auditoria · espelhos locais OTRS/CMDB")
+        self.assertContains(response, "ARION Serviços de Telecomunicações")
+        self.assertContains(response, "NOC Atacado")
 
     def test_settings_landing_shows_only_allowed_shortcuts_and_all_links_resolve(self):
         self.client.force_login(self.user)

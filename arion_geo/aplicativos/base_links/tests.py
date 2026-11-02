@@ -2,7 +2,7 @@ from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
@@ -17,6 +17,23 @@ from .models import CMDBImport, CMDBLink, CMDBLinkChange, Operadora, Projeto, Pr
 from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem
 from .services.cmdb.excel_provider import ExcelCMDBProvider, FIELD_MAP, SENSITIVE_HEADERS, normalize_provider
 from .services.cmdb.sync import inspect_items, sync_items
+
+
+class SpreadsheetExportSafetyTests(SimpleTestCase):
+    def test_base_csv_values_neutralize_formula_prefixes_after_whitespace(self):
+        from .views import _safe_csv_value
+
+        self.assertEqual(_safe_csv_value("=1+1"), "'=1+1")
+        self.assertEqual(_safe_csv_value("  @SUM(1,1)"), "'  @SUM(1,1)")
+        self.assertEqual(_safe_csv_value("\t-1+1"), "'\t-1+1")
+        self.assertEqual(_safe_csv_value("Operadora segura"), "Operadora segura")
+
+    def test_cockpit_spreadsheet_values_neutralize_formula_prefixes_after_whitespace(self):
+        from aplicativos.painel.views import _safe_spreadsheet_text
+
+        self.assertEqual(_safe_spreadsheet_text("  =1+1"), "'  =1+1")
+        self.assertEqual(_safe_spreadsheet_text("\t@SUM(1,1)"), "'\t@SUM(1,1)")
+        self.assertEqual(_safe_spreadsheet_text("Operadora segura"), "Operadora segura")
 
 
 def workbook_bytes(rows=None, headers=None):

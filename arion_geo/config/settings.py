@@ -516,6 +516,10 @@ LOGOUT_REDIRECT_URL = "autenticacao:login"
 
 CSRF_FAILURE_VIEW = "config.errors.csrf_failure"
 
+ARION_LOGIN_MAX_FAILURES = 5
+ARION_LOGIN_MAX_IP_FAILURES = 20
+ARION_LOGIN_THROTTLE_SECONDS = 900
+
 
 # =============================================================================
 # LOGGING
@@ -703,19 +707,21 @@ if ARION_PRODUCTION:
     #      ↓
     # http://127.0.0.1:8100
     #
-    # Portanto NÃO devemos forçar HTTP -> HTTPS no origin local.
-    # Caso contrário o cloudflared entrega HTTP ao Django, o Django
-    # responde HTTPS redirect e ocorre ERR_TOO_MANY_REDIRECTS.
+    # O Waitress em 127.0.0.1 confia nos cabeçalhos X-Forwarded-Proto
+    # entregues pelo agente local cloudflared (--trusted-proxy=127.0.0.1).
+    # Assim, requisições HTTPS chegam com HTTP_X_FORWARDED_PROTO=https
+    # sem loop de redirecionamento, e requisições HTTP são redirecionadas
+    # para HTTPS.
 
     SECURE_PROXY_SSL_HEADER = (
         "HTTP_X_FORWARDED_PROTO",
         "https",
     )
 
-    # IMPORTANTE:
-    # HTTPS público é terminado/garantido pela Cloudflare.
-    # O origin Waitress permanece HTTP apenas em 127.0.0.1.
-    SECURE_SSL_REDIRECT = False
+    SECURE_SSL_REDIRECT = env_bool(
+        "DJANGO_SECURE_SSL_REDIRECT",
+        True,
+    )
 
     # Cookies continuam restritos a HTTPS do lado do navegador.
     SESSION_COOKIE_SECURE = True
@@ -730,7 +736,7 @@ if ARION_PRODUCTION:
         SECURE_HSTS_SECONDS = int(
             os.getenv(
                 "DJANGO_SECURE_HSTS_SECONDS",
-                "3600",
+                "31536000",
             )
         )
     except ValueError:

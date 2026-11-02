@@ -185,6 +185,9 @@
 .risk-table .rank-pos--2 { color:var(--rank-2); }
 .risk-table .rank-pos--3 { color:var(--rank-3); }
 .risk-table .provider-table-cell { min-width:180px; white-space:normal; }
+.ranking-provider-identity { display:flex; min-width:0; align-items:center; gap:8px; }
+.ranking-provider-logo { display:grid; flex:0 0 24px; width:24px; height:24px; place-items:center; border:1px solid var(--border-primary); border-radius:6px; background:var(--surface-secondary); object-fit:contain; }
+.ranking-provider-logo--fallback { color:var(--text-muted); font-size:8px; font-weight:650; }
 .table-provider { display:inline-block; max-width:260px; padding:0; border:0; background:transparent; color:var(--text-primary); font:inherit; font-size:10px; font-weight:600; line-height:1.35; text-align:left; cursor:pointer; }
 .table-provider:hover { color:var(--accent-teal); }
 .row-note { display:block; margin-top:3px; color:var(--text-muted); font-size:9px; }

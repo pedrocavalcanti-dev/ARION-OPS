@@ -153,7 +153,17 @@ def _command(role: str) -> list[str]:
             raise RuntimeError("ARION_WEB_PORT inválida.") from None
         if not 1 <= port <= 65535:
             raise RuntimeError("ARION_WEB_PORT inválida.")
-        return [str(python), "-m", "waitress", "--listen=127.0.0.1:" + str(port), "config.wsgi:application"]
+        return [
+            str(python),
+            "-m",
+            "waitress",
+            "--listen=127.0.0.1:" + str(port),
+            "--trusted-proxy=127.0.0.1",
+            "--trusted-proxy-count=1",
+            "--trusted-proxy-headers=x-forwarded-for x-forwarded-proto x-forwarded-host",
+            "--clear-untrusted-proxy-headers",
+            "config.wsgi:application",
+        ]
     return [str(python), str(PROJECT_ROOT / "arion_geo" / "gerenciar.py"), "integration_worker"]
 
 

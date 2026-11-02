@@ -6,10 +6,15 @@
     <p class="about-page__kicker">ARION <span>/</span> NOC ATACADO</p>
     <h1 id="about-title">Sobre o ARION OPS</h1>
     <p class="about-page__lead">Plataforma Operacional — NOC Atacado</p>
-    <p class="about-page__description">Centralização de dados, chamados, links, provedores, indicadores e análises da operação.</p>
-    <div class="about-page__credit"><span>Desenvolvido por</span><strong>Pedro Cavalcanti</strong></div>
-    <p class="about-page__company">ARION Serviços de Telecomunicações</p>
-    <p class="about-page__version">Versão {{ arion_version }}</p>
+    <p class="about-page__description">O ARION OPS é uma plataforma operacional desenvolvida para centralizar dados, indicadores e fluxos do NOC Atacado em uma única interface. A solução consolida informações dos espelhos locais do OTRS e da CMDB para apoiar a consulta operacional, mantendo esses sistemas como fontes oficiais.</p>
+    <div class="about-page__details">
+      <section><h2>Plataforma</h2><p>Django · MySQL · JavaScript · ECharts · Mapbox · arquitetura modular</p></section>
+      <section><h2>Governança</h2><p>Controle de acesso · Data Scope · auditoria · espelhos locais OTRS/CMDB</p></section>
+    </div>
+    <footer class="about-page__footer">
+      <div class="about-page__credit"><span>Concepção e desenvolvimento</span><strong>Pedro Cavalcanti</strong></div>
+      <div class="about-page__context"><p class="about-page__company">ARION Serviços de Telecomunicações</p><p class="about-page__version">NOC Atacado <span aria-hidden="true">·</span> Versão {{ arion_version }}</p></div>
+    </footer>
   </div>
 </section>
 {% endblock %}

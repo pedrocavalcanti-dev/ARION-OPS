@@ -1,96 +1,130 @@
-﻿# Cockpit
+# Cockpit Operacional
 
-No ARION OPS, o Cockpit consulta somente os espelhos locais de Tickets OTRS e Links CMDB. Os três contextos da interface são **Suporte**, **Cancelamentos** e **Geral**; os valores internos da API são `SUPPORT`, `CANCELLATION` e `GENERAL`. A tela e suas APIs exigem login e `configuracoes.view_cockpit`. Data Scope entra no queryset antes das opções, filtros, métricas, grupos e exportações. Permissão funcional e escopo de dados são aplicados no backend. O OTRS é fonte oficial e o ARION OPS permanece uma camada de consulta; nenhuma requisição do Cockpit consulta o OTRS remoto.
+O Cockpit é a área de análise operacional do ARION OPS. Ele permite consultar o espelho local de tickets OTRS e vínculos CMDB por período, contexto e filtros, com indicadores, fluxo operacional, aging, distribuições, evidências e exportações.
 
-## Contextos operacionais
+O OTRS/CMDB permanece como fonte oficial. O Cockpit não consulta o OTRS remoto durante uma análise; a página e a API leem os espelhos sincronizados localmente.
 
-O seletor do Cockpit mantém a mesma página e a mesma API AJAX e alterna entre `SUPPORT`, `CANCELLATION` e `GENERAL`. O padrão é Suporte (`SUPPORT`); o contexto e os filtros permanecem na query string e nas consultas salvas. O seletor não altera a navegação global.
+## Acesso e proteção dos dados
 
-- `SUPPORT` preserva o universo atual da fila exata `NOC - ATACADO`, as métricas, filtros, calendário, distribuições, drill-down e exportação existentes.
-- `CANCELLATION` consulta somente as três filas operacionais reais: `NOC - CANCELAMENTOS NGO`, `NOC - RETIRA EQUIPAMENTO` e `NOC – PENDENTE PAGAMENTO`. Solicitação e Tratamento são estados distintos na primeira fila; nenhum título ou texto de serviço promove um ticket de Suporte a Cancelamento.
-- `GENERAL` combina Suporte com Cancelamentos e deduplica pelo ID externo do Ticket. A visualização prioriza o consolidado; o detalhamento por origem continua disponível. A origem vem da fila atual do espelho; um chamado do NOC Atacado continua classificado como Suporte.
+A página está disponível em `/cockpit/`; a consulta JSON usa `/api/analytics/query/`, as exportações usam `/api/analytics/export/` e as consultas salvas usam `/api/analytics/saved-views/`.
 
-Cancelamentos é um único processo com etapas, não quatro operações independentes:
+A permissão de acesso ao Cockpit é verificada no backend. O Data Scope é aplicado antes de filtros, agregações, rankings, paginação e exportação. A interface não concede acesso a operadoras, projetos, tickets ou vínculos fora do escopo autorizado.
 
-```text
-Solicitação
-→ Em tratamento
-→ Retirada de equipamento
-→ Pendente pagamento
-→ Encerramento
-```
+Consultas salvas pertencem ao usuário autenticado. Seus filtros e opções são reaplicados pelo serviço central sob o scope e as permissões atuais.
 
-As quatro primeiras são etapas ativas exibidas pelo Cockpit; Encerramento é o estágio terminal e não compõe os cards de estoque ativo. A classificação usa as definições reais da tabela `kpi`, coluna `search`. `Profile=681_58` (KPI 681) é a fila `NOC - CANCELAMENTOS NGO` no estado `em atendimento` (`REQUEST`). `Profile=725_58` (KPI 725) usa a mesma fila e os estados `agendado`, `pendente aprovação`, `pendente cliente endereço não localizado`, `pendente cliente local fechado`, `Pendente`, `pendente operadora` e `pendente outros` (`TREATMENT`). Portanto, Solicitações e Em tratamento podem compartilhar a fila física `NOC - CANCELAMENTOS NGO`; o estado distingue as pesquisas. `Profile=680_58` (KPI 680) é `NOC - RETIRA EQUIPAMENTO`; `Profile=697_58` (KPI 697) é `NOC – PENDENTE PAGAMENTO` (travessão no nome oficial). Os dois últimos perfis selecionam os 13 estados operacionais listados no serviço central de classificação. As quatro pesquisas não têm filtros ativos de serviço, tipo, responsável ou Dynamic Field; os perfis estão em `kpi.search`, não em `search_profile`.
+## Como a consulta é composta
 
-Na leitura OTRS de 29/10/2026, os perfis retornaram respectivamente 28, 2, 4 e 0 tickets atuais, sem interseção. Os 2 tickets de Tratamento estavam em `pendente operadora`; Retirada tinha 4; Pagamento tinha 0 ativo, embora a fila contenha registros encerrados. O perfil de Pagamento executou normalmente e o zero é real para o recorte atual. Tickets terminais (`RESOLVED`, `CLOSED` e `CANCELED`) não compõem os quatro cards ativos. Um ticket ativo em fila de cancelamento fora dos critérios conhecidos fica em `UNKNOWN`, visível separadamente e preservado no estoque consolidado para reconciliação. A lista dos perfis é apenas referência de validação; a API do Cockpit lê o mirror local e não consulta o OTRS.
+A API normaliza a consulta e encaminha o mesmo queryset filtrado para métricas, série do período, calendário, agrupamentos e evidências. Os componentes têm semânticas temporais próprias quando indicado abaixo, mas partem do contexto, do Data Scope e dos filtros selecionados.
 
-A causa do zero anterior era a cobertura do sincronizador: o mirror e a reconciliação incluíam somente `NOC - ATACADO`. `OTRS_NOC_ATACADO_QUEUE_URL` aponta para `AgentKPISearch;Profile=251_2`, mas é somente um deep link usado por Chamados, não um filtro do sync. A sincronização FULL e FAST agora usam uma configuração central com `NOC - ATACADO` e as três filas reais de Cancelamentos. O FULL reconcilia apenas as filas selecionadas e preserva os demais registros; o FAST exige cobertura completa idêntica. O worker agenda FULL quando a cobertura muda e depois mantém o conjunto por FAST/FULL sob o lease existente. `--apply` grava somente no mirror local; o client remoto aceita apenas leitura.
+Os filtros de data formam um intervalo inclusivo no calendário local (`America/Sao_Paulo`). A granularidade do gráfico muda conforme o tamanho do período. Períodos muito extensos são agrupados por mês; os buckets vazios continuam representados.
 
-Os KPIs de Cancelamentos representam estoque atual por etapa, não operações separadas. As etapas são clicáveis e filtram a lista de tickets usando o snapshot atual. A fila OTRS original aparece no detalhe do ticket e no tooltip dos KPIs. Projeto/cliente, UF e status usam apenas os campos disponíveis no vínculo local CMDB e no ticket.
+A busca **Buscar nos tickets** pesquisa somente a tabela de evidências. Ela pode reduzir os registros exibidos nessa tabela, mas não muda KPIs, gráficos, distribuições ou o total da análise. A exportação não aplica essa busca: ela representa a consulta analítica selecionada.
 
-Os indicadores operacionais usam novos tickets por `source_created_at`, encerramentos por `resolved_at` com fallback `terminal_state_at` e, para status `CANCELED`, `canceled_at`. O mirror não materializa os eventos `Move`/`StateUpdate` de `ticket_history`; por isso, não exibe duração inventada por etapa e `Novos` conserva a data de criação do ticket. A origem disponibiliza esses eventos desde 2024 para os tickets verificados, mas a série local continua limitada aos timestamps sincronizados por ticket. `Variação líquida = Novos - Encerrados` é uma métrica auxiliar e não representa o estoque. O tempo médio usa durações não negativas entre criação e encerramento. Aging considera somente tickets atuais abertos, pendentes ou agendados, calculados a partir de `source_created_at` nos intervalos 0-4h, 4-8h, 8-24h, 24-48h, 48-72h e acima de 72h. Para o mesmo universo e filtros, a soma do Aging deve corresponder ao backlog atual; `UNKNOWN` aparece separado para evidenciar divergências. Em Geral, a legenda separa Suporte e Cancelamentos.
+## Contextos
 
-A evolução operacional escolhe a granularidade no backend: 1 dia usa 24 horas; 2-14 dias usam dias; 15-60 dias usam semanas; períodos acima de 60 dias usam meses, incluindo rótulos como `Nov/25` ao cruzar anos. Os buckets vazios permanecem no período e as labels são reduzidas em telas estreitas. O seletor `Ambos / Novos / Encerrados / Backlog` só muda a visualização e sua preferência fica em `chart_view` na URL; ele não altera filtros nem o universo consultado. `Ambos` combina barras lado a lado de Novos e Encerrados com linha de backlog; `Novos` e `Encerrados` exibem uma série; `Backlog` mostra somente a linha com preenchimento discreto. Valores positivos aparecem acima das barras e zeros não recebem rótulo. Em `Ambos`, o backlog fica sem rótulo permanente e seu valor completo permanece no tooltip; em `Backlog`, são rotulados todos os pontos até oito buckets e apenas o último em séries maiores. A legenda acompanha somente as séries visíveis. Os eixos mantêm escalas discretas para fluxo e estoque, e a grade responsiva reduz os rótulos horários e semanais sem rolagem horizontal.
+### Suporte
 
-Backlog é reconstruído como estoque: `Backlog(t) = Backlog anterior + Novos - Encerrados`. O Backlog inicial são os tickets do universo ainda ativos no começo do período; **Novos** conta tickets do universo filtrado cuja data de criação (`source_created_at`) cai no período; **Encerrados** são os que saíram do estoque ativo no período; **Backlog final** é o estoque no fim do período. A variação líquida é `Novos - Encerrados`, auxiliar e diferente do estoque. A variação percentual é `((Backlog final - Backlog inicial) / Backlog inicial) × 100`; quando o backlog inicial é zero, a porcentagem é zero se também não houve variação, e fica indisponível se houve variação. Como a sequência histórica de `Move` de `ticket_history` não está materializada no mirror, **Novos usa criação do ticket e não mede a data em que ele entrou na fila ou no processo de Cancelamentos**; essa limitação está registrada para avaliação futura.
+Abrange a fila `NOC - ATACADO`. As métricas de tickets usam estados operacionais conhecidos. Tickets `UNKNOWN` permanecem fora; cancelados e improcedentes são considerados por padrão nas análises históricas aplicáveis, conforme a semântica de cada métrica.
 
-O encerramento usa os campos reais do mirror (`resolved_at`, fallback `terminal_state_at`, ou `canceled_at` para cancelados); o valor do mês representa o estoque ao final do mês. A série só é exibida quando as datas do mirror permitem reconstrução desde a primeira criação disponível, o período não antecede esse corte e, quando termina hoje, o resultado reconcilia com o snapshot ativo atual. Sem essa evidência, a linha histórica é ocultada com uma explicação; o KPI de backlog atual continua sendo o snapshot. A base local atual não espelha ciclos completos de reabertura nem todas as mudanças históricas entre filas; portanto, essas transições não são inventadas e a reconstrução é uma aproximação limitada aos timestamps confiáveis disponíveis. Nenhuma consulta de página chama o OTRS remoto.
+### Cancelamentos
 
-### Aging e tempo médio de resolução
+Abrange as filas configuradas para o processo de cancelamento. Os tickets são classificados pelo serviço central de etapas, usando fila e estado disponíveis no espelho. O contexto mostra as etapas ativas e mantém tickets ativos sem regra conhecida em `UNKNOWN`, para não ocultá-los do estoque consolidado.
 
-**Aging** é o tempo em aberto dos tickets ainda ativos, calculado desde `source_created_at`; não é tempo médio de resolução. As faixas são `0–4h`, `4–8h`, `8–24h`, `24–48h`, `48–72h` e `>72h`. Tickets ativos em etapa `UNKNOWN` são apresentados separadamente na classificação de Cancelamentos/Geral para tornar visível a cobertura não classificada.
+A classificação usa os perfis operacionais sincronizados do OTRS. Solicitação e Em tratamento podem compartilhar a fila física; a combinação com o estado diferencia as etapas. Os cards representam estoque atual por etapa, e não quatro fluxos independentes.
 
-**Tempo médio de resolução** é calculado à parte, sobre tickets terminais do período com timestamps válidos, usando a diferença entre criação e término operacional. Para `RESOLVED`/`CLOSED`, o término usa `resolved_at` e fallback `terminal_state_at`; cancelamentos usam `canceled_at` e, quando ele falta, `terminal_state_at`. Duração ausente, invertida ou não comprovada não é inventada nem incluída como uma resolução válida.
+### Geral
 
-O serviço usa agregação SQL agrupada para entradas e encerramentos, uma contagem do estoque inicial e uma agregação de metadados do histórico; o cálculo cumulativo ocorre em memória e o número de buckets não cria queries adicionais.
+Combina Suporte e Cancelamentos e deduplica tickets pelo identificador externo. A origem é identificada pela fila no espelho. O gráfico pode apresentar o fluxo consolidado ou separado por origem.
 
-O calendário mensal e o drill-down continuam ligados ao resultado filtrado e respeitam o contexto ativo. O agrupamento pode usar etapa/origem e, nos contextos em que faz sentido, projeto/cliente. Filtros de etapa aparecem em Cancelamentos; origem aparece em Geral. Data Scope permanece no backend antes dos filtros e agregações, inclusive para todos os contextos.
+## Métricas e datas
 
-## Modos do gráfico operacional
+| Métrica | Regra temporal e universo |
+| --- | --- |
+| Tickets criados | `source_created_at`; tickets distintos nos estados válidos do contexto. Cancelados e improcedentes obedecem às opções gerenciais quando compatíveis. |
+| Em atendimento, Pendentes e Agendados | `source_created_at` no período e estado atual correspondente. |
+| Resolvidos | Estado `RESOLVED`, pela data operacional de resolução. |
+| Encerrados | Estado `CLOSED`, pela data operacional de resolução. |
+| Resolvidos + Encerrados | Estados `RESOLVED` e `CLOSED`, pela data operacional de resolução. |
+| Cancelados | Estado `CANCELED`, pela data de cancelamento; métrica específica. |
+| Backlog atual | Snapshot de tickets ativos; a data selecionada não altera o estoque atual. |
+| Links afetados | Links CMDB distintos relacionados aos tickets do recorte. Um ticket pode se relacionar a mais de um link. |
+| Links reincidentes | Links distintos que atendem à regra de recorrência sobre tickets distintos no período. Não representa o estoque atual de links afetados. |
 
-Para um dia, a série usa buckets por hora (24 horas); de 2 a 14 dias, buckets diários; de 15 a 60 dias, semanais; acima de 60 dias, mensais. No modo **Ambos**, Novos são barras verdes, Encerrados barras vermelhas e Backlog é a linha azul. Os modos **Novos**, **Encerrados** e **Backlog** mostram somente a série escolhida; o modo é preferência de visualização e não altera o universo nem os cálculos.
+A data operacional de resolução usa `resolved_at` e fallback `terminal_state_at`. Para cancelamentos, usa `canceled_at` e, quando necessário, `terminal_state_at`. Datas ausentes ou anteriores à criação não são inventadas nem usadas para duração.
 
-## Fechamento e motivo
+A dimensão Provedor pode incluir o mesmo ticket em mais de um grupo quando ele tiver vínculos com provedores diferentes. O total geral continua contando o ticket uma vez. O ranking mostra provedores identificados; tickets sem provedor permanecem no resultado e são apresentados na qualidade dos vínculos.
 
-`CodigoFechamento` (Dynamic Field Ticket ID 101) e sincronizado para `OTRSTicket.closing_code_raw`, sem sobrescrever o raw. `ClosingReasonCanonicalizer` centraliza a regra `raw -> canonical key -> display label`, usada em filtro, agrupamentos, KPIs, calendario, evidencias e exportacoes. `FalhaMassiva`, `Falha Massiva` e `Defeito Massivo` usam a chave `falha_massiva` e uma unica serie. O dropdown usa chaves estaveis, por exemplo `termination_reason=falha_massiva`; URLs antigas com raw conhecido tambem sao resolvidas.
+## Fluxo operacional, backlog e aging
 
-O dropdown exibe uma opcao por categoria canonica, ordenada pelo label humano e com a chave canonica como valor. Alem dos aliases anteriores, `Equipamento travado/reinicilizado` + `EquipamentoTravado`, `Rompimento/manut Fibra` + `RompimentoFibra`, `Cancelado` + `ChamadoCancelado`, e `Conexao Incorreta - Cabeamento/porta` + `ConexaoIncorreta` sao consolidados. `CancelamentoServico` permanece separado. URLs e consultas salvas com raws antigos sao resolvidas para a chave canonica ao carregar. O detalhe do ticket e a exportacao incluem o label canonico; CSV/XLSX/PDF tambem preservam o valor raw em coluna propria. Detalhe de fechamento em texto livre nao e importado. Inventario historico de aliases: `docs/07-estudos/OTRS-MOTIVOS-FECHAMENTO.md`; regra normativa atual: [OTRS](..\06-integracoes-e-dados\otrs.md).
+O fluxo usa tickets filtrados no contexto atual. **Novos** usa `source_created_at`; **Resolvidos** inclui as saídas em `RESOLVED` e `CLOSED`; a data de saída usa os timestamps operacionais descritos acima.
 
-`ticketResolvido` é sincronizado para `resolved_at` e passou a ser a data principal de término operacional. Nas análises de `RESOLVED` e `CLOSED`, usa-se `resolved_at`; se estiver ausente, usa-se `terminal_state_at`, derivado do último `StateUpdate` compatível com o estado terminal atual. Se ambos faltarem, o registro não recebe data inventada nem entra em métrica temporal/duração final. `business_status=CLOSED` continua representando o estado oficial atual do OTRS. A comparação histórica contra `ticket_history` / `StateUpdate` encontrou correspondência de até um minuto em 18/18 tickets `resolvido`; entre tickets `closed successful` com ambos os valores, 10.727/10.944 ficaram até um dia e 217 divergiram mais de um dia. Essa divergência continua disponível para diagnóstico; não muda a precedência operacional. Para `CANCELED`, `canceled_at` é a data principal, com `terminal_state_at` como fallback quando disponível. Não há leitura de histórico durante as requisições.
+O Cockpit considera cancelados e improcedentes por padrão nas análises históricas aplicáveis. As opções ficam em **Mais filtros** e permitem excluí-los. Cancelados podem fazer parte do histórico, mas não entram no backlog atual, aging ou tickets ativos.
 
-## Métricas, estados e datas
+O atalho **Improcedentes** continua filtrando especificamente os tickets cuja procedência é improcedente. Improcedentes não entram no snapshot atual de backlog ou aging. A métrica **Backlog atual** permanece restrita ao estoque operacional ativo.
 
-Nas métricas tradicionais do contexto Suporte, o universo válido contém `OPEN`, `PENDING`, `SCHEDULED`, `RESOLVED` e `CLOSED`; `CANCELED` aparece na métrica específica Cancelados e `UNKNOWN` fica fora desse universo. Cancelamentos e Geral também classificam o processo por fila/estado e mantêm tickets ativos não classificados em `UNKNOWN`, separado das quatro etapas. `Tickets criados` usa `source_created_at` e conta tickets distintos válidos conforme todos os filtros ativos. Métricas de situação operacional atual também se baseiam na criação e no estado atual. `Backlog atual` é o snapshot do estoque do contexto e filtros; em Suporte, considera `OPEN`, `PENDING` e `SCHEDULED`. Em Cancelamentos/Geral, o estoque inclui os tickets ativos `UNKNOWN` para reconciliação, sem atribuí-los a uma etapa conhecida. A linha histórica usa esse estoque atual apenas para reconciliação no fim do período quando ele termina hoje.
+O saldo visível do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets operacionais ativos, sem improcedentes, e a reconstrução histórica sempre baixa os cancelamentos. A variação percentual do backlog compara a variação reconstruída do estoque com o backlog inicial.
 
-`Resolvidos`, `Tickets em CLOSED, resolvidos no período` e `Resolvidos + CLOSED` filtram, agrupam e comparam pela data de resolução operacional (`resolved_at`, com fallback `terminal_state_at`) e preservam o estado OTRS correspondente. `Cancelados` usa `canceled_at`. `Tickets criados` e métricas por criação continuam usando `source_created_at`. O filtro Motivo usa o valor categórico normalizado `CodigoFechamento`. A consulta de Pendência Financeira preserva a métrica e o intervalo escolhidos. A descrição dinâmica da consulta é compartilhada pela tela e pelo PDF.
+O backlog histórico é reconstruído como estoque inicial, entradas por criação e saídas por resolução, encerramento ou cancelamento. A linha só aparece quando os timestamps do espelho permitem reconstrução a partir do início disponível e, quando o período termina hoje, o valor final reconcilia com o snapshot atual. Caso a cobertura não seja suficiente, a linha é ocultada com a razão; o snapshot atual continua disponível.
 
-Data Scope é aplicado antes do universo operacional, filtros, KPIs, agrupamentos e exportações. Resumo, visão geral, calendário, dimensões e tickets usam o mesmo queryset de análise. A visão geral usa granularidade diária até 31 dias, semanal de 32 a 90 dias e mensal acima de 90 dias. Abaixo dela, o calendário mostra os dias do mês selecionado; o padrão é o último mês com dados e o seletor contém somente meses que intersectam o período. Dias fora de um intervalo parcial ficam desativados. A visão geral mensal permite selecionar o mês do calendário. Clicar em um dia abre ações para filtrar temporariamente a lista de tickets ou aplicar aquele dia como novo período.
+A reconstrução não recupera ciclos completos de reabertura nem todas as movimentações históricas de fila, pois esses eventos não são materializados no mirror do Cockpit. Portanto, **Novos** significa tickets criados no período, não tickets que entraram na fila nesse período.
 
-Gráficos de dimensão são omitidos quando a dimensão já está filtrada ou não há variação. O ranking principal ocupa a largura disponível, limita-se aos dez primeiros e a distribuição completa permanece recolhida. Até dois gráficos complementares usam outras dimensões relevantes. A comparação automática usa o mês anterior completo para um mês-calendário e, nos demais períodos, uma janela anterior de igual duração. Backlog não tem comparação histórica.
+O aging é um snapshot do estoque ativo em faixas `0-4h`, `4-8h`, `8-24h`, `24-48h`, `48-72h` e `>72h`, calculadas desde `source_created_at`. Não é tempo médio de resolução. A faixa **Acima de 24h** é um filtro de backlog atual, não uma métrica histórica.
 
-No Cockpit, o resumo do recorte fica no cabeçalho e os KPIs vêm logo após os filtros. Visão geral temporal e calendário permanecem sempre visíveis. As dimensões, a distribuição completa e a lista de tickets podem ser recolhidas separadamente; os três controles também têm uma ação global. A preferência de recolhimento dura apenas a sessão do navegador e não dispara consultas. Ao escolher **Ver tickets deste dia**, a lista se abre e a tela navega até ela; **Aplicar dia como período** mantém o fluxo de consulta principal.
+O tempo médio de resolução é calculado separadamente para tickets `RESOLVED`/`CLOSED` com duração válida. Cancelamentos não são tratados como resoluções médias.
 
-O ranking mostra somente provedores resolvidos; tickets sem provedor permanecem no total e aparecem na qualidade dos vínculos. A participação do ranking usa tickets com provedor identificado como denominador. Composição e ranking são separados da seção **Tickets do resultado**, que lista os registros com paginação e busca dentro do universo filtrado. O drawer apresenta datas, estado, motivo, prioridade, SLA, campos CMDB seguros e evidências dos filtros e Data Scope. Relações CMDB são pré-carregadas para evitar N+1.
+## Opções gerenciais e filtros
 
-## Resultados e exportação
+As opções de registros considerados ficam em **Mais filtros**. Ambas vêm ligadas por padrão e são preservadas na URL e nas consultas salvas:
 
-A lista de tickets mostra 25 por página, com opções 50 e 100. A busca considera número do ticket, ConfigItem, Number, designação, circuito e provedor e não altera os totais ou gráficos da consulta.
+- **Incluir cancelados**: mantém cancelamentos nas análises históricas aplicáveis. Métricas específicas de estado RESOLVED/CLOSED não passam a contar cancelamentos.
+- **Incluir improcedentes**: mantém improcedentes nas métricas compatíveis e no histórico. O estoque atual permanece operacional e sem improcedentes.
 
-PDF, CSV e XLSX chamam o mesmo `AnalyticsQueryService` e exportam todos os tickets do resultado, respeitando Data Scope. O PDF inclui título dinâmico, usuário e horário de geração, resumo executivo, visão geral, calendário do mês selecionado, ranking em tabela, gráficos complementares e anexo de tickets. Não repete a distribuição completa do ranking no corpo. Usa fonte Unicode Vera. CSV é UTF-8 com BOM e contém os tickets; XLSX tem abas `Resumo`, `Distribuição` e `Tickets`. Nenhum formato inclui campos pessoais do cliente ou conteúdo de artigos.
+O estado das opções é preservado na URL e nas consultas salvas. Quando uma opção é desmarcada, o PDF registra a exclusão correspondente.
 
-Na primeira abertura, a tela mostra placeholders de filtros, KPIs, gráficos e tabelas. Atualizações posteriores preservam os filtros e mostram um estado discreto de carregamento dos resultados. O Cockpit não inicializa consultas ou sincronizações durante carregamento de página; apenas lê o espelho local. A API informa se existe uma FULL aplicada com cobertura atual das quatro filas e a última sincronização bem-sucedida. Sem essa cobertura, os cards de etapa mostram “Dados ainda não sincronizados”; depois de uma sync bem-sucedida, zero é exibido como zero real.
+Os demais filtros incluem Provedor, UF, Status, Situação OTRS, Serviço, SLA, Prioridade, Motivo, Etapa, Origem, Projeto/cliente, Fila, Procedência, Responsável e Aging. Data Scope continua sendo aplicado antes de cada um deles.
 
+As categorias de motivo usam `ClosingReasonCanonicalizer` para mapear valores equivalentes a uma chave e um rótulo estáveis. O valor raw continua preservado em coluna própria nas exportações de tickets.
 
-## Implementação e operação
+## Consultas rápidas
 
-Views e serviço do app `painel` alimentam `/cockpit/`; a API compartilhada de consulta fica em `/api/analytics/query/`, exportação em `/api/analytics/export/` e views salvas em `/api/analytics/saved-views/`. A série temporal respeita a timezone do projeto (`America/Sao_Paulo`). O intervalo é `[start, end_exclusive)`; a granularidade muda conforme a duração selecionada.
+Os atalhos representam consultas reais e preservam contexto e período, salvo os filtros que o próprio atalho substitui:
 
-A mesma query normalizada e limitada por Data Scope alimenta KPIs, séries, calendário, evidências e exportação. Status atual e volume por data de criação são conceitos distintos. Gráficos de tendências não equivalem a histórico reconstruído de backlog. Saved Views pertencem ao usuário atual e não ampliam scope nem permissions.
+- **Pendência Financeira** e **Falha Massiva** usam a categoria canônica de motivo.
+- **Reincidência** usa a regra de recorrência sobre links e tickets distintos.
+- **Improcedentes** e **Procedentes** filtram a procedência do ticket.
+- **Alto / Crítico** aplica o conjunto de prioridades correspondente.
+- **Acima de 24h** e **Sem responsável** consultam o backlog atual.
+- **Em atendimento**, **Pendentes** e **Resolvidos** aplicam as métricas e datas operacionais correspondentes.
 
-Código principal: `aplicativos/painel/services/analytics.py`, views do app `painel`, templates `templates/painel/` e fonte JS `frontend_src/js/painel/cockpit.js`. CSV/XLSX/PDF passam pela validação e queryset já autorizado.
+## Gráficos, calendário e evidências
 
-## Contagem histórica e reincidência
+A evolução operacional apresenta Novos, Resolvidos e o Backlog reconstruído. Cancelados e improcedentes podem compor o universo histórico sem criar séries visuais adicionais. Valores positivos são rotulados quando há espaço; zeros não recebem rótulo visual, mas permanecem disponíveis nos dados da consulta. Em séries densas, os rótulos são reduzidos para evitar sobreposição.
 
-`Tickets` conta chamados distintos do recorte histórico selecionado; `Links afetados` conta Links locais distintos associados a esses Tickets. A relação pode ser N:N: um Ticket pode afetar vários Links, e vários Tickets no mesmo Link não multiplicam o Link. Data Scope e filtros são aplicados antes das contagens. Para agrupamentos por Provedor, um Ticket pode participar de cada Provedor ao qual está relacionado, embora permaneça único no total nacional.
+O gráfico de análise selecionada e o calendário usam a métrica principal. O calendário mostra o resumo mensal, os valores diários e o pico. A seleção de um dia pode filtrar temporariamente a evidência ou aplicar aquele dia como novo período, sem alterar a regra de Data Scope.
 
-`Links reincidentes` é uma métrica histórica independente: conta Links distintos que atingem a regra de recorrência do período, baseada em pelo menos dois Tickets distintos. Não deve ser interpretada como Links afetados agora. `Backlog atual` é o snapshot dos tickets atuais `OPEN`, `PENDING` e `SCHEDULED`; a série temporal operacional reconstrói estados passados somente quando a cobertura local de datas é confiável, conforme as limitações documentadas acima.
+Os gráficos de dimensão mostram até dez grupos e são omitidos quando a dimensão está filtrada ou não tem variação útil. A distribuição completa permanece na tabela recolhível e paginada. A qualidade de vínculos explica tickets sem provedor identificado. O ranking de provedores usa logos estáticos conhecidos e iniciais como fallback.
+
+A evidência lista tickets distintos que compõem o resultado, incluindo estado, datas operacionais, motivo, provedor, UF, prioridade, SLA e vínculos CMDB autorizados. A busca local da evidência não muda os indicadores da consulta.
+
+## Exportações
+
+PDF, CSV e XLSX usam `AnalyticsQueryService` e respeitam os filtros e o Data Scope vigentes. O PDF também registra o contexto, métrica, período, base temporal, agrupamento, opções gerenciais e comparação selecionada.
+
+O PDF inclui o resumo executivo, indicadores operacionais complementares, evolução de Novos/Resolvidos/Backlog, calendário mensal, aging marcado como **Snapshot atual**, distribuições principais e tickets de evidência. Rankings e distribuições limitam-se aos dez primeiros grupos. Os valores das barras aparecem quando não causam sobreposição; zeros permanecem implícitos. O rodapé indica **Página X de Y**.
+
+O anexo PDF limita-se aos primeiros 100 tickets e informa quantos foram exibidos do total analisado. CSV e XLSX contêm todos os tickets do resultado. CSV usa UTF-8 com BOM; XLSX contém as abas `Resumo`, `Distribuição` e `Tickets`. Os formatos preservam o motivo normalizado e seu raw, sem incluir conteúdo de artigos ou credenciais.
+
+## Fonte de dados e limitações operacionais
+
+A disponibilidade indicada na página depende do registro local da sincronização e da última FULL aplicada com a cobertura configurada para as filas do Cockpit. A consulta não inicia uma sincronização. Sem a cobertura inicial necessária, a interface identifica que os dados de etapas ainda não foram sincronizados.
+
+A API é somente leitura em relação ao OTRS. A página não usa conexão remota para preencher indicadores, tickets ou rankings; a origem oficial continua sendo o OTRS/CMDB.
+
+## Código relacionado
+
+- Serviço central: `arion_geo/aplicativos/painel/services/analytics.py`
+- Logos de provedores: `arion_geo/aplicativos/painel/services/provider_logos.py`
+- Views de consulta e exportação: `arion_geo/aplicativos/painel/views.py`
+- Interface: `arion_geo/templates/painel/cockpit.html`
+- JavaScript: `frontend_src/js/painel/cockpit.js`
+- Estilos: `arion_geo/static/css/painel/cockpit.css`

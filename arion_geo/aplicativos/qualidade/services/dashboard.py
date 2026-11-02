@@ -5,6 +5,8 @@ from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils import timezone
 
+from aplicativos.configuracoes.data_scope import DataScopeService
+from aplicativos.integracoes.models import CMDBLinkMirror
 from aplicativos.integracoes.services.project_names import (
     canonical_project_name,
     display_project_name,
@@ -29,6 +31,7 @@ from ..models import (
 from .constants import QUALITY_MONITORING_END_WARNING_DAYS, QUALITY_PRIORITY_PERIOD_OPTIONS
 from .data_scope import QualityDataScopeService
 from .priority_links import ACTIVE_ORDER_STATUSES, business_priority, build_priority_link_analysis
+from .recurrence import build_quality_recurrence_analysis
 
 PERIOD_OPTIONS = (
     ("7", "7 dias"),
@@ -50,6 +53,37 @@ _ATTENTION_ORDER = {
     "Monitoramento terminando": 4,
     "Link estratégico reincidente sem OQ": 5,
 }
+
+
+def get_operational_pulse(user, *, scope_links=None, base_tickets=None, now=None):
+    """Return the current, scoped Quality indicators for operational summaries."""
+    now = now or timezone.now()
+    scoped_orders = QualityDataScopeService.orders_for(user)
+    scope_links = scope_links if scope_links is not None else DataScopeService.filter_queryset(
+        user, CMDBLinkMirror.objects.filter(is_present_in_source=True).select_related("operator"),
+    )
+    recurrence = build_quality_recurrence_analysis(
+        user, scope_links=scope_links, scoped_orders=scoped_orders,
+        base_tickets=base_tickets, now=now,
+    )
+    active_links = stabilized_links = 0
+    for summary in recurrence["links"].values():
+        active_links += bool(summary["is_active_recurrence"])
+        stabilized_links += bool(summary["is_stabilized"])
+    quality_counts = scoped_orders.order_by().aggregate(
+        open_orders=Count("pk", filter=Q(status__in=ACTIVE_ORDER_STATUSES), distinct=True),
+        monitoring=Count(
+            "monitoring_cycles__pk",
+            filter=Q(monitoring_cycles__result=QualityMonitoringCycle.Result.IN_PROGRESS),
+            distinct=True,
+        ),
+    )
+    return {
+        "active_links": active_links,
+        "stabilized_links": stabilized_links,
+        "open_orders": quality_counts["open_orders"],
+        "monitoring": quality_counts["monitoring"],
+    }
 
 
 def _month_start(value):

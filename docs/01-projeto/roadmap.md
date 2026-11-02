@@ -1,18 +1,20 @@
 # Roadmap de evolução
 
-Revisado em 02/11/2026. A versão **1.2.0** está registrada no catálogo interno `docs/08-releases/releases.json`. Este documento distingue explicitamente o que já está **IMPLEMENTADO** do que permanece **PLANEJADO**.
+Revisado em 02/11/2026. A versão **1.3.0** está registrada no catálogo interno `docs/08-releases/releases.json`. Este documento distingue explicitamente o que já está **IMPLEMENTADO** do que permanece **PLANEJADO**.
 
-## IMPLEMENTADO — Entrega 1.2.0 e Qualidade Operacional (Fases 1 a 4)
+## IMPLEMENTADO — Entregas 1.2.0 e 1.3.0 (Qualidade Operacional Fases 1 a 4, Dashboard, Cockpit, Rankings e Segurança)
 
 - **Identidade visual ARION OPS · NOC ATACADO:** consolidada nos templates, cabeçalho, login institucional, exportações e documentação, com crédito institucional em Sobre o ARION OPS e `NOTICE.md`.
 - **PWA e atualizações:** aviso de nova versão persistente em páginas autenticadas, indicador discreto no cabeçalho e ativação controlada pelo usuário.
 - **Cockpit:** contextos Suporte, Cancelamentos e Geral, indicadores operacionais, séries reconciliadas e exportações CSV/PDF/XLSX respeitando Data Scope.
 - **Rankings:** exposição por links ativos, incidência proporcional (`/100 ativos`) e leituras de risco/desempenho pelo Índice ARION.
-- **Central de Relatórios:** módulo Claro Multas com importação, baseline automático, tratativas, pausas, evidências, enriquecimento explícito via espelhos locais e auditoria.
+- **Base inicial Claro Multas:** fluxo existente preservado no código; fica fora da navegação padrão da V1 apresentada.
 - **Qualidade Operacional (Fases 1–4):** Dashboard gerencial com ECharts local, carteira derivada de Links Prioritários (Ativos, Estabilizados e Todos), fila e detalhe completo de Ordens de Qualidade (Resumo, Ocorrências, Tratativas, Monitoramento RREIP de 30 dias e Histórico), diretório de contatos/escalonamentos e histórico auditado.
 - **Sincronização OTRS FAST/FULL:** cobertura das quatro filas operacionais do Cockpit com controle de lease e sinalização de cobertura aplicada.
 
 ## PLANEJADO — Próximas evoluções funcionais
+
+- **Central de Relatórios (fase futura):** evoluir o módulo para acompanhar resultados operacionais em tempo real por cliente/contrato e analisar desempenho operacional, SLA, qualidade, reincidência, volume, resultados alcançados e evolução ao longo do tempo. Apoiar também o acompanhamento do desempenho da ARION junto a clientes e contratos, incluindo rankings e indicadores fornecidos por clientes quando houver fonte oficial.
 
 - **Automação de abertura de TQ por e-mail (PLANEJADO):** preparação estruturada e envio automatizado de solicitação de Ticket de Qualidade (TQ) a partir da OQ (atualmente toda associação de TQ é manual sobre tickets já existentes no espelho OTRS).
 - **Critérios formais e playbooks R1–R5 na Qualidade (PLANEJADO):** formalização operacional definitiva dos critérios de classificação R1–R5 e playbooks orientados por nível.

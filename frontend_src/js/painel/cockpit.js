@@ -3,14 +3,14 @@
   if (!page) return;
 
   const form = page.querySelector("[data-filters]");
-  const FILTER_KEYS = ["provider", "uf", "status", "source_state", "service", "sla", "priority", "termination_reason", "stage", "origin", "project"];
-  const ADVANCED_KEYS = ["source_state", "uf", "sla", "priority", "service", "stage", "origin", "project"];
+  const FILTER_KEYS = ["provider", "uf", "status", "source_state", "service", "sla", "priority", "termination_reason", "stage", "origin", "project", "responsibility", "responsible", "queue", "age_bucket"];
+  const ADVANCED_KEYS = ["source_state", "uf", "sla", "priority", "service", "stage", "origin", "project", "responsibility", "responsible", "queue", "age_bucket"];
   const DEFAULT_START = page.dataset.defaultStart;
   const DEFAULT_END = page.dataset.defaultEnd;
-  const DEFAULTS = { scope: "support", metric: "tickets", start: DEFAULT_START, end: DEFAULT_END, compare_to: "", selected_month: "", group_by: "provider", chart_view: "all", chart_origin: "consolidated", detail_page: 1, ticket_page: 1, ticket_page_size: 25, ticket_search: "", filters: Object.fromEntries(FILTER_KEYS.map(key => [key, "all"])) };
-  const METRICS = { tickets: "Tickets criados", open_tickets: "Em atendimento no per\u00edodo", pending_tickets: "Pendentes no per\u00edodo", scheduled_tickets: "Agendados no per\u00edodo", resolved_tickets: "Resolvidos no per\u00edodo", closed_tickets: "Encerrados no per\u00edodo", resolved_closed_tickets: "Resolvidos + Encerrados", canceled_tickets: "Cancelados no per\u00edodo", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
+  const DEFAULTS = { scope: "support", metric: "tickets", start: DEFAULT_START, end: DEFAULT_END, compare_to: "", selected_month: "", group_by: "provider", chart_view: "all", chart_origin: "consolidated", include_cancelled: true, include_improcedente: true, detail_page: 1, ticket_page: 1, ticket_page_size: 25, ticket_search: "", filters: Object.fromEntries(FILTER_KEYS.map(key => [key, "all"])) };
+  const METRICS = { tickets: "Tickets criados", open_tickets: "Em atendimento no per\u00edodo", pending_tickets: "Pendentes no per\u00edodo", scheduled_tickets: "Agendados no per\u00edodo", resolved_tickets: "Resolvidos no per\u00edodo", closed_tickets: "Resolvidos no per\u00edodo", resolved_closed_tickets: "Resolvidos + Encerrados", canceled_tickets: "Cancelados no per\u00edodo", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
   const DIMENSIONS = { provider: "Provedor", uf: "UF", status: "Status", source_state: "Situa\u00e7\u00e3o OTRS", sla: "SLA", priority: "Prioridade", termination_reason: "Motivo de encerramento", cancellation_stage: "Etapa do cancelamento", operational_origin: "Origem", project: "Projeto / cliente", month: "Per\u00edodo" };
-  const FILTER_LABELS = { ...DIMENSIONS, service: "Servi\u00e7o", stage: "Etapa", origin: "Origem" };
+  const FILTER_LABELS = { ...DIMENSIONS, service: "Servi\u00e7o", stage: "Etapa", origin: "Origem", responsibility: "Proced\u00eancia", responsible: "Respons\u00e1vel", queue: "Fila", age_bucket: "Aging" };
   const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   const STATE_CODES = new Set(["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]);
   const STATE_NAMES = { AC: "acre", AL: "alagoas", AP: "amapa", AM: "amazonas", BA: "bahia", CE: "ceara", DF: "distrito federal", ES: "espirito santo", GO: "goias", MA: "maranhao", MT: "mato grosso", MS: "mato grosso do sul", MG: "minas gerais", PA: "para", PB: "paraiba", PR: "parana", PE: "pernambuco", PI: "piaui", RJ: "rio de janeiro", RN: "rio grande do norte", RS: "rio grande do sul", RO: "rondonia", RR: "roraima", SC: "santa catarina", SP: "sao paulo", SE: "sergipe", TO: "tocantins" };
@@ -104,6 +104,8 @@
     if (validMonth(params.get("selected_month"))) state.selected_month = params.get("selected_month");
     if (["all", "created", "closed", "backlog"].includes(params.get("chart_view"))) state.chart_view = params.get("chart_view");
     if (params.get("chart_origin") === "origin") state.chart_origin = "origin";
+    if (params.has("include_cancelled")) state.include_cancelled = params.get("include_cancelled") !== "0";
+    if (params.has("include_improcedente")) state.include_improcedente = params.get("include_improcedente") !== "0";
     const requestedGroup = params.get("group_by");
     const group = requestedGroup === "project" && state.scope !== "support" ? "project" : legacyGroups[requestedGroup] ?? requestedGroup;
     if (DIMENSIONS[group]) state.group_by = group;
@@ -134,8 +136,11 @@
     state.selected_month = validMonth(state.selected_month) ? state.selected_month : "";
     state.chart_view = ["all", "created", "closed", "backlog"].includes(state.chart_view) ? state.chart_view : "all";
     state.chart_origin = state.chart_origin === "origin" ? "origin" : "consolidated";
+    state.include_cancelled = state.include_cancelled !== false;
+    state.include_improcedente = state.include_improcedente !== false;
     const oldFilters = state.filters || {};
     state.filters = Object.fromEntries(FILTER_KEYS.map(key => [key, oldFilters[key] ?? "all"]));
+    if (state.filters.responsibility === "IMPROCEDENTE" && state.metric !== "backlog") state.include_improcedente = true;
     if (state.filters.provider === "all" && oldFilters.operator) state.filters.provider = oldFilters.operator;
     if (state.filters.sla === "all" && oldFilters.sla_status) state.filters.sla = oldFilters.sla_status;
     state.detail_page = 1;
@@ -145,7 +150,7 @@
     return state;
   }
   function queryPayload() {
-    return { scope: queryState.scope, metric: queryState.metric, start: queryState.start, end: queryState.end, compare_to: queryState.compare_to || null, selected_month: monthExplicitlySelected ? queryState.selected_month || null : null, group_by: queryState.group_by, detail_page: queryState.detail_page, ticket_page: queryState.ticket_page, ticket_page_size: queryState.ticket_page_size, ticket_search: queryState.ticket_search, filters: { ...queryState.filters } };
+    return { scope: queryState.scope, metric: queryState.metric, start: queryState.start, end: queryState.end, compare_to: queryState.compare_to || null, selected_month: monthExplicitlySelected ? queryState.selected_month || null : null, group_by: queryState.group_by, detail_page: queryState.detail_page, ticket_page: queryState.ticket_page, ticket_page_size: queryState.ticket_page_size, ticket_search: queryState.ticket_search, include_cancelled: queryState.include_cancelled, include_improcedente: queryState.include_improcedente, filters: { ...queryState.filters } };
   }
   function writeURL() {
     const params = new URLSearchParams();
@@ -156,6 +161,8 @@
     if (queryState.compare_to) params.set("compare_to", queryState.compare_to);
     if (queryState.chart_view !== "all") params.set("chart_view", queryState.chart_view);
     if (queryState.scope === "general" && queryState.chart_origin === "origin") params.set("chart_origin", "origin");
+    if (!queryState.include_cancelled) params.set("include_cancelled", "0");
+    if (!queryState.include_improcedente) params.set("include_improcedente", "0");
     if (monthExplicitlySelected && queryState.selected_month) params.set("selected_month", queryState.selected_month);
     if (queryState.group_by !== DEFAULTS.group_by) params.set("group_by", queryState.group_by);
     if (queryState.detail_page > 1) params.set("detail_page", queryState.detail_page);
@@ -170,12 +177,17 @@
     queryState.start = form.elements.start.value || DEFAULT_START;
     queryState.end = form.elements.end.value || DEFAULT_END;
     queryState.compare_to = form.elements.compare_to.value;
+    queryState.include_cancelled = form.elements.include_cancelled.checked;
+    queryState.include_improcedente = form.elements.include_improcedente.checked;
     queryState.group_by = page.querySelector("[data-breakdown]").value;
     FILTER_KEYS.forEach(key => { queryState.filters[key] = form.elements.namedItem(key).value || "all"; });
+    if (queryState.filters.responsibility === "IMPROCEDENTE" && queryState.metric !== "backlog") queryState.include_improcedente = true;
   }
   function syncForm() {
     for (const key of ["metric", "start", "end", "compare_to"]) form.elements.namedItem(key).value = queryState[key];
     FILTER_KEYS.forEach(key => { form.elements.namedItem(key).value = queryState.filters[key]; });
+    form.elements.include_cancelled.checked = queryState.include_cancelled;
+    form.elements.include_improcedente.checked = queryState.include_improcedente;
     page.querySelector("[data-breakdown]").value = queryState.group_by;
     const snapshot = queryState.metric === "backlog";
     form.elements.start.disabled = snapshot;
@@ -296,7 +308,7 @@
       if (isNet) {
         const amount = number.format(Math.abs(item.value));
         value = item.value > 0 ? `↑ +${amount}` : item.value < 0 ? `↓ ${amount}` : "0";
-        note = item.value > 0 ? `${amount} tickets a mais no estoque` : item.value < 0 ? `${amount} tickets a menos no estoque` : "Novos e encerrados em equilíbrio";
+        note = item.value > 0 ? `${amount} tickets a mais no saldo do fluxo` : item.value < 0 ? `${amount} tickets a menos no saldo do fluxo` : "Novos e encerrados em equilíbrio";
       } else if (isBacklogVariation) {
         value = item.value == null ? "—" : `${percentage.format(item.value)}%`;
         note = "vs início do período";
@@ -329,9 +341,9 @@
       });
     }
     const subtitle = {
-      all: "Novos e encerrados por intervalo; backlog acumulado na linha.",
+      all: "Novos e resolvidos por intervalo; backlog acumulado na linha.",
       created: general && originMode ? "Entradas por intervalo, divididas por origem." : "Tickets novos em cada intervalo do per\u00edodo.",
-      closed: general && originMode ? "Encerramentos por intervalo, divididos por origem." : "Tickets encerrados em cada intervalo do per\u00edodo.",
+      closed: general && originMode ? "Resolu\u00e7\u00f5es por intervalo, divididas por origem." : "Tickets resolvidos em cada intervalo do per\u00edodo.",
       backlog: "Estoque de tickets ativos ao fim de cada intervalo.",
     }[mode];
     page.querySelector("[data-operational-subtitle]").textContent = subtitle;
@@ -353,21 +365,22 @@
         ["cancellation_entries", "Novos · Cancelamentos", "cancellation-entry"],
       ];
       const closedOriginDefs = [
-        ["support_closed", "Encerrados · Suporte", "support-closed"],
-        ["cancellation_closed", "Encerrados · Cancelamentos", "cancellation-closed"],
+        ["support_closed", "Resolvidos · Suporte", "support-closed"],
+        ["cancellation_closed", "Resolvidos · Cancelamentos", "cancellation-closed"],
       ];
       const entryDefs = originMode ? entryOriginDefs : [["entries", "Novos", "entries"]];
-      const closedDefs = originMode ? closedOriginDefs : [["closed", "Encerrados", "closed"]];
+      const closedDefs = originMode ? closedOriginDefs : [["closed", "Resolvidos", "closed"]];
       definitions = mode === "created" ? entryDefs
         : mode === "closed" ? closedDefs
           : mode === "backlog" ? [] : [...entryDefs, ...closedDefs];
     } else {
       const entriesKey = data.scope === "cancellation" ? "cancellation_entries" : "entries";
       const closedKey = data.scope === "cancellation" ? "cancellation_closed" : "closed";
+      const closedDefs = [[closedKey, "Resolvidos", "closed"]];
       definitions = mode === "created" ? [[entriesKey, "Novos", "entries"]]
-        : mode === "closed" ? [[closedKey, "Encerrados", "closed"]]
+        : mode === "closed" ? closedDefs
           : mode === "backlog" ? []
-            : [[entriesKey, "Novos", "entries"], [closedKey, "Encerrados", "closed"]];
+            : [[entriesKey, "Novos", "entries"], ...closedDefs];
     }
     const flowMax = Math.max(0, ...rows.flatMap(row => definitions.map(([key]) => Number(row[key] || 0))));
     const flowScaleMax = flowMax ? flowMax / .84 : 0;
@@ -422,13 +435,14 @@
       const [, firstDay, firstMonth, lastDay, lastMonth] = match;
       return firstMonth === lastMonth ? `${firstDay}\u2013${lastDay} ${lastMonth}` : `${firstDay} ${firstMonth}\u2013${lastDay} ${lastMonth}`;
     };
+    const showFlowBarLabels = definitions.length <= 4;
     const pointsHTML = rows.map((row, index) => {
       const bars = definitions.map(([key, label, cls], barIndex) => {
         const value = Number(row[key] || 0);
         const height = value > 0 ? value / flowScaleMax * 100 : 0;
         const valueLift = grain === "hour" ? 2 + (barIndex % 2) * 8 : 2;
         const groupStart = general && originMode && mode === "all" && grain !== "hour" && barIndex === 2 ? " is-group-start" : "";
-        return `<span class="cockpit-ops-bar-item${groupStart}" style="--bar-height:${height}%;--value-lift:${valueLift}px" aria-hidden="true">${value > 0 ? `<span class="cockpit-ops-bar-value">${number.format(value)}</span>` : ""}<i class="cockpit-ops-bar ${cls}"></i></span>`;
+        return `<span class="cockpit-ops-bar-item${groupStart}" style="--bar-height:${height}%;--value-lift:${valueLift}px" aria-hidden="true">${value > 0 && showFlowBarLabels ? `<span class="cockpit-ops-bar-value">${number.format(value)}</span>` : ""}<i class="cockpit-ops-bar ${cls}"></i></span>`;
       }).join("");
       const net = Number(row.balance || 0), netLabel = `${net > 0 ? "+" : ""}${number.format(net)}`;
       const rowBacklog = row.backlog !== null && row.backlog !== undefined ? number.format(row.backlog) : "\u2014";
@@ -436,19 +450,19 @@
       const entryOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_entries)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_entries)}</small>` : "";
       const closedOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_closed)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_closed)}</small>` : "";
       const tooltipLines = mode === "all"
-        ? `<small>Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small>Encerrados: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Varia\u00e7\u00e3o l\u00edquida: ${escapeHTML(netLabel)}</small>${backlogAvailable ? `<small>Backlog inicial: ${rowBacklogStart}</small><small>Backlog: ${rowBacklog}</small>` : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
+        ? `<small>Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small>Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Varia\u00e7\u00e3o l\u00edquida: ${escapeHTML(netLabel)}</small>${backlogAvailable ? `<small>Backlog inicial: ${rowBacklogStart}</small><small>Backlog: ${rowBacklog}</small>` : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
         : mode === "created" ? `<small>Novos: ${number.format(row.entries)}</small>${entryOriginDetail}`
-          : mode === "closed" ? `<small>Encerrados: ${number.format(row.closed)}</small>${closedOriginDetail}`
+          : mode === "closed" ? `<small>Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}`
             : `<small>Backlog: ${rowBacklog}</small>`;
       const originAccessible = general
-        ? mode === "all" ? ` Suporte: ${number.format(row.support_entries)} novos, ${number.format(row.support_closed)} encerrados. Cancelamentos: ${number.format(row.cancellation_entries)} novos, ${number.format(row.cancellation_closed)} encerrados.`
+        ? mode === "all" ? ` Suporte: ${number.format(row.support_entries)} novos, ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_entries)} novos, ${number.format(row.cancellation_closed)} resolvidos.`
           : mode === "created" ? ` Suporte: ${number.format(row.support_entries)} novos. Cancelamentos: ${number.format(row.cancellation_entries)} novos.`
-            : mode === "closed" ? ` Suporte: ${number.format(row.support_closed)} encerrados. Cancelamentos: ${number.format(row.cancellation_closed)} encerrados.` : ""
+            : mode === "closed" ? ` Suporte: ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_closed)} resolvidos.` : ""
         : "";
       const accessible = mode === "all"
-        ? `${row.label}. Novos: ${number.format(row.entries)}. Encerrados: ${number.format(row.closed)}. Varia\u00e7\u00e3o l\u00edquida: ${netLabel}. Backlog: ${rowBacklog}.${originAccessible}`
+        ? `${row.label}. Novos: ${number.format(row.entries)}. Resolvidos: ${number.format(row.closed)}. Varia\u00e7\u00e3o l\u00edquida: ${netLabel}. Backlog: ${rowBacklog}.${originAccessible}`
         : mode === "created" ? `${row.label}. Novos: ${number.format(row.entries)}.${originAccessible}`
-          : mode === "closed" ? `${row.label}. Encerrados: ${number.format(row.closed)}.${originAccessible}`
+          : mode === "closed" ? `${row.label}. Resolvidos: ${number.format(row.closed)}.${originAccessible}`
             : `${row.label}. Backlog: ${rowBacklog}.`;
       const label = index % labelStep === 0 || (grain !== "hour" && index === rows.length - 1) ? row.label : "";
       return `<button type="button" class="cockpit-ops-point" data-chart-point aria-label="${escapeHTML(accessible)}"><span class="cockpit-ops-bars">${bars}</span><span class="cockpit-ops-x-label">${escapeHTML(label ? shortLabel(label) : "")}</span><span class="cockpit-point-tooltip" role="tooltip"><strong>${escapeHTML(row.label)}</strong>${tooltipLines}</span></button>`;
@@ -456,8 +470,8 @@
     const legendItems = definitions.map(([, label, cls]) => `<span><i class="${cls}"></i>${escapeHTML(label)}</span>`);
     if (lineVisible) legendItems.push('<span><i class="backlog-line-key"></i>Backlog</span>');
     const note = mode !== "backlog" && !backlogAvailable && history.message
-      ? `${history.message} O fluxo de novos e encerrados continua vis\u00edvel.`
-      : !hasFlow && mode !== "backlog" ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "encerramento" : "novos ou encerrados"} neste per\u00edodo.` : "";
+      ? `${history.message} O fluxo de novos e resolvidos continua vis\u00edvel.`
+      : !hasFlow && mode !== "backlog" ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "";
     return `<article class="cockpit-ops-chart" data-mode="${mode}" data-grain="${escapeHTML(grain)}" style="--ops-plot-height:${visualHeight}px"><div class="cockpit-ops-legend" aria-label="S\u00e9ries do gr\u00e1fico">${legendItems.join("")}</div>${chartNote(note)}<div class="cockpit-ops-chart-frame"><div class="cockpit-ops-axis cockpit-ops-axis-left" aria-hidden="true">${makeAxis(flowTicks)}</div><div class="cockpit-ops-plot-area"><div class="cockpit-ops-grid-lines" aria-hidden="true"></div>${svg}<div class="cockpit-ops-point-grid" style="--series-count:${rows.length}" role="group" aria-label="Pontos do per\u00edodo">${pointsHTML}</div></div><div class="cockpit-ops-axis cockpit-ops-axis-right" aria-hidden="true">${makeAxis(backlogTicks)}</div></div></article>`;
   }
 
@@ -535,6 +549,12 @@
       const accessible = `${item.label}: ${number.format(item.value)} ${unit}, ${number.format(item.share || 0)}%`;
       if (spec.type === "ranking") {
         let label = escapeHTML(item.label);
+        let logo = "";
+        if (spec.dimension === "provider") {
+          logo = item.logo_url
+            ? `<span class="cockpit-provider-logo"><img src="${escapeHTML(item.logo_url)}" alt="" loading="lazy"></span>`
+            : `<span class="cockpit-provider-logo" aria-hidden="true">${escapeHTML(item.logo_initials || "?")}</span>`;
+        }
         if (spec.dimension === "uf") {
           const code = stateCode(item.key || item.label);
           const flag = code
@@ -542,11 +562,11 @@
             : "";
           label = `${flag}<span class="cockpit-uf-code">${escapeHTML(code || item.label)}</span>`;
         }
-        return `<li title="${escapeHTML(accessible)}" aria-label="${escapeHTML(accessible)}"><span class="cockpit-rank-position">${index + 1}</span><strong>${label}</strong><span>${number.format(item.value)} ${escapeHTML(unit)}</span><small>${number.format(item.share || 0)}%</small></li>`;
+        return `<li title="${escapeHTML(accessible)}" aria-label="${escapeHTML(accessible)}"><span class="cockpit-rank-position">${index + 1}</span>${logo}<strong>${label}</strong><span>${number.format(item.value)} ${escapeHTML(unit)}</span><small>${number.format(item.share || 0)}%</small></li>`;
       }
       return `<li title="${escapeHTML(accessible)}"><strong>${escapeHTML(item.label)}</strong><span class="cockpit-horizontal-track"><i style="--bar-width:${width}%"></i></span><span>${number.format(item.value)} ${escapeHTML(unit)}</span><small>${number.format(item.share || 0)}%</small></li>`;
     }).join("");
-    const listClass = spec.type === "ranking" ? "cockpit-provider-ranking" : "cockpit-horizontal-list";
+    const listClass = spec.type === "ranking" ? `cockpit-provider-ranking${spec.dimension === "provider" ? " is-provider" : ""}` : "cockpit-horizontal-list";
     const tag = spec.type === "ranking" ? "ol" : "ul";
     return `<article class="cockpit-chart-card cockpit-dimension-card ${spec.type === "ranking" ? "cockpit-ranking-card" : ""}" data-chart-key="${escapeHTML(spec.key)}" data-chart-type="${escapeHTML(spec.type)}"><header><h3>${escapeHTML(spec.title)}</h3><p>${escapeHTML(spec.subtitle || "")}</p></header><${tag} class="${listClass}">${rows || `<li>Nenhum resultado para ${escapeHTML(spec.title.toLowerCase())}.</li>`}</${tag}></article>`;
   }
@@ -680,6 +700,10 @@
       if (temporaryTicketDay) payload.ticket_day = temporaryTicketDay;
       const result = await post(page.dataset.queryUrl, payload, controller.signal);
       if (requestId !== latestRequest) return;
+      queryState.include_cancelled = result.normalized_query?.include_cancelled === true;
+      queryState.include_improcedente = result.normalized_query?.include_improcedente === true;
+      form.elements.include_cancelled.checked = queryState.include_cancelled;
+      form.elements.include_improcedente.checked = queryState.include_improcedente;
       const normalizedReason = result.normalized_query?.filters?.termination_reason;
       if (normalizedReason && queryState.filters.termination_reason !== "all") {
         queryState.filters.termination_reason = normalizedReason;
@@ -698,27 +722,40 @@
     } finally { if (requestId === latestRequest) { setLoading(false); page.querySelector("[data-results-loading]").hidden = true; page.querySelector("[data-calendar]").dataset.calendarLoading = "false"; } }
   }
   const PRESETS = {
-    finance: { metric: "closed_tickets", group_by: "provider", label: "Pend\u00eancia Financeira", filters: { termination_reason: "Pend\u00eancia Financeira" } },
-    reason: { metric: "closed_tickets", group_by: "termination_reason", label: "Tickets por Motivo" },
+    finance: { metric: "closed_tickets", group_by: "provider", label: "Pend\u00eancia Financeira", filters: { termination_reason: "pendencia_financeira" } },
     recurrence: { metric: "recurrences", group_by: "provider", label: "Reincid\u00eancia" },
-    backlog: { metric: "backlog", group_by: "provider", label: "Backlog por Provedor" },
-    status: { metric: "tickets", group_by: "status", label: "Tickets por Status" },
-    "high-critical": { metric: "tickets", group_by: "priority", label: "Alto / Cr\u00edtico", filters: { priority: "high-critical" } },
+    massive: { metric: "closed_tickets", group_by: "provider", label: "Falha Massiva", filters: { termination_reason: "falha_massiva" } },
+    improper: { metric: "tickets", group_by: "provider", label: "Improcedentes", filters: { responsibility: "IMPROCEDENTE" } },
+    proper: { metric: "tickets", group_by: "provider", label: "Procedentes", filters: { responsibility: "PROCEDENTE" } },
+    "high-critical": { metric: "tickets", group_by: "provider", label: "Alto / Cr\u00edtico", filters: { priority: "high-critical" } },
+    "over-24h": { metric: "backlog", group_by: "provider", label: "Acima de 24h", filters: { age_bucket: "OVER_24H" } },
+    unassigned: { metric: "backlog", group_by: "provider", label: "Sem respons\u00e1vel", filters: { responsible: "unassigned" } },
+    open: { metric: "open_tickets", group_by: "provider", label: "Em atendimento" },
+    pending: { metric: "pending_tickets", group_by: "provider", label: "Pendentes" },
+    resolved: { metric: "resolved_closed_tickets", group_by: "provider", label: "Resolvidos" },
   };
   function presetState(key) {
     const preset = PRESETS[key]; if (!preset) return;
-    const start = queryState.start, end = queryState.end;
-    monthExplicitlySelected = false;
-    queryState = cloneDefaults(); queryState.metric = preset.metric; queryState.group_by = preset.group_by;
+    const { scope, start, end, compare_to, selected_month, chart_view, chart_origin, include_cancelled, include_improcedente } = queryState;
+    const keepSelectedMonth = monthExplicitlySelected;
+    queryState = cloneDefaults();
+    queryState.scope = scope;
     queryState.start = start; queryState.end = end;
+    queryState.compare_to = compare_to;
+    queryState.selected_month = selected_month;
+    queryState.chart_view = chart_view; queryState.chart_origin = chart_origin;
+    queryState.include_cancelled = include_cancelled; queryState.include_improcedente = include_improcedente;
+    monthExplicitlySelected = keepSelectedMonth;
+    queryState.metric = preset.metric; queryState.group_by = preset.group_by;
     if (preset.filters) Object.assign(queryState.filters, preset.filters);
+    if (key === "improper") queryState.include_improcedente = true;
     activePreset = { key, label: preset.label, modified: false };
     syncForm(); refresh();
   }
   function updatePresetStatus() {
     if (!activePreset) return;
     const preset = PRESETS[activePreset.key];
-    activePreset.modified = queryState.metric !== preset.metric || queryState.group_by !== preset.group_by || FILTER_KEYS.some(key => queryState.filters[key] !== (preset.filters?.[key] || "all")) || queryState.start !== DEFAULT_START || queryState.end !== DEFAULT_END || Boolean(queryState.compare_to);
+    activePreset.modified = queryState.metric !== preset.metric || queryState.group_by !== preset.group_by || FILTER_KEYS.some(key => queryState.filters[key] !== (preset.filters?.[key] || "all")) || queryState.start !== DEFAULT_START || queryState.end !== DEFAULT_END || Boolean(queryState.compare_to) || queryState.include_cancelled !== Boolean(preset.include_cancelled) || queryState.include_improcedente !== Boolean(preset.include_improcedente || activePreset.key === "improper");
   }
   async function loadSaved() {
     const data = await post(page.dataset.savedUrl, { action: "list" });

@@ -4,6 +4,10 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 
+import os
+from pathlib import Path
+import ssl
+
 from aplicativos.integracoes.services.errors import (
     IntegrationError,
     IntegrationNotConfigured,
@@ -15,6 +19,7 @@ from aplicativos.integracoes.services.errors import (
     OTRSCredentialMissingError,
     OTRSDriverError,
     OTRSHostUnreachableError,
+    OTRSTLSRequiredError,
     OTRSTimeoutError,
     OTRSUnavailableError,
 )
@@ -38,19 +43,28 @@ _FORBIDDEN_DATA = re.compile(
 class OTRSReadOnlyClient:
     MAX_PAGE_SIZE = 50
 
-    def __init__(self, *, host, port=3306, database="", username, password, timeout=10, connection_factory=None):
+    LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+    def __init__(
+        self, *, host, port=3306, database="", username, password, timeout=10,
+        use_tls=None, ssl_ca="", ssl_verify=True, connection_factory=None,
+    ):
         if not host:
             raise IntegrationNotConfigured()
         if not isinstance(username, str) or not username or password is None or password == "":
             raise OTRSCredentialMissingError()
         if not isinstance(password, str) or "\r" in password or "\n" in password:
             raise OTRSCredentialInvalidError()
-        self.host = host
+        self.host = str(host).strip()
+        self.is_loopback_host = self.host.casefold() in self.LOOPBACK_HOSTS
         self.port = int(port)
         self.database = (database or "").strip()
         self.username = username
         self.password = password
         self.timeout = max(1, min(int(timeout), 60))
+        self.use_tls = (not self.is_loopback_host) if use_tls is None else bool(use_tls)
+        self.ssl_ca = str(ssl_ca or os.getenv("ARION_OTRS_SSL_CA", "")).strip()
+        self.ssl_verify = bool(ssl_verify)
         self.connection_factory = connection_factory
         self._active_connection = None
         self.select_queries_count = 0
@@ -232,7 +246,26 @@ class OTRSReadOnlyClient:
                 except Exception:
                     pass
 
+    def _build_ssl_context(self):
+        if not self.is_loopback_host and (not self.use_tls or not self.ssl_verify):
+            raise OTRSTLSRequiredError()
+        if not self.use_tls:
+            return None
+        cafile = None
+        if self.ssl_ca:
+            ca_path = Path(self.ssl_ca).expanduser()
+            if not ca_path.is_file():
+                raise OTRSTLSRequiredError()
+            cafile = str(ca_path)
+        context = ssl.create_default_context(cafile=cafile)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        if self.ssl_verify:
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.check_hostname = bool(cafile)
+        return context
+
     def _default_connection_factory(self):
+        ssl_context = self._build_ssl_context()
         try:
             import pymysql
         except ImportError:
@@ -244,10 +277,14 @@ class OTRSReadOnlyClient:
             "charset": "utf8mb4", "autocommit": True,
             "cursorclass": pymysql.cursors.DictCursor,
         }
+        if ssl_context is not None:
+            options["ssl"] = ssl_context
         if self.database:
             options["database"] = self.database
         try:
             return pymysql.connect(**options)
+        except IntegrationError:
+            raise
         except Exception as exc:
             raise self._mapped_error(exc) from None
 
@@ -334,6 +371,8 @@ class OTRSReadOnlyClient:
             return OTRSHostUnreachableError()
         if code in {2006, 2013}:
             return OTRSUnavailableError()
+        if isinstance(exc, ssl.SSLError) or any(term in detail for term in ("ssl", "tls", "certificate")):
+            return OTRSTLSRequiredError()
         if isinstance(exc, TimeoutError) or any(term in detail for term in ("timed out", "timeout")):
             return OTRSTimeoutError()
         return OTRSDriverError()
