@@ -1,4 +1,4 @@
-﻿.settings-page--integrations {
+.settings-page--integrations {
   width: calc(100% - 64px);
   margin-left: 32px;
   margin-right: auto;
@@ -39,7 +39,11 @@
 .integration-field { display:grid; grid-template-columns:180px minmax(0,1fr); align-items:start; gap:16px; margin:0 0 16px; }
 .integration-field > label { padding-top:11px; color:var(--text-secondary); font-size:11px; }
 .integration-control { min-width:0; }
-.integration-control input, .integration-control select, .integration-control textarea, .integration-search input { display:block; width:100%; min-height:39px; padding:9px 11px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); outline:0; background:var(--surface-primary); color:var(--text-primary); font:inherit; font-size:12px; }
+.integration-control input:not([type="checkbox"]), .integration-control select, .integration-control textarea, .integration-search input { display:block; width:100%; min-height:39px; padding:9px 11px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); outline:0; background:var(--surface-primary); color:var(--text-primary); font:inherit; font-size:12px; }
+.integration-control input[type="checkbox"] { display:inline-block; width:18px; min-height:18px; height:18px; margin:10px 0 0; accent-color:var(--accent-blue); cursor:pointer; }
+.integration-control--checkbox { display:flex; flex-direction:column; gap:6px; }
+.integration-warning-box { margin-top:8px; padding:10px 14px; border:1px solid color-mix(in srgb, var(--warning) 40%, var(--border-primary)); border-radius:var(--radius-sm); background:color-mix(in srgb, var(--warning) 10%, var(--surface-primary)); color:var(--text-primary); font-size:11px; line-height:1.55; }
+.integration-warning-box strong { color:var(--warning); font-weight:600; }
 .integration-control textarea { resize:vertical; }
 .integration-control input:focus, .integration-control select:focus, .integration-control textarea:focus, .integration-search input:focus { border-color:var(--accent-blue); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-blue) 18%,transparent); }
 .integration-control small { display:block; margin-top:7px; color:var(--text-muted); font-size:10px; line-height:1.55; }

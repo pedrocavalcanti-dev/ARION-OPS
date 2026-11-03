@@ -4,7 +4,7 @@
 {% block integration_title %}{{ integration.name }}{% endblock %}
 {% block integration_description %}{{ integration.kind }} · configuração, saúde e diagnóstico da fonte.{% endblock %}
 {% block integration_content %}
-<div class="integration-detail-top"><a class="integration-back" href="{% url 'configuracoes:integrations' %}">← Todas as integrações</a><span class="integration-status integration-status--{{ integration.status }}"><i></i>{{ integration.get_status_display }}</span></div>
+<div class="integration-detail-top"><a class="integration-back" href="{% url 'configuracoes:integrations' %}">← Todas as integrações</a><span class="integration-status integration-status--{{ integration.status }}"><i></i>{{ integration.connection_status_display }}</span></div>
 <nav class="integration-tabs" aria-label="Seções da integração">
   <a href="?tab=overview"{% if active_tab == "overview" %} aria-current="page"{% endif %}>Visão geral</a>
   {% if perms.configuracoes.manage_integrations %}<a href="?tab=configuration"{% if active_tab == "configuration" %} aria-current="page"{% endif %}>Configuração</a>{% endif %}
@@ -20,7 +20,22 @@
   <form class="integration-form" method="post" action="{% url 'configuracoes:integracoes:save-config' integration.key %}">{% csrf_token %}
     {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
     {% for field in form %}
-      {% if field.name != "password" %}<div class="integration-field"><label for="{{ field.id_for_label }}">{{ field.label }}</label><div class="integration-control">{{ field }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}{{ field.errors }}</div></div>{% endif %}
+      {% if field.name != "password" %}
+      <div class="integration-field{% if field.name == 'allow_insecure_remote' %} integration-field--legacy-warning{% endif %}">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        <div class="integration-control{% if field.field.widget.input_type == 'checkbox' %} integration-control--checkbox{% endif %}">
+          {{ field }}
+          {% if field.name == 'allow_insecure_remote' %}
+          <div class="integration-warning-box">
+            <strong>Aviso de segurança:</strong> Compatibilidade para servidor MySQL legado sem suporte TLS. O tráfego entre o ARION OPS e o banco remoto não será criptografado.
+          </div>
+          {% elif field.help_text %}
+          <small>{{ field.help_text }}</small>
+          {% endif %}
+          {{ field.errors }}
+        </div>
+      </div>
+      {% endif %}
     {% endfor %}
     <div class="integration-field integration-credential-field"><label for="{{ form.password.id_for_label }}">Senha</label><div class="integration-control">{% if integration.credentials_configured %}<details class="integration-credential-editor"{% if form.password.errors %} open{% endif %}><summary>Alterar credenciais</summary><div>{{ form.password }}<small>Informe a nova senha. O campo vazio mantém a senha atual.</small></div></details>{% else %}{{ form.password }}<small>Informe a senha. Ela não será exibida novamente após salvar.</small>{% endif %}{{ form.password.errors }}</div></div>
     <div class="integration-form-actions"><button class="settings-button" type="submit">Salvar configuração</button></div>
@@ -66,13 +81,13 @@
 <section class="settings-section integration-section">
   <div class="settings-section-heading"><div><h2>Visão geral</h2><p>Resumo seguro da configuração e do estado atual.</p></div></div>
   <dl class="integration-overview-facts">
-    <div><dt>Tipo</dt><dd>{{ integration.kind }}</dd></div><div><dt>Status da conexão</dt><dd>{{ integration.get_status_display }}</dd></div>
-    <div><dt>Uso operacional</dt><dd>{% if integration.enabled %}Ativo{% else %}Inativo{% endif %}</dd></div>
+    <div><dt>Tipo</dt><dd>{{ integration.kind }}</dd></div><div><dt>Status da conexão</dt><dd>{{ integration.connection_status_display }}</dd></div>
+    <div><dt>Uso operacional</dt><dd>{% if integration.enabled %}{% if integration.status == "connected" %}Ativo{% else %}Degradado (conexão pendente){% endif %}{% else %}Inativo{% endif %}</dd></div>
     {% if integration.key == "cmdb" %}<div><dt>URL base</dt><dd>{{ integration.config.base_url|default:"Não configurada" }}</dd></div><div><dt>TLS</dt><dd>{% if integration.config.verify_tls %}Verificado{% else %}Verificação desativada explicitamente{% endif %}</dd></div><div><dt>Lote de leitura</dt><dd>{{ integration.config.batch_size|default:"50" }} itens</dd></div>
     {% else %}<div><dt>Host</dt><dd>{{ integration.config.host|default:"Não configurado" }}</dd></div><div><dt>Porta</dt><dd>{{ integration.config.port|default:"3306" }}</dd></div><div><dt>Banco</dt><dd>{{ integration.config.database|default:"A selecionar" }}</dd></div><div><dt>Usuário</dt><dd>{{ integration.username|default:"Não configurado" }}</dd></div><div><dt>Tabelas visíveis</dt><dd>{% if integration.config.database and integration.status == "connected" %}Inspecione a estrutura do banco{% else %}—{% endif %}</dd></div>{% endif %}
     <div><dt>Credenciais</dt><dd>{% if integration.credentials_configured %}Configuradas e protegidas{% else %}Não configuradas{% endif %}</dd></div>
     <div><dt>Último teste</dt><dd>{% if integration.last_test_at %}{{ integration.last_test_at|date:"d/m/Y H:i:s" }} · {{ integration.last_latency_ms }} ms{% else %}Ainda não testado{% endif %}</dd></div>
-    <div><dt>Última leitura</dt><dd>{% if integration.last_read_at %}{{ integration.last_read_at|date:"d/m/Y H:i:s" }}{% else %}—{% endif %}</dd></div>
+    <div><dt>Última leitura</dt><dd>{% if integration.last_read_at %}{{ integration.last_read_at|date:"d/m/Y H:i:s" }}{% elif sync_state.last_success_at %}{{ sync_state.last_success_at|date:"d/m/Y H:i:s" }}{% else %}—{% endif %}</dd></div>
     {% if integration.last_error %}<div><dt>Último resultado</dt><dd>{{ integration.last_error }}</dd></div>{% endif %}
   </dl>
   <div class="integration-actions">
