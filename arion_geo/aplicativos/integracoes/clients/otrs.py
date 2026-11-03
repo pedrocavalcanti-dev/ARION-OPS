@@ -19,6 +19,9 @@ from aplicativos.integracoes.services.errors import (
     OTRSCredentialMissingError,
     OTRSDriverError,
     OTRSHostUnreachableError,
+    OTRSTLSCertificateError,
+    OTRSTLSError,
+    OTRSTLSHandshakeError,
     OTRSTLSRequiredError,
     OTRSTimeoutError,
     OTRSUnavailableError,
@@ -57,14 +60,14 @@ class OTRSReadOnlyClient:
             raise OTRSCredentialInvalidError()
         self.host = str(host).strip()
         self.is_loopback_host = self.host.casefold() in self.LOOPBACK_HOSTS
-        self.port = int(port)
+        self.port = int(3306 if port in (None, "") else port)
         self.database = (database or "").strip()
         self.username = username
         self.password = password
-        self.timeout = max(1, min(int(timeout), 60))
+        self.timeout = max(1, min(int(10 if timeout in (None, "") else timeout), 60))
         self.use_tls = (not self.is_loopback_host) if use_tls is None else bool(use_tls)
-        self.ssl_ca = str(ssl_ca or os.getenv("ARION_OTRS_SSL_CA", "")).strip()
-        self.ssl_verify = bool(ssl_verify)
+        self.ssl_ca = str(ssl_ca or os.getenv("ARION_OTRS_SSL_CA") or "").strip()
+        self.ssl_verify = True if ssl_verify is None else bool(ssl_verify)
         self.connection_factory = connection_factory
         self._active_connection = None
         self.select_queries_count = 0
@@ -92,7 +95,7 @@ class OTRSReadOnlyClient:
                 except Exception as exc:
                     if self._error_code(exc) in {1044, 1142, 1227}:
                         return []
-                    raise self._mapped_error(exc) from None
+                    raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
         return [self._row_value(row, "SCHEMA_NAME") for row in rows if self._row_value(row, "SCHEMA_NAME")]
 
     def list_tables(self, database=None):
@@ -169,7 +172,7 @@ class OTRSReadOnlyClient:
                     cursor.execute(statement, tuple(params or ()))
                     rows = cursor.fetchall()
                 except Exception as exc:
-                    raise self._mapped_error(exc) from None
+                    raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
         return [dict(row) if isinstance(row, dict) else row for row in rows]
 
     @contextmanager
@@ -225,7 +228,7 @@ class OTRSReadOnlyClient:
             except IntegrationError:
                 raise
             except Exception as exc:
-                raise self._mapped_error(exc) from None
+                raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
             return
         connection = None
         try:
@@ -238,7 +241,7 @@ class OTRSReadOnlyClient:
         except IntegrationError:
             raise
         except Exception as exc:
-            raise self._mapped_error(exc) from None
+            raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
         finally:
             if connection is not None:
                 try:
@@ -248,16 +251,41 @@ class OTRSReadOnlyClient:
 
     def _build_ssl_context(self):
         if not self.is_loopback_host and (not self.use_tls or not self.ssl_verify):
-            raise OTRSTLSRequiredError()
+            disabled = "use_tls=False" if not self.use_tls else "ssl_verify=False"
+            raise OTRSTLSRequiredError(
+                error_code="tls_policy_required",
+                technical_detail=(
+                    f"Política TLS obrigatória para host remoto ({disabled}); "
+                    "habilite TLS com verificação de certificado ou conecte via túnel local em 127.0.0.1."
+                ),
+            )
         if not self.use_tls:
             return None
         cafile = None
         if self.ssl_ca:
             ca_path = Path(self.ssl_ca).expanduser()
             if not ca_path.is_file():
-                raise OTRSTLSRequiredError()
+                raise OTRSTLSCertificateError(
+                    safe_message=(
+                        "Arquivo de certificado CA configurado para o OTRS não foi encontrado. "
+                        "Verifique ssl_ca / ARION_OTRS_SSL_CA."
+                    ),
+                    error_code="tls_ca_not_found",
+                    technical_detail="O caminho configurado em ssl_ca / ARION_OTRS_SSL_CA não existe ou não é um arquivo regular.",
+                )
             cafile = str(ca_path)
-        context = ssl.create_default_context(cafile=cafile)
+        try:
+            context = ssl.create_default_context(cafile=cafile)
+        except (ssl.SSLError, OSError) as exc:
+            detail = self._sanitize_tls_detail(exc, default="arquivo CA inválido", redact_values=(self.password, self.username))
+            raise OTRSTLSCertificateError(
+                safe_message=(
+                    "Não foi possível carregar o certificado CA configurado para o OTRS. "
+                    "Verifique o formato PEM em ssl_ca / ARION_OTRS_SSL_CA."
+                ),
+                error_code="tls_ca_invalid",
+                technical_detail=f"Falha ao carregar CA TLS ({detail}).",
+            ) from None
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         if self.ssl_verify:
             context.verify_mode = ssl.CERT_REQUIRED
@@ -286,7 +314,7 @@ class OTRSReadOnlyClient:
         except IntegrationError:
             raise
         except Exception as exc:
-            raise self._mapped_error(exc) from None
+            raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
 
     def _validated_database(self, requested):
         database = (requested if requested is not None else self.database) or ""
@@ -345,9 +373,69 @@ class OTRSReadOnlyClient:
         return args[0] if args and isinstance(args[0], int) else None
 
     @classmethod
-    def _mapped_error(cls, exc):
+    def _sanitize_tls_detail(cls, exc, *, default="", redact_values=()):
         code = cls._error_code(exc)
-        detail = " ".join(str(part) for part in getattr(exc, "args", ())).casefold()
+        original = getattr(exc, "original_exception", None) or getattr(exc, "__cause__", None)
+        target = original if isinstance(original, ssl.SSLError) else exc
+        parts = [str(part) for part in getattr(target, "args", ()) if not isinstance(part, int)]
+        text = " ".join(parts).strip() or str(target or "").strip()
+        for secret in sorted((str(val) for val in redact_values if val), key=len, reverse=True):
+            text = text.replace(secret, "[REDACTED]")
+        text = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s'\")]+", "[REDACTED_URL]", text)
+        text = re.sub(
+            r"(?i)\b(password|passwd|pwd|secret|token|access_token|refresh_token|client_secret|api_key|apikey|authorization|cookie|session|credential|user|username|uid|login)\b(\s*[=:]\s*|\s+for\s+|\s+is\s+)([^\s,;)]+)",
+            r"\1=[REDACTED]",
+            text,
+        )
+        text = re.sub(r"['\"]?[^'\"\s@()]+['\"]?@['\"]?[^'\"\s()]+['\"]?", "[REDACTED_IDENTITY]", text)
+        text = " ".join(text.split())[:260]
+        if not text:
+            return default
+        prefix = f"MySQL {code} / {type(target).__name__}" if code and target is not exc else (
+            f"MySQL {code}" if code else type(target).__name__
+        )
+        return f"{prefix}: {text}" if prefix not in text else text
+
+    @classmethod
+    def _mapped_tls_error(cls, exc, *, code=None, detail="", original=None, redact_values=()):
+        sanitized = cls._sanitize_tls_detail(exc, redact_values=redact_values)
+        if any(term in detail for term in ("doesn't support", "does not support", "not support")):
+            return OTRSTLSHandshakeError(
+                safe_message=(
+                    "O servidor MySQL do OTRS não suporta conexões TLS. "
+                    "Habilite TLS no servidor MySQL ou utilize túnel local em 127.0.0.1."
+                ),
+                error_code="server_tls_unsupported",
+                technical_detail=sanitized or "O servidor MySQL não anunciou suporte a SSL/TLS (CR_SSL_CONNECTION_ERROR 2026).",
+            )
+        if (
+            isinstance(exc, ssl.SSLCertVerificationError)
+            or isinstance(original, ssl.SSLCertVerificationError)
+            or any(term in detail for term in (
+                "certificate_verify_failed", "certificate verify failed", "self-signed",
+                "self signed", "unable to get local issuer", "unknown ca",
+                "certificate has expired", "hostname mismatch", "ip address mismatch",
+                "doesn't match", "certificate", "x509",
+            ))
+        ):
+            return OTRSTLSCertificateError(
+                error_code="certificate_verify_failed",
+                technical_detail=sanitized or "Falha na verificação do certificado X.509 apresentado pelo servidor OTRS.",
+            )
+        return OTRSTLSHandshakeError(
+            error_code="tls_handshake_failed",
+            technical_detail=sanitized or "Erro de protocolo ou handshake SSL/TLS ao conectar ao OTRS.",
+        )
+
+    @classmethod
+    def _mapped_error(cls, exc, *, redact_values=()):
+        code = cls._error_code(exc)
+        original = getattr(exc, "original_exception", None) or getattr(exc, "__cause__", None)
+        detail_parts = [str(part) for part in getattr(exc, "args", ())]
+        if original is not None:
+            detail_parts.extend(str(part) for part in getattr(original, "args", ()))
+            detail_parts.append(str(original))
+        detail = " ".join(detail_parts).casefold()
         if code in {1045, 1698, 1130}:
             return OTRSAuthenticationError()
         if code == 1049:
@@ -367,12 +455,19 @@ class OTRSReadOnlyClient:
             "timed out", "timeout", "winerror 10060", "errno 110",
         )):
             return OTRSTimeoutError()
+        if (
+            code == 2026
+            or isinstance(exc, ssl.SSLError)
+            or isinstance(original, ssl.SSLError)
+            or any(term in detail for term in ("ssl", "tls", "certificate", "x509", "handshake"))
+        ):
+            return cls._mapped_tls_error(
+                exc, code=code, detail=detail, original=original, redact_values=redact_values,
+            )
         if code in {2002, 2003}:
             return OTRSHostUnreachableError()
         if code in {2006, 2013}:
             return OTRSUnavailableError()
-        if isinstance(exc, ssl.SSLError) or any(term in detail for term in ("ssl", "tls", "certificate")):
-            return OTRSTLSRequiredError()
         if isinstance(exc, TimeoutError) or any(term in detail for term in ("timed out", "timeout")):
             return OTRSTimeoutError()
         return OTRSDriverError()

@@ -1,8 +1,10 @@
 import json
+import ssl
 from unittest import TestCase
 from unittest.mock import Mock
 
 from aplicativos.integracoes.clients.cmdb import CMDBClient
+from aplicativos.integracoes.clients.factory import normalize_otrs_config
 from aplicativos.integracoes.clients.otrs import OTRSReadOnlyClient
 from aplicativos.integracoes.forms import CMDBConfigurationForm, OTRSConfigurationForm
 from aplicativos.integracoes.services.errors import (
@@ -16,6 +18,9 @@ from aplicativos.integracoes.services.errors import (
     OTRSDatabaseNotFoundError,
     OTRSDriverError,
     OTRSHostUnreachableError,
+    OTRSTLSCertificateError,
+    OTRSTLSError,
+    OTRSTLSHandshakeError,
     OTRSTLSRequiredError,
     OTRSTimeoutError,
 )
@@ -319,24 +324,73 @@ class OTRSReadOnlyClientTests(TestCase):
         with self.assertRaises(OTRSDatabaseError):
             self.client.get_sample_rows("users; DROP TABLE users")
 
+    def test_legacy_null_and_missing_tls_options_normalize_safely(self):
+        legacy_config = {
+            "host": "200.174.198.133",
+            "port": 3306,
+            "database": "",
+            "timeout": 10,
+            "use_tls": None,
+            "ssl_ca": None,
+            "ssl_verify": None,
+        }
+        normalized = normalize_otrs_config(legacy_config)
+        self.assertIsNone(normalized["use_tls"])
+        self.assertEqual(normalized["ssl_ca"], "")
+        self.assertIs(normalized["ssl_verify"], True)
+
+        missing_config = normalize_otrs_config({"host": "200.174.198.133"})
+        self.assertIsNone(missing_config["use_tls"])
+        self.assertEqual(missing_config["ssl_ca"], "")
+        self.assertIs(missing_config["ssl_verify"], True)
+
+        explicit_true = normalize_otrs_config({"host": "200.174.198.133", "ssl_verify": True})
+        self.assertIs(explicit_true["ssl_verify"], True)
+
+        client_from_nulls = OTRSReadOnlyClient(
+            host="200.174.198.133",
+            username="reader",
+            password="private",
+            use_tls=None,
+            ssl_ca=None,
+            ssl_verify=None,
+        )
+        self.assertTrue(client_from_nulls.use_tls)
+        self.assertTrue(client_from_nulls.ssl_verify)
+        self.assertEqual(client_from_nulls.ssl_ca, "")
+        context = client_from_nulls._build_ssl_context()
+        self.assertIsNotNone(context)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+
     def test_remote_host_requires_tls_fail_closed_while_loopback_allows_local_mode(self):
-        remote_insecure = OTRSReadOnlyClient(
+        remote_insecure_tls = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private", use_tls=False
         )
-        with self.assertRaises(OTRSTLSRequiredError):
-            remote_insecure._build_ssl_context()
+        with self.assertRaises(OTRSTLSRequiredError) as caught_tls:
+            remote_insecure_tls._build_ssl_context()
+        self.assertEqual(caught_tls.exception.error_code, "tls_policy_required")
+
+        remote_insecure_verify = OTRSReadOnlyClient(
+            host="200.174.198.133", username="reader", password="private", use_tls=True, ssl_verify=False
+        )
+        with self.assertRaises(OTRSTLSRequiredError) as caught_verify:
+            remote_insecure_verify._build_ssl_context()
+        self.assertEqual(caught_verify.exception.error_code, "tls_policy_required")
 
         remote_default = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private"
         )
         self.assertTrue(remote_default.use_tls)
+        self.assertTrue(remote_default.ssl_verify)
         self.assertIsNotNone(remote_default._build_ssl_context())
 
-        loopback_client = OTRSReadOnlyClient(
-            host="127.0.0.1", username="reader", password="private"
-        )
-        self.assertFalse(loopback_client.use_tls)
-        self.assertIsNone(loopback_client._build_ssl_context())
+        for loopback_host in ("127.0.0.1", "localhost"):
+            with self.subTest(loopback_host=loopback_host):
+                loopback_client = OTRSReadOnlyClient(
+                    host=loopback_host, username="reader", password="private"
+                )
+                self.assertFalse(loopback_client.use_tls)
+                self.assertIsNone(loopback_client._build_ssl_context())
 
         form_invalid = OTRSConfigurationForm(data={
             "host": "200.174.198.133", "port": 3306, "database": "otrs",
@@ -350,3 +404,63 @@ class OTRSReadOnlyClientTests(TestCase):
             "username": "reader", "password": "private", "timeout": 10, "use_tls": False,
         })
         self.assertTrue(form_loopback.is_valid())
+
+    def test_tls_certificate_and_handshake_errors_are_distinct_from_policy_disabled_and_sanitized(self):
+        class DriverFailure(Exception):
+            pass
+
+        cert_exc = ssl.SSLCertVerificationError(
+            1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1000)"
+        )
+        wrapped_cert_exc = DriverFailure(
+            2003,
+            "Can't connect to MySQL server on '200.174.198.133' "
+            "([SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1000))",
+        )
+        wrapped_cert_exc.original_exception = cert_exc
+
+        mapped_cert = OTRSReadOnlyClient._mapped_error(
+            wrapped_cert_exc, redact_values=("secret-db-pass", "otrs-reader")
+        )
+        self.assertIsInstance(mapped_cert, OTRSTLSCertificateError)
+        self.assertIsInstance(mapped_cert, OTRSTLSError)
+        self.assertNotIsInstance(mapped_cert, OTRSTLSRequiredError)
+        self.assertEqual(mapped_cert.error_code, "certificate_verify_failed")
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", mapped_cert.technical_detail)
+
+        unsupported_exc = DriverFailure(2026, "SSL is required but the server doesn't support it")
+        mapped_unsupported = OTRSReadOnlyClient._mapped_error(unsupported_exc)
+        self.assertIsInstance(mapped_unsupported, OTRSTLSHandshakeError)
+        self.assertIsInstance(mapped_unsupported, OTRSTLSError)
+        self.assertNotIsInstance(mapped_unsupported, OTRSTLSRequiredError)
+        self.assertEqual(mapped_unsupported.error_code, "server_tls_unsupported")
+        self.assertIn("2026", mapped_unsupported.technical_detail)
+
+        handshake_exc = ssl.SSLError(
+            1,
+            "[SSL: WRONG_VERSION_NUMBER] wrong version number "
+            "user=otrs-reader password=secret-db-pass token=tok-123 "
+            "mysql://otrs-reader:secret-db-pass@200.174.198.133:3306/otrs",
+        )
+        mapped_handshake = OTRSReadOnlyClient._mapped_error(
+            handshake_exc, redact_values=("secret-db-pass", "otrs-reader")
+        )
+        self.assertIsInstance(mapped_handshake, OTRSTLSHandshakeError)
+        self.assertNotIsInstance(mapped_handshake, OTRSTLSRequiredError)
+        self.assertEqual(mapped_handshake.error_code, "tls_handshake_failed")
+        summary = mapped_handshake.diagnostic_summary()
+        self.assertIn("WRONG_VERSION_NUMBER", summary)
+        for forbidden in ("secret-db-pass", "otrs-reader", "tok-123", "mysql://otrs-reader"):
+            self.assertNotIn(forbidden, summary)
+            self.assertNotIn(forbidden, mapped_handshake.technical_detail)
+
+        missing_ca_client = OTRSReadOnlyClient(
+            host="200.174.198.133",
+            username="reader",
+            password="private",
+            ssl_ca="Z:/nonexistent/arion-otrs-ca.pem",
+        )
+        with self.assertRaises(OTRSTLSCertificateError) as caught_ca:
+            missing_ca_client._build_ssl_context()
+        self.assertNotIsInstance(caught_ca.exception, OTRSTLSRequiredError)
+        self.assertEqual(caught_ca.exception.error_code, "tls_ca_not_found")

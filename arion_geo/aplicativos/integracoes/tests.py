@@ -1,3 +1,4 @@
+from io import StringIO
 from unittest.mock import Mock, patch
 import tempfile
 from pathlib import Path
@@ -5,6 +6,8 @@ from pathlib import Path
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
 
@@ -14,6 +17,9 @@ from .services.errors import (
     OTRSAuthenticationError,
     OTRSCredentialDecryptionError,
     OTRSCredentialMissingError,
+    OTRSTLSCertificateError,
+    OTRSTLSHandshakeError,
+    OTRSTLSRequiredError,
     SecretStorageUnavailable,
 )
 from .services.secrets import TestSecretProtector
@@ -133,6 +139,74 @@ class IntegrationConfigurationTests(TestCase):
         self.assertEqual(client.password, "a-private-password")
         self.assertIs(type(client.password), str)
         self.assertEqual(client.timeout, 10)
+        self.assertTrue(client.use_tls)
+        self.assertTrue(client.ssl_verify)
+        self.assertEqual(client.ssl_ca, "")
+
+    @patch("aplicativos.integracoes.clients.factory.get_secret_protector")
+    def test_otrs_factory_preserves_tls_policy_with_legacy_null_config_fields(self, get_protector):
+        get_protector.return_value = self.protector
+        integration = Integration.objects.create(
+            key="otrs", name="OTRS MySQL", kind="MySQL", username="otrs-reader",
+            secret_ciphertext=self.protector.protect("a-private-password"),
+            config={
+                "host": "200.174.198.133",
+                "port": 3306,
+                "database": "",
+                "timeout": 10,
+                "use_tls": None,
+                "ssl_ca": None,
+                "ssl_verify": None,
+            },
+        )
+
+        from .views import _otrs_client
+        client = _otrs_client(integration)
+
+        self.assertTrue(client.use_tls)
+        self.assertTrue(client.ssl_verify)
+        self.assertEqual(client.ssl_ca, "")
+        self.assertIsNotNone(client._build_ssl_context())
+
+        integration.config["ssl_verify"] = False
+        client_unverified = _otrs_client(integration)
+        self.assertFalse(client_unverified.ssl_verify)
+        with self.assertRaises(OTRSTLSRequiredError):
+            client_unverified._build_ssl_context()
+
+        integration.config["ssl_verify"] = True
+        integration.config["use_tls"] = False
+        client_no_tls = _otrs_client(integration)
+        self.assertFalse(client_no_tls.use_tls)
+        with self.assertRaises(OTRSTLSRequiredError):
+            client_no_tls._build_ssl_context()
+
+    @patch("aplicativos.integracoes.management.commands.sincronizar_otrs._otrs_client")
+    def test_sincronizar_otrs_reports_sanitized_tls_diagnostic_on_discovery_failure(self, client_factory):
+        Integration.objects.create(
+            key="otrs", name="OTRS MySQL", kind="MySQL", username="otrs-reader",
+            secret_ciphertext=self.protector.protect("secret-otrs-password"),
+            config={"host": "200.174.198.133", "port": 3306, "database": ""},
+        )
+        fake_client = Mock()
+        fake_client.database = ""
+        fake_client.list_databases.side_effect = OTRSTLSCertificateError(
+            error_code="certificate_verify_failed",
+            technical_detail="MySQL 2003 / SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate",
+        )
+        client_factory.return_value = fake_client
+
+        stderr = StringIO()
+        with self.assertRaises(CommandError) as caught:
+            call_command("sincronizar_otrs", "--full", "--apply", verbosity=2, stdout=StringIO(), stderr=stderr)
+
+        error_text = str(caught.exception)
+        self.assertIn("OTRSTLSCertificateError", error_text)
+        self.assertIn("certificate_verify_failed", error_text)
+        self.assertIn("CERTIFICATE_VERIFY_FAILED", error_text)
+        self.assertNotIn("OTRSTLSRequiredError", error_text)
+        self.assertNotIn("secret-otrs-password", error_text)
+        self.assertIn("[OTRS][DIAGNÓSTICO]", stderr.getvalue())
 
     @patch("aplicativos.integracoes.views.get_secret_protector")
     def test_otrs_dpapi_failure_is_reported_as_decryption_failure(self, get_protector):

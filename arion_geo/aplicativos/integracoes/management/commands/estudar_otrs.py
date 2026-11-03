@@ -21,7 +21,7 @@ class Command(BaseCommand):
         except Integration.DoesNotExist as exc:
             raise CommandError("OTRS não possui configuração existente na Central de Integrações.") from exc
         except IntegrationError as exc:
-            raise CommandError(f"Não foi possível preparar o cliente OTRS ({type(exc).__name__}).") from None
+            raise CommandError(f"Não foi possível preparar o cliente OTRS ({type(exc).__name__}). {exc.diagnostic_summary()}") from exc
         except Exception as exc:
             raise CommandError(f"Não foi possível preparar o cliente OTRS ({type(exc).__name__}).") from None
 
@@ -29,7 +29,7 @@ class Command(BaseCommand):
             try:
                 databases = client.list_databases()
             except IntegrationError as exc:
-                raise CommandError(f"Não foi possível descobrir o database OTRS ({type(exc).__name__}).") from None
+                raise CommandError(f"Não foi possível descobrir o database OTRS ({type(exc).__name__}). {exc.diagnostic_summary()}") from exc
             system_databases = {"information_schema", "mysql", "performance_schema", "sys"}
             application_databases = [name for name in databases if name.casefold() not in system_databases]
             if len(application_databases) != 1:
@@ -51,6 +51,8 @@ class Command(BaseCommand):
         try:
             with client.read_only_session():
                 result = study.run(options["queue"])
+        except IntegrationError as exc:
+            raise CommandError(f"Estudo OTRS interrompido ({type(exc).__name__}); nenhuma escrita foi solicitada. {exc.diagnostic_summary()}") from exc
         except Exception as exc:
             # Provider exceptions may contain connection details. Never surface their text.
             raise CommandError(f"Estudo OTRS interrompido ({type(exc).__name__}); nenhuma escrita foi solicitada.") from None

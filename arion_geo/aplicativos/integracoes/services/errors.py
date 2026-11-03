@@ -3,10 +3,24 @@ class IntegrationError(Exception):
 
     safe_message = "Não foi possível concluir a operação da integração."
 
-    def __init__(self, *args, error_code="", http_status=None):
-        super().__init__(*args)
+    def __init__(self, *args, error_code="", http_status=None, technical_detail="", safe_message=None):
         self.error_code = error_code
         self.http_status = http_status
+        self.technical_detail = technical_detail
+        if safe_message:
+            self.safe_message = safe_message
+        if args:
+            super().__init__(*args)
+        else:
+            super().__init__(self.diagnostic_summary())
+
+    def diagnostic_summary(self):
+        parts = [self.safe_message]
+        if self.error_code:
+            parts.append(f"código={self.error_code}")
+        if self.technical_detail:
+            parts.append(f"detalhe={self.technical_detail}")
+        return " | ".join(part for part in parts if part)
 
 
 class SecretStorageUnavailable(IntegrationError):
@@ -88,3 +102,21 @@ class OTRSDatabaseError(IntegrationError):
 
 class OTRSTLSRequiredError(IntegrationError):
     safe_message = "Conexão OTRS para host remoto exige TLS configurado ou túnel local em loopback (127.0.0.1)."
+
+
+class OTRSTLSError(IntegrationError):
+    safe_message = "Falha na negociação TLS ou validação de certificado com o banco OTRS."
+
+
+class OTRSTLSCertificateError(OTRSTLSError):
+    safe_message = (
+        "Falha na validação do certificado TLS do banco OTRS. "
+        "Configure uma CA válida (ssl_ca / ARION_OTRS_SSL_CA) ou utilize túnel local em 127.0.0.1."
+    )
+
+
+class OTRSTLSHandshakeError(OTRSTLSError):
+    safe_message = (
+        "Falha no handshake TLS com o banco OTRS (servidor sem suporte TLS ativo ou protocolo incompatível). "
+        "Habilite TLS no servidor MySQL ou utilize túnel local em 127.0.0.1."
+    )
