@@ -338,11 +338,13 @@ class OTRSReadOnlyClientTests(TestCase):
         self.assertIsNone(normalized["use_tls"])
         self.assertEqual(normalized["ssl_ca"], "")
         self.assertIs(normalized["ssl_verify"], True)
+        self.assertIs(normalized["allow_insecure_remote"], False)
 
         missing_config = normalize_otrs_config({"host": "200.174.198.133"})
         self.assertIsNone(missing_config["use_tls"])
         self.assertEqual(missing_config["ssl_ca"], "")
         self.assertIs(missing_config["ssl_verify"], True)
+        self.assertIs(missing_config["allow_insecure_remote"], False)
 
         explicit_true = normalize_otrs_config({"host": "200.174.198.133", "ssl_verify": True})
         self.assertIs(explicit_true["ssl_verify"], True)
@@ -354,18 +356,22 @@ class OTRSReadOnlyClientTests(TestCase):
             use_tls=None,
             ssl_ca=None,
             ssl_verify=None,
+            allow_insecure_remote=None,
         )
         self.assertTrue(client_from_nulls.use_tls)
         self.assertTrue(client_from_nulls.ssl_verify)
+        self.assertFalse(client_from_nulls.allow_insecure_remote)
         self.assertEqual(client_from_nulls.ssl_ca, "")
         context = client_from_nulls._build_ssl_context()
         self.assertIsNotNone(context)
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
         self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
 
     def test_remote_host_requires_tls_fail_closed_while_loopback_allows_local_mode(self):
         remote_insecure_tls = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private", use_tls=False
         )
+        self.assertFalse(remote_insecure_tls.allow_insecure_remote)
         with self.assertRaises(OTRSTLSRequiredError) as caught_tls:
             remote_insecure_tls._build_ssl_context()
         self.assertEqual(caught_tls.exception.error_code, "tls_policy_required")
@@ -377,11 +383,40 @@ class OTRSReadOnlyClientTests(TestCase):
             remote_insecure_verify._build_ssl_context()
         self.assertEqual(caught_verify.exception.error_code, "tls_policy_required")
 
+        remote_tls_unverified_with_legacy_flag = OTRSReadOnlyClient(
+            host="200.174.198.133",
+            username="reader",
+            password="private",
+            use_tls=True,
+            ssl_verify=False,
+            allow_insecure_remote=True,
+        )
+        with self.assertRaises(OTRSTLSRequiredError):
+            remote_tls_unverified_with_legacy_flag._build_ssl_context()
+
+        remote_legacy_opt_in = OTRSReadOnlyClient(
+            host="200.174.198.133",
+            username="secret-user",
+            password="secret-password",
+            use_tls=False,
+            allow_insecure_remote=True,
+        )
+        with self.assertLogs("aplicativos.integracoes.clients.otrs", level="WARNING") as captured_logs:
+            self.assertIsNone(remote_legacy_opt_in._build_ssl_context())
+        joined_logs = " ".join(captured_logs.output)
+        self.assertIn(
+            "OTRS remoto usando transporte MySQL sem TLS por configuração explícita de compatibilidade legada.",
+            joined_logs,
+        )
+        self.assertNotIn("secret-user", joined_logs)
+        self.assertNotIn("secret-password", joined_logs)
+
         remote_default = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private"
         )
         self.assertTrue(remote_default.use_tls)
         self.assertTrue(remote_default.ssl_verify)
+        self.assertFalse(remote_default.allow_insecure_remote)
         self.assertIsNotNone(remote_default._build_ssl_context())
 
         for loopback_host in ("127.0.0.1", "localhost"):

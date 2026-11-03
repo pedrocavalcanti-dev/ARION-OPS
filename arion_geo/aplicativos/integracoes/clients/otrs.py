@@ -1,4 +1,5 @@
 """Read-only metadata and sample client for a separately configured OTRS MySQL database."""
+import logging
 import re
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -28,6 +29,8 @@ from aplicativos.integracoes.services.errors import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 SENSITIVE_PARTS = (
     "password", "passwd", "token", "secret", "session", "cookie", "auth", "credential",
     "apikey", "privatekey", "customeruser", "article", "body", "internalnote", "notebody",
@@ -50,7 +53,8 @@ class OTRSReadOnlyClient:
 
     def __init__(
         self, *, host, port=3306, database="", username, password, timeout=10,
-        use_tls=None, ssl_ca="", ssl_verify=True, connection_factory=None,
+        use_tls=None, ssl_ca="", ssl_verify=True, allow_insecure_remote=False,
+        connection_factory=None,
     ):
         if not host:
             raise IntegrationNotConfigured()
@@ -68,6 +72,7 @@ class OTRSReadOnlyClient:
         self.use_tls = (not self.is_loopback_host) if use_tls is None else bool(use_tls)
         self.ssl_ca = str(ssl_ca or os.getenv("ARION_OTRS_SSL_CA") or "").strip()
         self.ssl_verify = True if ssl_verify is None else bool(ssl_verify)
+        self.allow_insecure_remote = False if allow_insecure_remote is None else bool(allow_insecure_remote)
         self.connection_factory = connection_factory
         self._active_connection = None
         self.select_queries_count = 0
@@ -250,15 +255,28 @@ class OTRSReadOnlyClient:
                     pass
 
     def _build_ssl_context(self):
-        if not self.is_loopback_host and (not self.use_tls or not self.ssl_verify):
-            disabled = "use_tls=False" if not self.use_tls else "ssl_verify=False"
-            raise OTRSTLSRequiredError(
-                error_code="tls_policy_required",
-                technical_detail=(
-                    f"Política TLS obrigatória para host remoto ({disabled}); "
-                    "habilite TLS com verificação de certificado ou conecte via túnel local em 127.0.0.1."
-                ),
-            )
+        if not self.is_loopback_host:
+            if not self.use_tls:
+                if not self.allow_insecure_remote:
+                    raise OTRSTLSRequiredError(
+                        error_code="tls_policy_required",
+                        technical_detail=(
+                            "Política TLS obrigatória para host remoto (use_tls=False); "
+                            "habilite TLS com verificação de certificado ou conecte via túnel local em 127.0.0.1."
+                        ),
+                    )
+                logger.warning(
+                    "OTRS remoto usando transporte MySQL sem TLS por configuração explícita de compatibilidade legada."
+                )
+                return None
+            if not self.ssl_verify:
+                raise OTRSTLSRequiredError(
+                    error_code="tls_policy_required",
+                    technical_detail=(
+                        "Política TLS obrigatória para host remoto (ssl_verify=False); "
+                        "habilite TLS com verificação de certificado ou conecte via túnel local em 127.0.0.1."
+                    ),
+                )
         if not self.use_tls:
             return None
         cafile = None
@@ -307,6 +325,8 @@ class OTRSReadOnlyClient:
         }
         if ssl_context is not None:
             options["ssl"] = ssl_context
+        else:
+            options["ssl_disabled"] = True
         if self.database:
             options["database"] = self.database
         try:

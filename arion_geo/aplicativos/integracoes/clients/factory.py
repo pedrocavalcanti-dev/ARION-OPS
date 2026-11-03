@@ -11,6 +11,7 @@ def normalize_otrs_config(config):
     use_tls = raw.get("use_tls", None)
     ssl_verify = raw.get("ssl_verify", True)
     ssl_ca = raw.get("ssl_ca", "")
+    allow_insecure_remote = raw.get("allow_insecure_remote", False)
     port = raw.get("port", 3306)
     timeout = raw.get("timeout", 10)
     return {
@@ -21,6 +22,7 @@ def normalize_otrs_config(config):
         "use_tls": None if use_tls is None else bool(use_tls),
         "ssl_ca": "" if ssl_ca is None else str(ssl_ca).strip(),
         "ssl_verify": True if ssl_verify is None else bool(ssl_verify),
+        "allow_insecure_remote": False if allow_insecure_remote is None else bool(allow_insecure_remote),
     }
 
 
@@ -43,5 +45,6 @@ def configured_otrs_client(integration, *, connection_factory=None):
         use_tls=normalized["use_tls"],
         ssl_ca=normalized["ssl_ca"],
         ssl_verify=normalized["ssl_verify"],
+        allow_insecure_remote=normalized["allow_insecure_remote"],
         connection_factory=connection_factory,
     )

@@ -141,6 +141,7 @@ class IntegrationConfigurationTests(TestCase):
         self.assertEqual(client.timeout, 10)
         self.assertTrue(client.use_tls)
         self.assertTrue(client.ssl_verify)
+        self.assertFalse(client.allow_insecure_remote)
         self.assertEqual(client.ssl_ca, "")
 
     @patch("aplicativos.integracoes.clients.factory.get_secret_protector")
@@ -165,6 +166,7 @@ class IntegrationConfigurationTests(TestCase):
 
         self.assertTrue(client.use_tls)
         self.assertTrue(client.ssl_verify)
+        self.assertFalse(client.allow_insecure_remote)
         self.assertEqual(client.ssl_ca, "")
         self.assertIsNotNone(client._build_ssl_context())
 
@@ -178,8 +180,22 @@ class IntegrationConfigurationTests(TestCase):
         integration.config["use_tls"] = False
         client_no_tls = _otrs_client(integration)
         self.assertFalse(client_no_tls.use_tls)
+        self.assertFalse(client_no_tls.allow_insecure_remote)
         with self.assertRaises(OTRSTLSRequiredError):
             client_no_tls._build_ssl_context()
+
+        integration.config["allow_insecure_remote"] = True
+        client_legacy_allowed = _otrs_client(integration)
+        self.assertFalse(client_legacy_allowed.use_tls)
+        self.assertTrue(client_legacy_allowed.allow_insecure_remote)
+        with self.assertLogs("aplicativos.integracoes.clients.otrs", level="WARNING") as captured:
+            self.assertIsNone(client_legacy_allowed._build_ssl_context())
+        self.assertIn(
+            "OTRS remoto usando transporte MySQL sem TLS por configuração explícita de compatibilidade legada.",
+            " ".join(captured.output),
+        )
+        self.assertNotIn("a-private-password", " ".join(captured.output))
+        self.assertNotIn("otrs-reader", " ".join(captured.output))
 
     @patch("aplicativos.integracoes.management.commands.sincronizar_otrs._otrs_client")
     def test_sincronizar_otrs_reports_sanitized_tls_diagnostic_on_discovery_failure(self, client_factory):
