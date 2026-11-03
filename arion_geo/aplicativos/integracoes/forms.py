@@ -6,7 +6,7 @@ class ArionDatabaseCandidateForm(forms.Form):
     host = forms.CharField(label="Host", max_length=255, initial="127.0.0.1")
     port = forms.IntegerField(label="Porta", min_value=1, max_value=65535, initial=3306)
     database = forms.CharField(label="Schema", max_length=128, initial="arion_geo")
-    user = forms.CharField(label="Usu\u00e1rio", max_length=255)
+    user = forms.CharField(label="Usuário", max_length=255)
     password = forms.CharField(label="Senha", max_length=512, required=False, strip=False,
                                widget=forms.PasswordInput(render_value=False))
     timeout = forms.IntegerField(label="Timeout (segundos)", min_value=1, max_value=60, initial=10)
@@ -53,6 +53,12 @@ class OTRSConfigurationForm(forms.Form):
     timeout = forms.IntegerField(label="Timeout (segundos)", min_value=1, max_value=60, initial=10)
     use_tls = forms.BooleanField(label="Exigir TLS (obrigatório para host remoto)", required=False, initial=True)
     ssl_ca = forms.CharField(label="Certificado CA TLS (opcional)", max_length=500, required=False)
+    allow_insecure_remote = forms.BooleanField(
+        label="Permitir conexão legada sem TLS",
+        required=False,
+        initial=False,
+        help_text="Compatibilidade para servidor MySQL legado sem suporte TLS. O tráfego entre o ARION OPS e o banco remoto não será criptografado.",
+    )
 
     def clean_host(self):
         return self.cleaned_data["host"].strip()
@@ -67,8 +73,10 @@ class OTRSConfigurationForm(forms.Form):
         cleaned = super().clean()
         host = (cleaned.get("host") or "").strip().casefold()
         use_tls = bool(cleaned.get("use_tls"))
-        if host and host not in self.LOOPBACK_HOSTS and not use_tls:
-            self.add_error("use_tls", "Host remoto do OTRS exige transporte TLS habilitado ou túnel local em 127.0.0.1.")
+        allow_insecure_remote = bool(cleaned.get("allow_insecure_remote"))
+        if host and host not in self.LOOPBACK_HOSTS:
+            if not use_tls and not allow_insecure_remote:
+                self.add_error("use_tls", "Host remoto do OTRS exige transporte TLS habilitado ou túnel local em 127.0.0.1.")
         return cleaned
 
 

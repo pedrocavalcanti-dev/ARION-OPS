@@ -2,6 +2,7 @@ from io import StringIO
 from unittest.mock import Mock, patch
 import tempfile
 from pathlib import Path
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
@@ -10,9 +11,11 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from aplicativos.auditoria.models import AuditEvent
-from .models import Integration, IntegrationRun
+from .forms import OTRSConfigurationForm
+from .models import Integration, IntegrationRun, IntegrationSyncState
 from .services.errors import (
     OTRSAuthenticationError,
     OTRSCredentialDecryptionError,
@@ -118,6 +121,42 @@ class IntegrationConfigurationTests(TestCase):
             self.assertNotContains(response, "private-db-password")
             password.assert_called_once()
             test_connection.assert_called_once()
+
+    def test_otrs_configuration_form_remote_requires_tls_or_explicit_opt_in(self):
+        # 1. Remote host + use_tls=False + allow_insecure_remote=False -> invalid
+        insecure_form = OTRSConfigurationForm(data={
+            "host": "200.174.198.133", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "p", "timeout": 10,
+            "use_tls": False, "allow_insecure_remote": False,
+        })
+        self.assertFalse(insecure_form.is_valid())
+        self.assertIn("use_tls", insecure_form.errors)
+
+        # 2. Remote host + use_tls=False + allow_insecure_remote=True -> valid
+        opt_in_form = OTRSConfigurationForm(data={
+            "host": "200.174.198.133", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "p", "timeout": 10,
+            "use_tls": False, "allow_insecure_remote": True,
+        })
+        self.assertTrue(opt_in_form.is_valid())
+        self.assertFalse(opt_in_form.cleaned_data["use_tls"])
+        self.assertTrue(opt_in_form.cleaned_data["allow_insecure_remote"])
+
+        # 3. Remote host + use_tls=True + allow_insecure_remote=False -> valid
+        secure_form = OTRSConfigurationForm(data={
+            "host": "200.174.198.133", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "p", "timeout": 10,
+            "use_tls": True, "allow_insecure_remote": False,
+        })
+        self.assertTrue(secure_form.is_valid())
+
+        # 4. Loopback host + use_tls=False -> valid
+        loopback_form = OTRSConfigurationForm(data={
+            "host": "127.0.0.1", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "p", "timeout": 10,
+            "use_tls": False, "allow_insecure_remote": False,
+        })
+        self.assertTrue(loopback_form.is_valid())
 
     @patch("aplicativos.integracoes.clients.factory.get_secret_protector")
     def test_otrs_client_receives_decrypted_plaintext_and_normalized_connection_options(self, get_protector):
@@ -285,6 +324,28 @@ class IntegrationConfigurationTests(TestCase):
         self.assertEqual(client.password, "replacement")
 
     @patch("aplicativos.integracoes.views.get_secret_protector")
+    def test_save_otrs_configuration_preserves_allow_insecure_remote_and_databases(self, get_protector):
+        get_protector.return_value = self.protector
+        integration = Integration.objects.create(
+            key="otrs", name="OTRS MySQL", kind="MySQL", username="otrs-reader",
+            secret_ciphertext=self.protector.protect("pass"),
+            config={"host": "200.174.198.133", "port": 3306, "database": "otrs", "timeout": 10},
+            accessible_databases=["information_schema", "otrs"],
+        )
+
+        response = self.client.post(reverse("configuracoes:integracoes:save-config", args=["otrs"]), {
+            "host": "200.174.198.133", "port": 3306, "database": "otrs",
+            "username": "otrs-reader", "password": "", "timeout": 10,
+            "use_tls": False, "allow_insecure_remote": "on",
+        })
+        self.assertEqual(response.status_code, 302)
+        integration.refresh_from_db()
+        self.assertFalse(integration.config["use_tls"])
+        self.assertTrue(integration.config["allow_insecure_remote"])
+        # Preserves accessible databases because host and user remained unchanged
+        self.assertEqual(integration.accessible_databases, ["information_schema", "otrs"])
+
+    @patch("aplicativos.integracoes.views.get_secret_protector")
     def test_storage_failure_is_safe_and_does_not_save_plaintext(self, get_protector):
         get_protector.return_value.protect.side_effect = SecretStorageUnavailable()
         secret = "must-not-be-saved"
@@ -406,7 +467,61 @@ class IntegrationConfigurationTests(TestCase):
         self.assertEqual(run.status, IntegrationRun.Status.SUCCESS)
         integration.refresh_from_db()
         self.assertFalse(integration.enabled)
+        self.assertEqual(integration.status, Integration.Status.CONNECTED)
+        self.assertEqual(integration.connection_status_display, "Disponível")
         self.assertEqual(integration.accessible_databases, ["otrs"])
+
+    @patch("aplicativos.integracoes.views._otrs_client")
+    def test_otrs_test_connection_with_opt_in_legacy_remote(self, client_factory):
+        integration = Integration.objects.create(
+            key="otrs", name="OTRS MySQL", kind="MySQL", username="reader",
+            secret_ciphertext=self.protector.protect("secret"),
+            config={
+                "host": "200.174.198.133", "port": 3306, "database": "otrs",
+                "use_tls": False, "allow_insecure_remote": True,
+            },
+            enabled=True,
+        )
+        client_factory.return_value.test_connection.return_value = True
+        client_factory.return_value.list_databases.return_value = ["information_schema", "otrs"]
+
+        response = self.client.post(reverse("configuracoes:integracoes:otrs-test"))
+        self.assertEqual(response.status_code, 302)
+        integration.refresh_from_db()
+        self.assertEqual(integration.status, Integration.Status.CONNECTED)
+        self.assertEqual(integration.connection_status_display, "Disponível")
+        self.assertEqual(integration.accessible_databases, ["information_schema", "otrs"])
+
+    def test_runtime_sync_heals_integration_status_and_updates_last_read(self):
+        stale_date = timezone.now() - timedelta(days=7)
+        recent_sync_date = timezone.now() - timedelta(minutes=5)
+        integration = Integration.objects.create(
+            key="otrs", name="OTRS MySQL", kind="MySQL", username="reader",
+            secret_ciphertext=self.protector.protect("secret"),
+            config={"host": "200.174.198.133", "port": 3306, "database": "otrs", "use_tls": False, "allow_insecure_remote": True},
+            status=Integration.Status.UNAVAILABLE,
+            last_error="Conexão OTRS para host remoto exige TLS configurado ou túnel local em loopback (127.0.0.1).",
+            last_error_at=stale_date,
+            last_read_at=stale_date,
+            enabled=True,
+        )
+        sync_state = IntegrationSyncState.objects.create(
+            key="otrs",
+            last_success_at=recent_sync_date,
+            last_full_success_at=recent_sync_date,
+            records_count=12612,
+        )
+
+        response = self.client.get(reverse("configuracoes:integracoes:otrs"))
+        self.assertEqual(response.status_code, 200)
+
+        integration.refresh_from_db()
+        self.assertEqual(integration.status, Integration.Status.CONNECTED)
+        self.assertEqual(integration.connection_status_display, "Disponível")
+        self.assertEqual(integration.last_error, "")
+        self.assertEqual(integration.last_read_at, recent_sync_date)
+        self.assertContains(response, "Disponível")
+        self.assertContains(response, "Ativo")
 
     @patch("aplicativos.integracoes.views._otrs_client")
     def test_otrs_access_denied_keeps_specific_safe_message(self, client_factory):

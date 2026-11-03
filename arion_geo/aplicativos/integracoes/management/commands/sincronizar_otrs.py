@@ -115,6 +115,11 @@ class Command(BaseCommand):
             run.finished_at = timezone.now()
             run.message = self._summary(result, apply)
             run.save(update_fields=("status", "records_found", "records_processed", "records_created", "records_updated", "records_unchanged", "records_stale", "duration_ms", "finished_at", "message"))
+            integration.last_success_at = run.finished_at
+            integration.last_read_at = run.finished_at
+            integration.status = Integration.Status.CONNECTED
+            integration.last_error = ""
+            integration.save(update_fields=("last_success_at", "last_read_at", "status", "last_error", "updated_at"))
             if apply:
                 state.last_started_at = run.started_at
                 state.last_success_at = run.finished_at
@@ -142,6 +147,14 @@ class Command(BaseCommand):
             state.last_error_at = timezone.now()
             state.last_error = safe_summary
             state.save(update_fields=("last_error_at", "last_error", "updated_at"))
+            try:
+                integration = Integration.objects.get(key=Integration.Key.OTRS)
+                integration.last_error_at = timezone.now()
+                integration.last_error = safe_summary
+                integration.status = Integration.Status.UNAVAILABLE
+                integration.save(update_fields=("last_error_at", "last_error", "status", "updated_at"))
+            except Exception:
+                pass
             AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", "")})
             if isinstance(exc, IntegrationError):
                 raise CommandError(

@@ -44,6 +44,12 @@ class Integration(models.Model):
     def credentials_configured(self):
         return bool(self.username and self.secret_ciphertext)
 
+    @property
+    def connection_status_display(self):
+        if self.status == self.Status.CONNECTED:
+            return "Disponível"
+        return self.get_status_display()
+
 
 class IntegrationRun(models.Model):
     class Operation(models.TextChoices):

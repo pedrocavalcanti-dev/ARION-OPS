@@ -54,6 +54,36 @@ def get_integration(key):
     return integration
 
 
+def _sync_integration_runtime_status(integration, sync_state=None):
+    if sync_state is None:
+        sync_state = IntegrationSyncState.objects.filter(key=integration.key).first()
+    if not sync_state or not sync_state.last_success_at:
+        return integration
+
+    needs_save = False
+    update_fields = []
+
+    if not integration.last_read_at or sync_state.last_success_at > integration.last_read_at:
+        integration.last_read_at = sync_state.last_success_at
+        integration.last_success_at = sync_state.last_success_at
+        needs_save = True
+        update_fields.extend(["last_read_at", "last_success_at"])
+
+    if not integration.last_error_at or sync_state.last_success_at >= integration.last_error_at:
+        if integration.status != Integration.Status.CONNECTED:
+            integration.status = Integration.Status.CONNECTED
+            needs_save = True
+            update_fields.append("status")
+        if integration.last_error:
+            integration.last_error = ""
+            needs_save = True
+            update_fields.append("last_error")
+
+    if needs_save:
+        integration.save(update_fields=list(dict.fromkeys([*update_fields, "updated_at"])))
+    return integration
+
+
 def _admin_context_for_integration(request, section, **extra):
     context = {"active_section": section, "is_access_admin": is_system_admin(request.user), "administration": True}
     context.update(extra)
@@ -175,6 +205,8 @@ def home(request):
     otrs = get_integration(Integration.Key.OTRS)
     cmdb_state = IntegrationSyncState.objects.filter(key="cmdb").first()
     otrs_state = IntegrationSyncState.objects.filter(key="otrs").first()
+    _sync_integration_runtime_status(cmdb, cmdb_state)
+    _sync_integration_runtime_status(otrs, otrs_state)
     worker_lease = IntegrationLease.objects.filter(key="worker").first()
     worker_alive = bool(worker_lease and worker_lease.expires_at > timezone.now())
     cmdb_age = timezone.now() - cmdb_state.last_success_at if cmdb_state and cmdb_state.last_success_at else None
@@ -380,10 +412,12 @@ def arion_migration_action(request, action):
 def cmdb_detail(request):
     _require_permission(request, "view_integrations")
     integration = get_integration(Integration.Key.CMDB)
+    cmdb_state = IntegrationSyncState.objects.filter(key="cmdb").first()
+    _sync_integration_runtime_status(integration, cmdb_state)
     context = _admin_context_for_integration(
         request, "integrations", integration=integration, form=_configuration_form(integration),
         search_form=CMDBSearchForm(), get_form=CMDBGetForm(), active_tab=request.GET.get("tab", "overview"),
-        runs=integration.runs.all()[:8], results=None,
+        runs=integration.runs.all()[:8], results=None, sync_state=cmdb_state,
     )
     return render(request, "integracoes/detail.html", context)
 
@@ -393,9 +427,12 @@ def cmdb_detail(request):
 def otrs_detail(request):
     _require_permission(request, "view_integrations")
     integration = get_integration(Integration.Key.OTRS)
+    otrs_state = IntegrationSyncState.objects.filter(key="otrs").first()
+    _sync_integration_runtime_status(integration, otrs_state)
     context = _admin_context_for_integration(
         request, "integrations", integration=integration, form=_configuration_form(integration),
         active_tab=request.GET.get("tab", "overview"), runs=integration.runs.all()[:8], results=None,
+        sync_state=otrs_state,
     )
     return render(request, "integracoes/detail.html", context)
 
@@ -431,13 +468,16 @@ def _save_configuration_guarded(request, key):
                     context.update(search_form=CMDBSearchForm(), get_form=CMDBGetForm())
                 return render(request, "integracoes/detail.html", context)
         changed = sorted(values.keys())
-        integration.config = values
+        merged_config = {**(integration.config or {}), **values}
+        host_changed = values.get("host") != (integration.config or {}).get("host")
+        user_changed = bool(username and username != integration.username)
+        integration.config = merged_config
         integration.username = username
         integration.secret_ciphertext = encrypted
         integration.status = Integration.Status.NOT_CONFIGURED
         integration.last_error = ""
         update_fields = ["config", "username", "secret_ciphertext", "status", "last_error", "updated_at"]
-        if key == Integration.Key.OTRS:
+        if key == Integration.Key.OTRS and (host_changed or user_changed):
             integration.accessible_databases = []
             update_fields.append("accessible_databases")
         integration.save(update_fields=update_fields)

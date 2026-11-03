@@ -59,6 +59,11 @@ class Command(BaseCommand):
             run.finished_at = timezone.now()
             run.message = self._summary(result, apply)
             run.save(update_fields=("status", "records_found", "records_processed", "records_created", "records_updated", "records_unchanged", "records_stale", "duration_ms", "finished_at", "message"))
+            integration.last_success_at = run.finished_at
+            integration.last_read_at = run.finished_at
+            integration.status = Integration.Status.CONNECTED
+            integration.last_error = ""
+            integration.save(update_fields=("last_success_at", "last_read_at", "status", "last_error", "updated_at"))
             if apply:
                 sync_state.last_success_at = run.finished_at
                 sync_state.last_error_at = None
@@ -77,6 +82,14 @@ class Command(BaseCommand):
             sync_state.last_error_at = run.finished_at
             sync_state.last_error = f"Falha segura ({type(exc).__name__})"
             sync_state.save(update_fields=("last_error_at", "last_error", "updated_at"))
+            try:
+                integration = Integration.objects.get(key=Integration.Key.CMDB)
+                integration.last_error_at = timezone.now()
+                integration.last_error = f"Falha segura ({type(exc).__name__})"
+                integration.status = Integration.Status.UNAVAILABLE
+                integration.save(update_fields=("last_error_at", "last_error", "status", "updated_at"))
+            except Exception:
+                pass
             AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização CMDB falhou", result="FAILURE", obj=run, module="Integrações", metadata={"source": "CMDB", "run_id": run.pk, "error_type": type(exc).__name__})
             raise CommandError(f"Sincronização CMDB cancelada ({type(exc).__name__}); espelho não reconciliado.") from None
 
