@@ -30,7 +30,7 @@
     const path = (root.dataset.detailUrlTemplate || "").replace(/0\/$/, encodeURIComponent(providerId) + "/");
     const url = new URL(path, window.location.origin);
     const current = new URLSearchParams(window.location.search);
-    ["month", "view", "ranking_view", "date_from", "date_to", "provider", "client", "project", "uf", "priority", "reason", "status", "only_aged", "only_recurrent", "q", "sort", "top", "min_links"].forEach(key => {
+    ["month", "view", "ranking_view", "date_from", "date_to", "provider", "client", "project", "uf", "priority", "reason", "status", "only_aged", "only_recurrent", "q", "search", "sort", "direction", "situation", "top", "min_links"].forEach(key => {
       if (current.has(key)) url.searchParams.set(key, current.get(key));
     });
     return url;
@@ -270,6 +270,33 @@
     root.querySelector(".ranking-filter-form").elements.namedItem("view").value = button.dataset.view;
     root.querySelector(".ranking-filter-form").requestSubmit();
   }));
+  root.querySelectorAll("[data-auto-submit]").forEach(select => {
+    select.addEventListener("change", () => {
+      const form = root.querySelector("#ranking-filter-form") || root.querySelector(".ranking-filter-form");
+      if (form) form.requestSubmit();
+    });
+  });
+
+  root.querySelectorAll("[data-direction]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const dirInput = root.querySelector("[data-direction-input]");
+      const form = root.querySelector("#ranking-filter-form") || root.querySelector(".ranking-filter-form");
+      if (dirInput && form) {
+        dirInput.value = btn.dataset.direction;
+        form.requestSubmit();
+      }
+    });
+  });
+
+  root.querySelector("[data-search-clear]")?.addEventListener("click", () => {
+    const searchInput = root.querySelector("#ranking-provider-search");
+    const form = root.querySelector("#ranking-filter-form") || root.querySelector(".ranking-filter-form");
+    if (searchInput && form) {
+      searchInput.value = "";
+      form.requestSubmit();
+    }
+  });
+
   root.querySelector("[data-drawer-close]").addEventListener("click", closeDrawer);
   backdrop.addEventListener("click", closeDrawer);
   root.querySelector("[data-open-score]").addEventListener("click", () => scoreDialog.showModal());

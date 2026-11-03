@@ -66,6 +66,7 @@ class RankingsMirrorTests(TestCase):
         response = self.client.get(reverse("rankings:index"), {"view": "custom", "date_from": start, "date_to": end})
         cockpit = AnalyticsQueryService().query({
             "metric": "tickets", "start": start, "end": end, "group_by": "provider", "filters": {},
+            "include_cancelled": False,
         }, self.user)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["tickets_valid"], 2)
@@ -674,3 +675,270 @@ class CockpitRankingPresentationTests(SimpleTestCase):
         self.assertIn("aria-expanded", script)
         self.assertIn("/static/imagens/bandeiras/estados/${code.toLowerCase()}.svg", script)
         self.assertTrue((root / "static/imagens/bandeiras/estados/sp.svg").exists())
+
+
+class CockpitOpsChartColorTests(SimpleTestCase):
+    def test_cockpit_evolution_chart_colors_use_arion_orange_for_resolved_series(self):
+        root = Path(__file__).resolve().parents[2]
+        css = (root / "static/css/painel/cockpit.css").read_text(encoding="utf-8")
+        # Ensure closed series use institutional var(--arion-orange)
+        self.assertIn(".cockpit-ops-legend i.closed,.cockpit-ops-legend i.support-closed,.cockpit-ops-legend i.cancellation-closed { background:var(--arion-orange); }", css)
+        self.assertIn(".cockpit-ops-bar.closed,.cockpit-ops-bar.support-closed { background:var(--arion-orange); }", css)
+        self.assertIn("cancellation-closed { background:color-mix(in srgb,var(--arion-orange) 58%,var(--surface-primary)); border:1px solid var(--arion-orange); }", css)
+        # Ensure accent-rose is no longer used for closed series
+        self.assertNotIn("i.closed,.cockpit-ops-legend i.support-closed,.cockpit-ops-legend i.cancellation-closed { background:var(--accent-rose); }", css)
+        self.assertNotIn(".cockpit-ops-bar.closed,.cockpit-ops-bar.support-closed { background:var(--accent-rose); }", css)
+        # Ensure novos (green/teal) and backlog (blue) colors are preserved
+        self.assertIn(".cockpit-ops-legend i.entries,.cockpit-ops-legend i.support-entry { background:var(--accent-teal); }", css)
+        self.assertIn(".cockpit-ops-legend i.backlog-line-key { background:var(--accent-blue); }", css)
+
+
+class RankingsDynamicSortingAndFilterTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from django.contrib.auth.models import Group
+        from aplicativos.configuracoes.models import GroupDataScope
+        from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem
+
+        self.user = get_user_model().objects.create_user(username="rankings-analyst", password="password123")
+        group = Group.objects.get(name="Analista NOC")
+        self.user.groups.set([group])
+        scope, _ = GroupDataScope.objects.get_or_create(group=group)
+        scope.mode = GroupDataScope.Mode.ALL
+        scope.save()
+        self.client.force_login(self.user)
+
+        # Create providers with distinct metrics
+        self.op_claro = CMDBOperatorMirror.objects.create(source_config_item_id="op-claro", name="Claro Telecom")
+        self.op_fierce = CMDBOperatorMirror.objects.create(source_config_item_id="op-fierce", name="Fierce Provedor")
+        self.op_desktop = CMDBOperatorMirror.objects.create(source_config_item_id="op-desktop", name="Desktop Internet")
+
+        # Claro: 10 links, 2 tickets, 1 backlog, 1 aged (>24h), avg resolution 10h
+        links_claro = [
+            CMDBLinkMirror.objects.create(
+                source_config_item_id=f"ci-claro-{i}", source_number=f"N-CLARO-{i}",
+                name=f"Link Claro {i}", operator=self.op_claro, deployment_state="Operacional",
+            )
+            for i in range(10)
+        ]
+        now = datetime(2026, 10, 15, 12, tzinfo=datetime_timezone.utc)
+        t1 = OTRSTicket.objects.create(
+            external_id=101, ticket_number="T101", title="T101",
+            queue_external_id=107, queue_name="NOC - ATACADO",
+            external_state_id=101, external_state_name="fechado",
+            business_status="CLOSED", is_business_open=False, is_present_in_queue=True,
+            external_priority_id=2, priority_name="Médio",
+            source_created_at=now - timedelta(hours=10),
+            terminal_state_at=now, resolved_at=now,
+        )
+        OTRSTicketConfigItem.objects.create(
+            ticket=t1, config_item_id=links_claro[0].source_config_item_id, cmdb_link=links_claro[0],
+            relation_type="DependsOn", relation_state="Valid",
+        )
+        t2 = OTRSTicket.objects.create(
+            external_id=102, ticket_number="T102", title="T102",
+            queue_external_id=107, queue_name="NOC - ATACADO",
+            external_state_id=102, external_state_name="em atendimento",
+            business_status="OPEN", is_business_open=True, is_present_in_queue=True,
+            external_priority_id=2, priority_name="Médio",
+            source_created_at=now - timedelta(hours=30),
+        )
+        OTRSTicketConfigItem.objects.create(
+            ticket=t2, config_item_id=links_claro[1].source_config_item_id, cmdb_link=links_claro[1],
+            relation_type="DependsOn", relation_state="Valid",
+        )
+
+        # Fierce: 2 links, 4 tickets, 0 backlog, 0 aged, avg resolution 40h (higher tickets/100 links = 200 vs 20)
+        links_fierce = [
+            CMDBLinkMirror.objects.create(
+                source_config_item_id=f"ci-fierce-{i}", source_number=f"N-FIERCE-{i}",
+                name=f"Link Fierce {i}", operator=self.op_fierce, deployment_state="Operacional",
+            )
+            for i in range(2)
+        ]
+        for i in range(4):
+            t = OTRSTicket.objects.create(
+                external_id=200 + i, ticket_number=f"T20{i}", title=f"T20{i}",
+                queue_external_id=107, queue_name="NOC - ATACADO",
+                external_state_id=200 + i, external_state_name="fechado",
+                business_status="CLOSED", is_business_open=False, is_present_in_queue=True,
+                external_priority_id=2, priority_name="Médio",
+                source_created_at=now - timedelta(hours=40),
+                terminal_state_at=now, resolved_at=now,
+            )
+            OTRSTicketConfigItem.objects.create(
+                ticket=t, config_item_id=links_fierce[0].source_config_item_id, cmdb_link=links_fierce[0],
+                relation_type="DependsOn", relation_state="Valid",
+            )
+
+        # Desktop: 5 links, 0 tickets (avg resolution is None / "—")
+        for i in range(5):
+            CMDBLinkMirror.objects.create(
+                source_config_item_id=f"ci-desktop-{i}", source_number=f"N-DESKTOP-{i}",
+                name=f"Link Desktop {i}", operator=self.op_desktop, deployment_state="Operacional",
+            )
+
+    def names(self, **params):
+        base = {"view": "custom", "date_from": "2026-10-01", "date_to": "2026-10-24"}
+        resp = self.client.get(reverse("rankings:index"), {**base, **params})
+        self.assertEqual(resp.status_code, 200)
+        return resp, [row["name"] for row in resp.context["page_obj"]]
+
+    def test_links_tab_keeps_primary_order_and_recomputes_positions(self):
+        resp, names = self.names()
+        self.assertEqual(names, ["Claro Telecom", "Desktop Internet", "Fierce Provedor"])
+        self.assertEqual([r["ranking_position"] for r in resp.context["page_obj"]], [1, 2, 3])
+
+    def test_multiple_filters_are_combined_with_and(self):
+        # Fierce: 2 links, 4 tickets, 40h average. Claro: 10 links, 1 backlog, 10h average.
+        self.assertEqual(self.names(tickets_min="1", avg_time_min="24")[1], ["Fierce Provedor"])
+        self.assertEqual(self.names(avg_time_min="5", backlog_min="1")[1], ["Claro Telecom"])
+        self.assertEqual(self.names(links_min="3", avg_time_min="5")[1], ["Claro Telecom"])
+        self.assertEqual(self.names(links_min="3", avg_time_min="24")[1], [])
+        self.assertEqual(self.names(incidence_min="100", tickets_min="4")[1], ["Fierce Provedor"])
+
+    def test_min_and_max_ranges(self):
+        self.assertEqual(self.names(links_min="3", links_max="6")[1], ["Desktop Internet"])
+        self.assertEqual(self.names(links_max="2")[1], ["Fierce Provedor"])
+        self.assertEqual(self.names(tickets_min="2", tickets_max="3")[1], ["Claro Telecom"])
+        self.assertEqual(self.names(backlog_max="0")[1], ["Desktop Internet", "Fierce Provedor"])
+
+    def test_average_time_filter_is_numeric_and_excludes_missing_values(self):
+        # 10 < 40 numerically; string comparison would wrongly rank "10" before/after "9".
+        self.assertEqual(self.names(avg_time_min="9", avg_time_max="12")[1], ["Claro Telecom"])
+        self.assertEqual(self.names(avg_time_min="9.5")[1], ["Claro Telecom", "Fierce Provedor"])
+        # Desktop has no resolution data: excluded by any active time filter, kept otherwise.
+        self.assertNotIn("Desktop Internet", self.names(avg_time_min="0")[1])
+        self.assertNotIn("Desktop Internet", self.names(avg_time_max="1000")[1])
+        self.assertIn("Desktop Internet", self.names()[1])
+
+    def test_search_and_situation_combine_with_numeric_ranges(self):
+        self.assertEqual(self.names(search="claro", situation="with_backlog", links_min="5")[1], ["Claro Telecom"])
+        self.assertEqual(self.names(search="claro", backlog_min="2")[1], [])
+        self.assertEqual(self.names(situation="with_tickets", avg_time_min="24")[1], ["Fierce Provedor"])
+        self.assertEqual(self.names(situation="without_tickets", links_min="1")[1], ["Desktop Internet"])
+
+    def test_invalid_numeric_values_are_ignored(self):
+        self.assertEqual(len(self.names(links_min="abc", tickets_max="-3")[1]), 3)
+
+    def test_top_limit_is_applied_after_filters_and_positions_restart(self):
+        from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror
+        for i in range(12):
+            extra = CMDBOperatorMirror.objects.create(source_config_item_id=f"op-extra-{i}", name=f"Extra {i:02d}")
+            CMDBLinkMirror.objects.create(
+                source_config_item_id=f"ci-extra-{i}", source_number=f"N-EXTRA-{i}",
+                name=f"Link Extra {i}", operator=extra, deployment_state="Operacional",
+            )
+        resp, names = self.names(links_min="1", links_max="1", top="10")
+        self.assertEqual(resp.context["page_obj"].paginator.count, 12)  # filtered first
+        self.assertEqual(len(names), 10)  # Top 10 afterwards
+        self.assertEqual([r["ranking_position"] for r in resp.context["page_obj"]], list(range(1, 11)))
+        resp, names = self.names(avg_time_min="24", top="10")
+        self.assertEqual(names, ["Fierce Provedor"])
+        self.assertEqual(resp.context["page_obj"][0]["ranking_position"], 1)
+
+    def test_tab_identity_chips_and_query_params_are_preserved(self):
+        resp, _ = self.names(avg_time_min="24", links_min="2")
+        self.assertContains(resp, "Mais links")
+        self.assertNotContains(resp, "Ranking por Tempo médio")
+        labels = [chip["label"] for chip in resp.context["active_table_filters"]]
+        self.assertIn("Tempo médio · ≥ 24h", labels)
+        self.assertIn("Links · ≥ 2", labels)
+        chip = next(c for c in resp.context["active_table_filters"] if c["label"].startswith("Tempo médio"))
+        self.assertNotIn("avg_time_min", chip["remove_url"])
+        self.assertIn("links_min=2", chip["remove_url"])
+        self.assertIn("avg_time_min=24", resp.context["export_pdf_url"])
+        self.assertContains(resp, 'class="ranking-table-toolbar"')
+        self.assertContains(resp, 'name="avg_time_min"')
+        self.assertContains(resp, "Limpar filtros")
+        for other in ("risk", "best", "stable"):
+            other_resp = self.client.get(reverse("rankings:index"), {
+                "view": "custom", "date_from": "2026-10-01", "date_to": "2026-10-24",
+                "ranking_view": other, "avg_time_min": "24",
+            })
+            self.assertEqual(other_resp.status_code, 200)
+
+    def test_export_uses_the_same_cross_filters(self):
+        params = {"view": "custom", "date_from": "2026-10-01", "date_to": "2026-10-24", "avg_time_min": "24"}
+        with patch("aplicativos.rankings.exports.build_xlsx", return_value=b"export") as build_export:
+            response = self.client.get(reverse("rankings:export", args=["xlsx"]), params)
+        self.assertEqual(response.status_code, 200)
+        exported = build_export.call_args.args[2]
+        self.assertEqual([row["name"] for row in exported], ["Fierce Provedor"])
+
+    def test_build_metric_ranges_from_real_distribution(self):
+        from .filter_ranges import build_metric_ranges
+        links = build_metric_ranges([1, 2, 3, 4, 5, 6, 7, 8, 20], "links")
+        self.assertEqual([o["label"] for o in links], ["Baixa exposição", "Média exposição", "Alta exposição", "Muito alta exposição"])
+        self.assertEqual(links[0]["min"], 1)
+        self.assertIsNone(links[-1]["max"])
+        for previous, current in zip(links, links[1:]):  # integer bands never overlap or leave gaps
+            self.assertEqual(current["min"], previous["max"] + 1)
+        # Zero is its own option and level bands use positives only.
+        backlog = build_metric_ranges([0, 0, 0, 3, 5, 7, 9, 11], "backlog")
+        self.assertEqual([o["label"] for o in backlog[:2]], ["Sem backlog", "Com backlog"])
+        self.assertEqual(backlog[0]["value"], "0:0")
+        self.assertTrue(all(o["min"] >= 3 for o in backlog[2:]))
+        # No variation: no useless bands.
+        self.assertEqual([o["label"] for o in build_metric_ranges([0, 0, 0], "backlog")], ["Sem backlog"])
+        self.assertEqual(build_metric_ranges([], "tickets"), [])
+        # Resolution time uses operational bands, only those with data.
+        times = build_metric_ranges([5, 30, 40, 100, None], "avg_time")
+        self.assertEqual([o["label"] for o in times], ["Até 12h", "24–48h", "Acima de 72h"])
+
+    def test_smart_select_options_and_cross_selection(self):
+        resp, _ = self.names()
+        fields = {f["prefix"]: f for f in resp.context["filter_fields"]}
+        self.assertIn("Sem chamados", [o["label"] for o in fields["tickets"]["options"]])  # Desktop has 0
+        self.assertEqual([o["label"] for o in fields["avg_time"]["options"]], ["Até 12h", "24–48h"])
+        self.assertContains(resp, "Personalizado")
+        self.assertContains(resp, "provedores encontrados")
+        # Several smart selects at once, combined with AND.
+        resp, names = self.names(tickets_range="1:", avg_time_range="24:48")
+        self.assertEqual(names, ["Fierce Provedor"])
+        labels = [c["label"] for c in resp.context["active_table_filters"]]
+        self.assertIn("Tempo médio · 24–48h", labels)
+        self.assertEqual(self.names(backlog_range="1:", avg_time_range=":12")[1], ["Claro Telecom"])
+        self.assertEqual(self.names(tickets_range="0:0")[1], ["Desktop Internet"])
+        resp, _ = self.names(avg_time_range="24:48")
+        selected = {f["prefix"]: f["selected"] for f in resp.context["filter_fields"]}
+        self.assertEqual(selected["avg_time"], "24:48")
+
+    def test_custom_range_and_clearing_a_smart_select(self):
+        self.assertEqual(self.names(avg_time_range="custom", avg_time_min="9", avg_time_max="12")[1], ["Claro Telecom"])
+        resp, _ = self.names(avg_time_range="custom", avg_time_min="9", avg_time_max="12")
+        selected = {f["prefix"]: f["selected"] for f in resp.context["filter_fields"]}
+        self.assertEqual(selected["avg_time"], "custom")
+        self.assertEqual(len(self.names(avg_time_range="", avg_time_min="24")[1]), 3)  # "Todos" clears
+
+    def test_default_period_is_three_months_and_explicit_period_is_respected(self):
+        resp = self.client.get(reverse("rankings:index"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["filters"]["view"], "3months")
+        self.assertContains(resp, 'data-view="3months" aria-pressed="true"')
+        for explicit in ("month", "6months", "12months"):
+            resp = self.client.get(reverse("rankings:index"), {"view": explicit})
+            self.assertEqual(resp.context["filters"]["view"], explicit)
+        resp = self.client.get(reverse("rankings:index"), {"view": "custom", "date_from": "2026-10-01", "date_to": "2026-10-24"})
+        self.assertEqual((resp.context["filters"]["date_from"], resp.context["filters"]["date_to"]), ("2026-10-01", "2026-10-24"))
+
+    def test_direction_inverts_the_tab_metric_and_recomputes_positions(self):
+        resp, desc = self.names(direction="desc")
+        self.assertEqual(desc, ["Claro Telecom", "Desktop Internet", "Fierce Provedor"])
+        self.assertEqual(self.names()[1], desc)  # default is desc
+        resp, asc = self.names(direction="asc")
+        self.assertEqual(asc, ["Fierce Provedor", "Desktop Internet", "Claro Telecom"])
+        self.assertEqual([r["ranking_position"] for r in resp.context["page_obj"]], [1, 2, 3])
+        self.assertEqual(self.names(direction="bogus")[1], desc)
+        self.assertContains(resp, "Ordenado por Links na CMDB")
+        self.assertContains(resp, "Menor → maior")
+        self.assertIn("direction=asc", resp.context["direction_urls"]["asc"])
+
+    def test_direction_works_together_with_filters_and_other_tabs(self):
+        resp, names = self.names(direction="asc", tickets_min="1", avg_time_range="5:")
+        self.assertEqual(names, ["Fierce Provedor", "Claro Telecom"])
+        self.assertEqual(resp.context["page_obj"][0]["ranking_position"], 1)
+        base = {"view": "custom", "date_from": "2026-10-01", "date_to": "2026-10-24", "ranking_view": "risk"}
+        desc = [r["name"] for r in self.client.get(reverse("rankings:index"), {**base, "direction": "desc"}).context["page_obj"]]
+        asc = [r["name"] for r in self.client.get(reverse("rankings:index"), {**base, "direction": "asc"}).context["page_obj"]]
+        self.assertEqual(asc, desc[::-1])

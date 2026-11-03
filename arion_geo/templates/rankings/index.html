@@ -28,7 +28,7 @@
     </div>
   </header>
 
-  <form class="ranking-filter-form ranking-filter-form--v2" method="get" aria-label="Filtros do ranking operacional">
+  <form id="ranking-filter-form" class="ranking-filter-form ranking-filter-form--v2" method="get" aria-label="Filtros do ranking operacional">
     <input type="hidden" name="view" value="{{ filters.view }}" data-ranking-view>
     <input type="hidden" name="ranking_view" value="{{ filters.ranking_view }}">
     <label><span>Mês</span><select name="month">{% for option in month_options %}<option value="{{ option.value }}"{% if filters.month == option.value %} selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
@@ -55,10 +55,8 @@
     {% if filters.ranking_view != "links" %}<input type="hidden" name="sort" value="{{ filters.sort }}">{% endif %}
     {% if filters.ranking_view == "links" %}
       <div class="ranking-exposure-controls">
-        <label><span>Provedores</span><select name="top">{% for option in top_options %}<option value="{{ option }}"{% if filters.top == option %} selected{% endif %}>{% if option == "all" %}Todos{% else %}Top {{ option }}{% endif %}</option>{% endfor %}</select></label>
         <label><span>Mínimo de links</span><select name="min_links">{% for option in min_link_options %}<option value="{{ option }}"{% if filters.min_links == option %} selected{% endif %}>{% if option == "0" %}Todos{% else %}{{ option }}+{% endif %}</option>{% endfor %}</select></label>
-        <label><span>Ordenar por</span><select name="sort">{% for option in sort_options %}<option value="{{ option.value }}"{% if option.active %} selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
-        <p>Links: snapshot atual da CMDB. Chamados: criados no período selecionado.</p>
+        <p>Inventário atual da CMDB × chamados criados no período.</p>
       </div>
     {% endif %}
     <div class="ranking-filter-actions">
@@ -174,20 +172,96 @@
     <header class="table-section-heading">
       <div>
         <span class="section-kicker">CMDB + OTRS · SOMENTE LEITURA</span>
-        <h2 id="table-title">{% if filters.ranking_view == "links" %}{% if filters.top == "all" %}Todos os provedores por links na CMDB{% else %}Top {{ filters.top }} provedores por links na CMDB{% endif %}{% elif filters.ranking_view == "best" %}Ranking de melhor desempenho observado{% elif filters.ranking_view == "stable" %}Provedores sem ocorrências{% else %}Ranking de maior risco{% endif %} <small>{{ page_obj.paginator.count|intcomma }}</small></h2>
+        <h2 id="table-title">{% if filters.ranking_view == "links" %}{% if filters.top == "all" %}Todos os provedores{% else %}Top {{ filters.top }} provedores{% endif %} &mdash; Mais links{% elif filters.ranking_view == "best" %}Ranking de melhor desempenho observado{% elif filters.ranking_view == "stable" %}Provedores sem ocorrências{% else %}Ranking de maior risco{% endif %} <small>{{ page_obj.paginator.count|intcomma }}</small></h2>
       </div>
-      {% if filters.ranking_view == "links" %}
-        <span class="table-hint">Snapshot atual da CMDB × chamados criados no período · incidência por 100 links atuais.</span>
-      {% elif filters.ranking_view != "stable" %}
-        <span class="table-hint">Leitura operacional auxiliar; critérios finais serão definidos com a operação. ARION &gt;24h não é SLA contratual.</span>
-      {% else %}
-        <span class="table-hint">Sem chamados válidos e sem backlog no período selecionado.</span>
-      {% endif %}
+      <span class="table-hint">Ordenado por {{ sort_metric_label }} &middot; {{ direction_label }}{% if active_table_filters %} &middot; {{ active_table_filters|length }} filtro{{ active_table_filters|length|pluralize }} ativo{{ active_table_filters|length|pluralize }}{% endif %}{% if filters.search %} &middot; Busca: &ldquo;{{ filters.search }}&rdquo;{% endif %}</span>
     </header>
+
+    <div class="ranking-table-toolbar" role="region" aria-label="Filtros da tabela">
+      <div class="ranking-toolbar-group ranking-toolbar-search">
+        <label class="ranking-search-field" for="ranking-provider-search">
+          <span class="ranking-search-icon" aria-hidden="true">⌕</span>
+          <input type="search" id="ranking-provider-search" name="search" form="ranking-filter-form" value="{{ filters.search }}" placeholder="Buscar provedor (ex: CLARO, FIERCE)..." aria-label="Buscar provedor">
+          {% if filters.search %}
+            <button type="button" class="ranking-search-clear" data-search-clear title="Limpar busca" aria-label="Limpar busca">✕</button>
+          {% endif %}
+        </label>
+      </div>
+      <div class="ranking-toolbar-group">
+        <label class="ranking-toolbar-control">
+          <span class="ranking-toolbar-label">Situação</span>
+          <select name="situation" form="ranking-filter-form" aria-label="Situação operacional" data-auto-submit>
+            {% for option in situation_options %}
+              <option value="{{ option.value }}"{% if option.active %} selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <details class="ranking-table-more"{% if active_table_filters %} data-has-active{% endif %}>
+          <summary>Mais filtros{% if active_table_filters %} <span class="ranking-table-more-count">{{ active_table_filters|length }}</span>{% endif %}</summary>
+          <div class="ranking-table-more-panel">
+            <p class="ranking-table-more-title">Filtros do ranking</p>
+            <div class="ranking-table-more-grid">
+              {% for field in filter_fields %}
+                <div class="ranking-filter-field">
+                  <label for="ranking-range-{{ field.prefix }}">{{ field.label }}</label>
+                  <select id="ranking-range-{{ field.prefix }}" name="{{ field.range_name }}" form="ranking-filter-form">
+                    <option value=""{% if not field.selected %} selected{% endif %}>Todos</option>
+                    {% for option in field.options %}<option value="{{ option.value }}"{% if field.selected == option.value %} selected{% endif %}>{{ option.text }}</option>{% endfor %}
+                    <option value="custom"{% if field.selected == "custom" %} selected{% endif %}>Personalizado</option>
+                  </select>
+                  <div class="ranking-range-custom">
+                    <input type="number" inputmode="decimal" min="0" step="{{ field.step }}" name="{{ field.min_name }}" form="ranking-filter-form" value="{{ field.min_value }}" placeholder="Mínimo{% if field.unit %} ({{ field.unit }}){% endif %}" aria-label="{{ field.label }} mínimo">
+                    <input type="number" inputmode="decimal" min="0" step="{{ field.step }}" name="{{ field.max_name }}" form="ranking-filter-form" value="{{ field.max_value }}" placeholder="Máximo{% if field.unit %} ({{ field.unit }}){% endif %}" aria-label="{{ field.label }} máximo">
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+            <div class="ranking-table-more-actions">
+              <span class="ranking-table-more-count-text">{{ page_obj.paginator.count|intcomma }} provedor{{ page_obj.paginator.count|pluralize:"es" }} encontrado{{ page_obj.paginator.count|pluralize }}</span>
+              <a class="ranking-button ranking-button--quiet" href="{{ clear_table_url }}">Limpar</a>
+              <button type="submit" form="ranking-filter-form" class="ranking-button ranking-button--primary">Aplicar</button>
+            </div>
+          </div>
+        </details>
+        <div class="ranking-direction-toggle" role="group" aria-label="Direção da ordenação">
+          <a class="ranking-direction-btn{% if filters.direction == 'desc' %} is-active{% endif %}" href="{{ direction_urls.desc }}" data-direction="desc" aria-pressed="{% if filters.direction == 'desc' %}true{% else %}false{% endif %}"><span aria-hidden="true">↓</span> Maior → menor</a>
+          <a class="ranking-direction-btn{% if filters.direction == 'asc' %} is-active{% endif %}" href="{{ direction_urls.asc }}" data-direction="asc" aria-pressed="{% if filters.direction == 'asc' %}true{% else %}false{% endif %}"><span aria-hidden="true">↑</span> Menor → maior</a>
+        </div>
+        <label class="ranking-toolbar-control">
+          <span class="ranking-toolbar-label">Exibir</span>
+          <select name="top" form="ranking-filter-form" aria-label="Quantidade de resultados" data-auto-submit>
+            {% for option in top_display_options %}
+              <option value="{{ option.value }}"{% if option.active %} selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+    </div>
+    {% if active_table_filters %}
+    <div class="ranking-active-chips" aria-label="Filtros ativos da tabela">
+      {% for chip in active_table_filters %}
+        <a class="ranking-chip" href="{{ chip.remove_url }}" title="Remover filtro">{{ chip.label }} <span aria-hidden="true">×</span></a>
+      {% endfor %}
+      {% if active_table_filters|length > 1 or filters.search %}<a class="ranking-chip-clear" href="{{ clear_table_url }}">Limpar filtros</a>{% endif %}
+    </div>
+    {% endif %}
+
     <div class="table-scroll thin-scroll">
       {% if filters.ranking_view == "links" %}
         <table class="risk-table exposure-table">
-          <thead><tr><th>Pos.</th><th>Provedor / ISP</th><th>Links na CMDB</th><th>Chamados no período</th><th>Chamados / 100 links</th><th>Backlog atual</th><th>&gt;24h</th><th>Tempo médio</th><th title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação.">Indicador operacional ⓘ</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Pos.</th>
+              <th>Provedor / ISP</th>
+              <th>Links na CMDB</th>
+              <th>Chamados no período</th>
+              <th title="Quantidade de chamados criados no período para cada 100 links atuais do provedor na CMDB. Permite comparar provedores de tamanhos diferentes. Não representa necessariamente percentual de links com falha, porque um mesmo link pode gerar mais de um chamado.">Chamados / 100 links <span aria-hidden="true">ⓘ</span></th>
+              <th>Backlog atual</th>
+              <th>&gt;24h</th>
+              <th>Tempo médio</th>
+              <th title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação.">Indicador operacional <span aria-hidden="true">ⓘ</span></th>
+            </tr>
+          </thead>
           <tbody>
             {% for item in page_obj %}
               <tr tabindex="0" data-provider-row="{{ item.id }}" aria-label="Abrir detalhes de {{ item.name }}">

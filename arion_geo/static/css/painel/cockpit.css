@@ -515,9 +515,9 @@ button.cockpit-calendar-day:hover { border-color:var(--accent-teal); box-shadow:
 .cockpit-ops-legend span { display:inline-flex; align-items:center; gap:6px; }
 .cockpit-ops-empty-note { margin:9px 0 0; color:var(--text-muted); font-size:9px; }
 .cockpit-ops-legend i { width:7px; height:7px; border-radius:50%; background:var(--accent-teal); }
-.cockpit-ops-legend i.closed,.cockpit-ops-legend i.support-closed { background:var(--accent-orange); }
+.cockpit-ops-legend i.closed,.cockpit-ops-legend i.support-closed { background:var(--arion-orange); }
 .cockpit-ops-legend i.cancel-entry { background:var(--accent-orange); }
-.cockpit-ops-legend i.cancel-closed { background:color-mix(in srgb,var(--accent-orange) 48%,var(--surface-primary)); border:1px solid var(--accent-orange); }
+.cockpit-ops-legend i.cancel-closed { background:color-mix(in srgb,var(--arion-orange) 48%,var(--surface-primary)); border:1px solid var(--arion-orange); }
 .cockpit-ops-legend i.support-closed { background:color-mix(in srgb,var(--accent-teal) 48%,var(--surface-primary)); border:1px solid var(--accent-teal); }
 .cockpit-visual-header { align-items:center!important; }
 .cockpit-chart-mode { display:inline-flex; flex:0 0 auto; gap:2px; padding:3px; border:1px solid var(--border-primary); border-radius:8px; background:var(--surface-secondary,var(--surface-primary)); }
@@ -547,11 +547,11 @@ button.cockpit-calendar-day:hover { border-color:var(--accent-teal); box-shadow:
 .cockpit-ops-bar-value { position:absolute; z-index:4; bottom:calc(var(--bar-height) + 2px); left:50%; transform:translateX(-50%); color:var(--text-secondary); font-size:9px; font-weight:550; font-variant-numeric:tabular-nums; line-height:1; white-space:nowrap; pointer-events:none; }
 .cockpit-ops-x-label { display:flex; min-width:0; height:28px; align-items:center; justify-content:center; padding:0 1px; overflow:hidden; color:var(--text-muted); font-size:8px; line-height:1; white-space:nowrap; }
 .cockpit-ops-bar { position:absolute; right:0; bottom:0; left:0; display:block; width:100%; height:var(--bar-height); min-height:0!important; border-radius:3px 3px 0 0; background:var(--accent-teal); }
-.cockpit-ops-bar.closed { background:var(--accent-orange); }
+.cockpit-ops-bar.closed { background:var(--arion-orange); }
 .cockpit-ops-bar.support-entry,.cockpit-aging-track i.support { background:var(--accent-teal); }
 .cockpit-ops-bar.support-closed { background:color-mix(in srgb,var(--accent-teal) 48%,var(--surface-primary)); border:1px solid var(--accent-teal); }
 .cockpit-ops-bar.cancel-entry,.cockpit-aging-track i.cancellation { background:var(--accent-orange); }
-.cockpit-ops-bar.cancel-closed { background:color-mix(in srgb,var(--accent-orange) 48%,var(--surface-primary)); border:1px solid var(--accent-orange); }
+.cockpit-ops-bar.cancel-closed { background:color-mix(in srgb,var(--arion-orange) 48%,var(--surface-primary)); border:1px solid var(--arion-orange); }
 .cockpit-ops-legend i.backlog-line-key { width:15px; height:2px; border-radius:0; background:var(--accent-blue); }
 .cockpit-point-tooltip { z-index:7; }
 .cockpit-ops-point:hover .cockpit-point-tooltip,.cockpit-ops-point:focus-visible .cockpit-point-tooltip { display:grid; }
@@ -628,14 +628,16 @@ button.cockpit-calendar-day:hover { border-color:var(--accent-teal); box-shadow:
 .cockpit-origin-mode button { min-height:29px; padding:0 9px; border:0; border-radius:6px; background:transparent; color:var(--text-secondary); font:inherit; font-size:9px; cursor:pointer; }
 .cockpit-origin-mode button[aria-pressed="true"] { background:var(--surface-primary); color:var(--text-primary); box-shadow:var(--card-shadow); }
 .cockpit-origin-mode button:focus-visible { outline:2px solid var(--accent-teal); outline-offset:2px; }
-.cockpit-ops-legend i.closed,.cockpit-ops-legend i.support-closed,.cockpit-ops-legend i.cancellation-closed { background:var(--accent-rose); }
+.cockpit-ops-legend i.closed,.cockpit-ops-legend i.support-closed,.cockpit-ops-legend i.cancellation-closed { background:var(--arion-orange); }
 .cockpit-ops-legend i.entries,.cockpit-ops-legend i.support-entry { background:var(--accent-teal); }
 .cockpit-ops-legend i.cancellation-entry { background:color-mix(in srgb,var(--accent-teal) 55%,var(--surface-primary)); border:1px solid var(--accent-teal); }
-.cockpit-ops-legend i.cancellation-closed { background:color-mix(in srgb,var(--accent-rose) 58%,var(--surface-primary)); border:1px solid var(--accent-rose); }
+.cockpit-ops-legend i.cancellation-closed { background:color-mix(in srgb,var(--arion-orange) 58%,var(--surface-primary)); border:1px solid var(--arion-orange); }
 .cockpit-ops-legend i.backlog-line-key { background:var(--accent-blue); }
-.cockpit-ops-bar.closed,.cockpit-ops-bar.support-closed { background:var(--accent-rose); }
+.cockpit-ops-bar.closed,.cockpit-ops-bar.support-closed { background:var(--arion-orange); }
 .cockpit-ops-bar.cancellation-entry { background:color-mix(in srgb,var(--accent-teal) 55%,var(--surface-primary)); border:1px solid var(--accent-teal); }
-.cockpit-ops-bar.cancellation-closed { background:color-mix(in srgb,var(--accent-rose) 58%,var(--surface-primary)); border:1px solid var(--accent-rose); }
+.cockpit-ops-bar.cancellation-closed { background:color-mix(in srgb,var(--arion-orange) 58%,var(--surface-primary)); border:1px solid var(--arion-orange); }
+.cockpit-ops-bar.closed:hover,.cockpit-ops-point:hover .cockpit-ops-bar.closed,.cockpit-ops-point:focus-visible .cockpit-ops-bar.closed,.cockpit-ops-point:hover .cockpit-ops-bar.support-closed,.cockpit-ops-point:focus-visible .cockpit-ops-bar.support-closed,.cockpit-ops-point:hover .cockpit-ops-bar.cancellation-closed,.cockpit-ops-point:focus-visible .cockpit-ops-bar.cancellation-closed { filter:brightness(1.15); }
+.cockpit-point-tooltip small.closed { color:var(--arion-orange); font-weight:500; }
 .cockpit-ops-bar-value { bottom:calc(var(--bar-height) + var(--value-lift,2px)); }
 .cockpit-ops-bar-item.is-group-start { margin-left:6px; }
 .cockpit-ops-chart[data-grain="hour"] .cockpit-ops-bar-value { font-size:8px; }

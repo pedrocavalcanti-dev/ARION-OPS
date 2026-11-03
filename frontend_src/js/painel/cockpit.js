@@ -450,9 +450,9 @@
       const entryOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_entries)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_entries)}</small>` : "";
       const closedOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_closed)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_closed)}</small>` : "";
       const tooltipLines = mode === "all"
-        ? `<small>Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small>Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Varia\u00e7\u00e3o l\u00edquida: ${escapeHTML(netLabel)}</small>${backlogAvailable ? `<small>Backlog inicial: ${rowBacklogStart}</small><small>Backlog: ${rowBacklog}</small>` : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
-        : mode === "created" ? `<small>Novos: ${number.format(row.entries)}</small>${entryOriginDetail}`
-          : mode === "closed" ? `<small>Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}`
+        ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Varia\u00e7\u00e3o l\u00edquida: ${escapeHTML(netLabel)}</small>${backlogAvailable ? `<small>Backlog inicial: ${rowBacklogStart}</small><small>Backlog: ${rowBacklog}</small>` : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
+        : mode === "created" ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}`
+          : mode === "closed" ? `<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}`
             : `<small>Backlog: ${rowBacklog}</small>`;
       const originAccessible = general
         ? mode === "all" ? ` Suporte: ${number.format(row.support_entries)} novos, ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_entries)} novos, ${number.format(row.cancellation_closed)} resolvidos.`
