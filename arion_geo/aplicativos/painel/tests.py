@@ -178,6 +178,7 @@ class MirrorAnalyticsTests(TestCase):
         for status in ("OPEN", "PENDING", "SCHEDULED"):
             self.assertContains(response, f'href="{queue_url}?tab={status}"')
         self.assertNotContains(response, "otrs_status=")
+
         self.assertEqual(response.context["open_count"], 1)
         self.assertEqual(response.context["pending_count"], 0)
         self.assertEqual(response.context["scheduled_count"], 0)
@@ -199,6 +200,15 @@ class MirrorAnalyticsTests(TestCase):
         self.assertContains(response, "Chamados por projeto")
         self.assertContains(response, "Principais motivos dos chamados")
         self.assertContains(response, "provider-logo--fallback")
+
+    def test_dashboard_charts_use_local_vanilla_javascript_without_npm_imports(self):
+        response = self.client.get(reverse("dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'src="/static/js/painel/dashboard.js" defer')
+        self.assertContains(response, 'data-monthly-chart')
+        source = (Path(__file__).resolve().parents[3] / "frontend_src" / "js" / "painel" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertNotRegex(source, r"(?m)^\s*import\s")
+        self.assertNotIn("echarts/", source)
 
     def test_dashboard_and_queue_count_active_tickets_and_distinct_affected_links(self):
         from aplicativos.chamados.services import TicketQueueService

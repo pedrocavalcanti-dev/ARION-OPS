@@ -7,6 +7,7 @@ from .models import (
     QualityOccurrence,
     QualityOrder,
     QualityTicket,
+    QualityTreatment,
 )
 
 
@@ -33,6 +34,15 @@ class QualityTicketAdmin(admin.ModelAdmin):
     list_filter = ("ticket_type", "state_snapshot", "queue_snapshot")
     search_fields = ("quality_order__code", "ticket_number", "ticket_external_id_snapshot")
     autocomplete_fields = ("quality_order",)
+
+
+@admin.register(QualityTreatment)
+class QualityTreatmentAdmin(admin.ModelAdmin):
+    list_display = ("code", "quality_order", "status", "support_ticket_number", "created_by", "created_at")
+    list_filter = ("status", "send_status", "created_at")
+    search_fields = ("code", "quality_order__code", "support_ticket_number", "reason")
+    readonly_fields = ("code", "correlation_id", "created_at", "updated_at", "active_order_key")
+    autocomplete_fields = ("quality_order", "owner", "created_by")
 
 
 @admin.register(QualityMonitoringCycle)

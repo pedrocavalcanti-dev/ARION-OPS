@@ -44,6 +44,8 @@
   }
 
   window.addEventListener("beforeinstallprompt", (event) => {
+    // Keep the native install flow when a page has no explicit install control.
+    if (!installButtons.length) return;
     event.preventDefault();
     installPrompt = event;
     updateInstallControls();
@@ -64,8 +66,12 @@
     const prompt = installPrompt;
     installPrompt = null;
     updateInstallControls();
-    await prompt.prompt();
-    await prompt.userChoice;
+    try {
+      await prompt.prompt();
+      await prompt.userChoice;
+    } catch {
+      updateInstallControls();
+    }
   }));
 
   document.querySelector("[data-pwa-install-close]")?.addEventListener("click", () => installHelp?.close());

@@ -1,10 +1,11 @@
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.integracoes.models import CMDBLinkMirror
 
-from ..models import QualityAuditEvent, QualityOrder
+from ..models import QualityAuditEvent, QualityMonitoringCycle, QualityOrder, QualityTreatment
 
 
 class ActiveQualityOrderExists(Exception):
@@ -35,6 +36,7 @@ def create_quality_order(*, actor=None, request=None, **fields):
         existing = QualityOrder.objects.filter(
             Q(link_id=link.source_config_item_id) | Q(ci_snapshot=link.source_config_item_id),
             status__in=ACTIVE_ORDER_STATUSES,
+            archived_at__isnull=True,
         ).order_by("-updated_at", "-pk").first()
         if existing:
             raise ActiveQualityOrderExists(existing)
@@ -141,6 +143,95 @@ def update_quality_order_field(*, order, field_name, value, actor=None, request=
         metadata={"code": locked.code, **metadata},
     )
     return locked, True
+
+
+class QualityOrderArchiveBlocked(Exception):
+    """Raised when an OQ still has an operational process that needs follow-up."""
+
+
+@transaction.atomic
+def archive_quality_order(*, order_id, actor, reason, request=None):
+    reason = str(reason or "").strip()[:1000]
+    if not reason:
+        raise ValueError("Informe o motivo do arquivamento.")
+
+    order = QualityOrder.objects.select_for_update().get(pk=order_id)
+    if order.archived_at:
+        return order, False
+
+    treatments = QualityTreatment.objects.filter(quality_order=order)
+    unresolved_send = treatments.filter(
+        Q(send_status__in=(QualityTreatment.SendStatus.IN_PROGRESS, QualityTreatment.SendStatus.UNCERTAIN))
+        | Q(status__in=(
+            QualityTreatment.Status.PENDING_SEND,
+            QualityTreatment.Status.WAITING_OTRS,
+            QualityTreatment.Status.IN_PROGRESS,
+            QualityTreatment.Status.MONITORING,
+            QualityTreatment.Status.SEND_FAILED,
+        ))
+    ).exists()
+    unresolved_quality_ticket = order.quality_tickets.filter(closed_at__isnull=True).exists()
+    linked_local_ticket_needs_followup = any(
+        treatment.quality_ticket_external_id
+        and not _otrs_state_is_terminal(treatment.quality_ticket_state_snapshot)
+        for treatment in treatments.exclude(quality_ticket_external_id__isnull=True)
+    )
+    active_monitoring = QualityMonitoringCycle.objects.filter(
+        quality_order=order, result=QualityMonitoringCycle.Result.IN_PROGRESS,
+    ).exists()
+    if unresolved_send or unresolved_quality_ticket or linked_local_ticket_needs_followup or active_monitoring:
+        blockers = []
+        if unresolved_send:
+            blockers.append("há uma TQ pendente, em acompanhamento ou com envio não reconciliado")
+        if unresolved_quality_ticket or linked_local_ticket_needs_followup:
+            blockers.append("há ticket OTRS de Qualidade sem encerramento confirmado")
+        if active_monitoring:
+            blockers.append("há um ciclo RREIP em andamento")
+        raise QualityOrderArchiveBlocked("O arquivamento foi bloqueado: " + "; ".join(blockers) + ".")
+
+    snapshot = {
+        "code": order.code,
+        "designation": order.designation_snapshot,
+        "client": order.client_snapshot,
+        "project": order.project_snapshot,
+        "occurrences": order.occurrences.count(),
+        "treatments": treatments.count(),
+        "quality_tickets": order.quality_tickets.count(),
+        "monitoring_cycles": order.monitoring_cycles.count(),
+        "has_linked_otrs_ticket": treatments.exclude(quality_ticket_external_id__isnull=True).exists()
+        or order.quality_tickets.exclude(ticket_external_id_snapshot__isnull=True).exists(),
+    }
+    order.archived_at = timezone.now()
+    order.archived_by = actor
+    order.archive_reason = reason
+    order.save(update_fields=("archived_at", "archived_by", "archive_reason", "updated_at"))
+    QualityAuditEvent.objects.create(
+        quality_order=order,
+        event_type=QualityAuditEvent.EventType.ORDER_ARCHIVED,
+        actor=actor,
+        description=f"OQ arquivada administrativamente. Motivo: {reason}",
+        metadata=snapshot,
+    )
+    AuditService.record(
+        request=request,
+        user=actor,
+        category="QUALITY",
+        action="OQ_ARCHIVED",
+        module="Qualidade",
+        description=f"Ordem de Qualidade {order.code} arquivada.",
+        obj=order,
+        metadata={**snapshot, "reason": reason},
+    )
+    return order, True
+
+
+def _otrs_state_is_terminal(state):
+    normalized = str(state or "").strip().casefold()
+    terminal_fragments = (
+        "resolved", "closed", "merged", "removed", "resolvido", "resolvida",
+        "encerrado", "encerrada", "cancelado", "cancelada",
+    )
+    return bool(normalized) and any(fragment in normalized for fragment in terminal_fragments)
 
 
 def _user_label(user):

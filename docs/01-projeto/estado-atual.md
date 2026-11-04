@@ -13,7 +13,7 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.0**. A dis
 | Cockpit | IMPLEMENTADO | Espelhos OTRS/CMDB; filas de Suporte e Cancelamentos | `SavedAnalyticsView` local; exportação de leitura | Contextos Suporte, Cancelamentos e Geral; classificação por etapa e Data Scope no backend. |
 | Mapa | IMPLEMENTADO | Espelhos e relações Ticket–ConfigItem | Sem edição da fonte | Agrega por UF; não geocodifica. |
 | Rankings | IMPLEMENTADO | Snapshot atual CMDB/Base Links + chamados válidos do espelho OTRS no período | Exportação de leitura | Exposição por links ativos e incidência proporcional; Índice ARION é operacional, não SLA nem prova de causalidade. |
-| Qualidade Operacional | IMPLEMENTADO (Fases 1–4) | OQs, checklist, contatos e ciclos locais; espelhos CMDB/OTRS | OQs, checklist, contatos e auditoria locais; sem escrita remota | Dashboard, Links prioritários/detalhe, OQ (Resumo, Ocorrências, Tratativas, Monitoramento e Histórico), fila global RREIP, diretório de contatos e histórico global. |
+| Qualidade Operacional | IMPLEMENTADO (Fases 1–4 + envio controlado de TQ) | OQs, checklist, contatos, ciclos, TQs locais e espelhos CMDB/OTRS | Registros locais auditados; envio Brevo somente por autorização e confirmação individual; sem escrita OTRS | Inclui template institucional HTML/texto, pré-visualização e correlação por ID persistente no corpo. |
 | Base | IMPLEMENTADO | `CMDBLinkMirror`, `CMDBOperatorMirror` | Consulta/exportação | Importador XLSX legado não é fluxo normal. |
 | Central de Relatórios | IMPLEMENTADO | Original Claro e espelhos locais OTRS/CMDB em enriquecimento explícito | Tratativa, pausas, overrides, decisão e auditoria no ARION OPS | Cálculo automático é baseline; decisão final é humana. |
 | ARI I.A | IMPLEMENTADO (Preview local) | Models locais de conversas, anexos e artefatos | Dados locais de conversa/anexo | Opera em modo Preview local; integração LLM externa permanece PLANEJADA. |
@@ -23,6 +23,8 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.0**. A dis
 | RBAC / Data Scope | IMPLEMENTADO | Django Groups/Permissions e `GroupDataScope` | Administração protegida | Superuser técnico possui escopo global. |
 | Auditoria | IMPLEMENTADO | `AuditEvent` via `AuditService` | Histórico local | Metadata sanitizada; não é debug log. |
 | Central documental | IMPLEMENTADO | Markdown estruturado em `docs/` e catálogo em `docs/08-releases/releases.json` | Leitura | Inclui Atualizações e versões, páginas funcionais/arquiteturais e busca; páginas técnicas protegidas por `configuracoes.manage_groups`. |
+
+A Central de Integrações administra APIs externas Brevo e Mapbox. A API Key Brevo é protegida por DPAPI e o teste usa apenas autenticação sem envio; a autorização administrativa de envio real permanece desabilitada por padrão. O Mapbox prioriza token público configurado no banco, com fallback legado controlado pelo ambiente.
 
 ## Banco e fontes
 

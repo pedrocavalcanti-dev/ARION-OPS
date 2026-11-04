@@ -1,4 +1,5 @@
 from django import forms
+from django.conf import settings
 from urllib.parse import urlsplit
 
 
@@ -57,7 +58,7 @@ class OTRSConfigurationForm(forms.Form):
         label="Permitir conexão legada sem TLS",
         required=False,
         initial=False,
-        help_text="Compatibilidade para servidor MySQL legado sem suporte TLS. O tráfego entre o ARION OPS e o banco remoto não será criptografado.",
+        help_text="Compatibilidade temporária apenas para o host autorizado por ARION_OTRS_LEGACY_NO_TLS_HOST. O tráfego remoto não será criptografado.",
     )
 
     def clean_host(self):
@@ -74,10 +75,105 @@ class OTRSConfigurationForm(forms.Form):
         host = (cleaned.get("host") or "").strip().casefold()
         use_tls = bool(cleaned.get("use_tls"))
         allow_insecure_remote = bool(cleaned.get("allow_insecure_remote"))
+        legacy_no_tls_host = str(getattr(settings, "OTRS_LEGACY_NO_TLS_HOST", "") or "").strip().casefold()
         if host and host not in self.LOOPBACK_HOSTS:
             if not use_tls and not allow_insecure_remote:
                 self.add_error("use_tls", "Host remoto do OTRS exige transporte TLS habilitado ou túnel local em 127.0.0.1.")
+            elif not use_tls and (not legacy_no_tls_host or host != legacy_no_tls_host):
+                self.add_error("allow_insecure_remote", "A conexão remota sem TLS só pode usar o host legado autorizado na configuração do servidor.")
+        if allow_insecure_remote and legacy_no_tls_host and host != legacy_no_tls_host:
+            self.add_error("allow_insecure_remote", "A exceção sem TLS não está autorizada para este host.")
         return cleaned
+
+
+class BrevoConfigurationForm(forms.Form):
+    send_method = forms.ChoiceField(label="Método de envio", choices=(("smtp", "SMTP Relay"), ("api_rest", "API REST")), initial="smtp")
+    api_key = forms.CharField(
+        label="API Key", max_length=512, required=False, strip=False,
+        widget=forms.PasswordInput(render_value=False, attrs={"autocomplete": "new-password"}),
+        help_text="Vazio mantém a chave protegida atual. A chave nunca será exibida novamente.",
+    )
+    smtp_login = forms.CharField(label="Login SMTP", max_length=254, required=False)
+    smtp_key = forms.CharField(
+        label="Chave SMTP", max_length=512, required=False, strip=False,
+        widget=forms.PasswordInput(render_value=False, attrs={"autocomplete": "new-password"}),
+        help_text="Vazio mantém a chave SMTP protegida atual. Cadastre uma chave SMTP nova e exclusiva para o ARION OPS.",
+    )
+    sender_name = forms.CharField(label="Nome do remetente", max_length=100, required=False)
+    sender_email = forms.EmailField(label="E-mail do remetente", max_length=254, required=False)
+    quality_recipient = forms.EmailField(label="Destinatário padrão da Qualidade", max_length=254, required=False)
+    routing_test_recipient = forms.EmailField(
+        label="Destinatário autorizado para homologação", max_length=254, required=False,
+        help_text="Use uma caixa controlada e autorizada. O teste envia somente para este endereço, sem Cc.",
+    )
+    routing_operational_test_approved = forms.BooleanField(
+        label="Autorizar previamente uma homologação para o destinatário operacional", required=False,
+        help_text="Esta autorização vale somente para a ação individual de homologação; não habilita o envio de TQs.",
+    )
+    quality_cc = forms.EmailField(label="E-mail em cópia (Cc)", max_length=254, required=False)
+    reply_to = forms.EmailField(label="E-mail de resposta (opcional)", max_length=254, required=False)
+    quality_recipient_validated = forms.BooleanField(
+        label="Endereço de entrada da fila Qualidade validado no OTRS", required=False,
+        help_text="Antes do primeiro envio, use uma caixa de testes autorizada. Marque após confirmar o endereço que realmente cria tickets na fila Qualidade.",
+    )
+    enabled = forms.BooleanField(label="Habilitada", required=False)
+    allow_real_sends = forms.BooleanField(
+        label="Autorizar envio real de solicitações de TQ", required=False,
+        help_text="Habilita o botão de envio explícito na Qualidade. Cada mensagem ainda exige confirmação individual.",
+    )
+
+    def clean_api_key(self):
+        return self.cleaned_data["api_key"].strip()
+
+    def clean_smtp_key(self):
+        return self.cleaned_data["smtp_key"]
+
+    def clean_sender_name(self):
+        return " ".join(self.cleaned_data.get("sender_name", "").split())
+
+    def clean(self):
+        cleaned = super().clean()
+        for field in ("sender_name", "sender_email", "quality_recipient", "routing_test_recipient", "quality_cc", "reply_to"):
+            value = cleaned.get(field)
+            if value:
+                cleaned[field] = value.strip()
+        if cleaned.get("enabled"):
+            for field, label in (
+                ("sender_name", "Nome do remetente"),
+                ("sender_email", "E-mail do remetente"),
+                ("quality_recipient", "Destinatário padrão da Qualidade"),
+            ):
+                if not cleaned.get(field):
+                    self.add_error(field, f"Informe {label.lower()} antes de habilitar a integração.")
+        if cleaned.get("allow_real_sends") and not cleaned.get("enabled"):
+            self.add_error("allow_real_sends", "Habilite a integração Brevo antes de autorizar envios reais.")
+        if cleaned.get("allow_real_sends") and not cleaned.get("quality_recipient_validated"):
+            self.add_error("quality_recipient_validated", "Valide o endereço de entrada da fila Qualidade antes de autorizar envios reais.")
+        if cleaned.get("send_method") == "smtp":
+            if not cleaned.get("smtp_login"):
+                self.add_error("smtp_login", "Informe o login SMTP.")
+            if cleaned.get("enabled") and not (cleaned.get("smtp_key") or self.initial.get("smtp_credential_configured")):
+                self.add_error("smtp_key", "Cadastre uma chave SMTP antes de habilitar o método SMTP.")
+        elif cleaned.get("enabled") and not (cleaned.get("api_key") or self.initial.get("api_credential_configured")):
+            self.add_error("api_key", "Cadastre a API Key antes de habilitar o método API REST.")
+        if cleaned.get("smtp_login"):
+            cleaned["smtp_login"] = cleaned["smtp_login"].strip()
+        return cleaned
+
+
+class MapboxConfigurationForm(forms.Form):
+    public_token = forms.CharField(
+        label="Token público Mapbox", max_length=512, required=False, strip=True,
+        widget=forms.PasswordInput(render_value=False, attrs={"autocomplete": "new-password"}),
+        help_text="Aceita somente token público pk. Vazio mantém o token cadastrado.",
+    )
+    enabled = forms.BooleanField(label="Disponibilizar para telas autorizadas do mapa", required=False)
+
+    def clean_public_token(self):
+        value = self.cleaned_data["public_token"]
+        if value and (not value.startswith("pk.") or len(value) <= 10 or any(character.isspace() for character in value)):
+            raise forms.ValidationError("Informe um token público Mapbox iniciado por pk.; tokens privados sk. não são aceitos.")
+        return value
 
 
 class CMDBSearchForm(forms.Form):

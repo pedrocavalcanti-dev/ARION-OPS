@@ -1,20 +1,27 @@
 from datetime import datetime, time
+import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db import transaction
-from django.db.models import Q
+from django.db.utils import OperationalError
+from django.db.models import Count, Q
 from django.core.exceptions import ValidationError
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods, require_POST
 
 from aplicativos.configuracoes.data_scope import DataScopeService
 from aplicativos.chamados.services import otrs_ticket_url
-from aplicativos.integracoes.models import CMDBLinkMirror, OTRSStateMapping
+from aplicativos.auditoria.services import AuditService
+from aplicativos.integracoes.clients.brevo import BrevoResult, BrevoSendingDisabled, BrevoTransactionalClient
+from aplicativos.integracoes.clients.brevo_smtp import SMTPResult, send_brevo_smtp
+from aplicativos.integracoes.models import CMDBLinkMirror, ExternalAPIIntegration, OTRSStateMapping
+from aplicativos.integracoes.services.external_apis import decrypt_external_api_secret, decrypt_external_api_smtp_secret
+from aplicativos.integracoes.services.analytics import TicketQueryService
 
 from .forms import (
     QualityActionForm,
@@ -27,12 +34,19 @@ from .forms import (
     QualityOrderOwnerForm,
     QualityOrderPriorityForm,
     QualityTicketLinkForm,
+    QualityTreatmentCreateForm,
 )
-from .models import QualityAction, QualityContact, QualityMonitoringCycle, QualityOrder, QualityTicket
+from .models import QualityAction, QualityContact, QualityMonitoringCycle, QualityOrder, QualityTicket, QualityTreatment
 from .services.dashboard import get_dashboard_data
 from .services.constants import QUALITY_PRIORITY_DEFAULT_PERIOD, QUALITY_RREIP_DAYS
 from .services.data_scope import QualityDataScopeService
-from .services.orders import ActiveQualityOrderExists, create_quality_order, update_quality_order_field
+from .services.orders import (
+    ActiveQualityOrderExists,
+    QualityOrderArchiveBlocked,
+    archive_quality_order,
+    create_quality_order,
+    update_quality_order_field,
+)
 from .services.orders_queue import get_quality_orders_queue
 from .services.order_detail import get_quality_order_detail
 from .services.occurrences import review_quality_occurrence
@@ -51,15 +65,22 @@ from .services.treatments import (
     add_quality_action,
     get_monitoring_tickets,
     get_treatment_context,
+    create_quality_treatment,
+    quality_treatment_creation_blocker,
     link_quality_ticket,
+    support_tickets_for_order,
     toggle_quality_action,
 )
+from .services.tq_delivery import claim_quality_treatment_send, record_tq_send_accepted, record_tq_send_failure
+from .services.tq_email import brevo_send_readiness, build_treatment_email, treatment_send_block_message
 from aplicativos.integracoes.services.semantics import link_designation, provider_values_for_links
 
 
 QUALITY_PERMISSION = "qualidade.view_quality"
 MANAGE_QUALITY_PERMISSION = "qualidade.manage_quality_orders"
 MANAGE_CONTACTS_PERMISSION = "qualidade.manage_quality_contacts"
+DELETE_QUALITY_ORDER_PERMISSION = "qualidade.delete_qualityorder"
+logger = logging.getLogger(__name__)
 
 
 @login_required
@@ -266,6 +287,29 @@ def _filter_chips(request, selected, period=None, owner_labels=None):
     return chips
 
 
+def _treatment_send_configuration(blockers):
+    otrs_blocked = any("OTRS" in blocker or "fila Qualidade" in blocker or "worker" in blocker.casefold() for blocker in blockers)
+    route = "configuracoes:integracoes:otrs" if otrs_blocked else "configuracoes:integracoes:brevo"
+    label = "Ver integra" + chr(0xe7) + chr(0xe3) + "o OTRS" if otrs_blocked else "Configurar Brevo"
+    return reverse(route), label
+
+
+def _treatment_send_checks(integration, blockers):
+    blockers = tuple(blockers)
+    config = integration.config or {} if integration else {}
+    transport = bool(integration and integration.enabled and integration.health == ExternalAPIIntegration.Health.AVAILABLE)
+    otrs_configured = not any("Integração OTRS somente" in item for item in blockers)
+    checkpoint_ready = not any("Leitura incremental" in item for item in blockers)
+    transport_label = "Brevo SMTP" if config.get("send_method") == "smtp" else "Brevo API REST"
+    return [
+        {"label": transport_label, "state": "Autenticado" if transport else "Pendente"},
+        {"label": "Autorização administrativa", "state": "Autorizada" if integration and integration.allow_real_sends else "Desabilitada"},
+        {"label": "Roteamento de e-mail", "state": "Validado" if config.get("quality_recipient_validated") else "Pendente"},
+        {"label": "Leitura OTRS", "state": "Configurada" if otrs_configured else "Pendente"},
+        {"label": "Checkpoint e correlação", "state": "Validado" if checkpoint_ready else "Pendente"},
+    ]
+
+
 def _safe_quality_return(request):
     candidate = str(request.POST.get("next", ""))
     if (candidate.startswith("/qualidade/") and not candidate.startswith("//")
@@ -361,10 +405,15 @@ def order_update(request, codigo):
 @login_required
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 def order_detail(request, codigo):
+    can_archive_order = request.user.is_superuser or request.user.has_perm(DELETE_QUALITY_ORDER_PERMISSION)
     order = get_object_or_404(
-        QualityDataScopeService.orders_for(request.user).select_related("owner", "link", "link__operator"),
+        QualityDataScopeService.orders_for(
+            request.user, include_archived=can_archive_order,
+        ).select_related("owner", "link", "link__operator"),
         code=codigo,
     )
+    if order.archived_at and not can_archive_order:
+        raise Http404
     tab = request.GET.get("tab", "resumo")
     context = get_quality_order_detail(
         request.user,
@@ -377,7 +426,9 @@ def order_detail(request, codigo):
     )
     context.update({
         "active_section": "orders",
-        "can_manage_orders": request.user.has_perm(MANAGE_QUALITY_PERMISSION),
+        "can_manage_orders": request.user.has_perm(MANAGE_QUALITY_PERMISSION) and not order.archived_at,
+        "can_archive_order": can_archive_order and not order.archived_at,
+        "is_archived": bool(order.archived_at),
         "open_edit_dialog": request.GET.get("edit") == "1" and request.user.has_perm(MANAGE_QUALITY_PERMISSION),
         "rreip_days": QUALITY_RREIP_DAYS,
         "page_query": _query_without(request, "page"),
@@ -394,7 +445,49 @@ def order_detail(request, codigo):
         "ticket_form": QualityTicketLinkForm(),
     })
     context.update(get_treatment_context(order))
+    active_local_treatment = QualityTreatment.objects.filter(
+        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
+    ).select_related("support_ticket", "created_by", "owner").first()
+    if active_local_treatment and active_local_treatment.quality_ticket_external_id:
+        active_local_treatment.otrs_url = otrs_ticket_url(active_local_treatment.quality_ticket_external_id)
+    support_tickets = support_tickets_for_order(request.user, order)
+    support_ticket_rows = list(support_tickets)
+    for support_ticket in support_ticket_rows:
+        support_ticket.otrs_url = otrs_ticket_url(support_ticket.external_id)
+    context.update({
+        "local_treatment": active_local_treatment,
+        "treatment_creation_blocker": quality_treatment_creation_blocker(order),
+        "treatment_history_local": order.treatments.select_related(
+            "created_by", "owner", "support_ticket",
+        ).exclude(pk=active_local_treatment.pk if active_local_treatment else None).order_by("-created_at", "-pk"),
+        "support_tickets": support_ticket_rows,
+        "operational_state_label": (
+            "Incidente de suporte ativo; estado do serviço não confirmado"
+            if support_tickets.exists() else "Situação não confirmada"
+        ),
+        "treatment_create_form": QualityTreatmentCreateForm(
+            support_tickets=support_tickets,
+            initial={"reason": order.current_reason or context.get("current_reason") or "Reincidência confirmada; investigar causa raiz e definir ações corretivas e preventivas."},
+        ),
+    })
+    brevo_integration = ExternalAPIIntegration.objects.filter(
+        provider=ExternalAPIIntegration.Provider.BREVO,
+    ).first()
+    send_readiness = brevo_send_readiness(active_local_treatment, brevo_integration)
+    send_configuration_url, send_configuration_label = _treatment_send_configuration(send_readiness["blockers"])
+    context.update({
+        "treatment_send_ready": send_readiness["ready"],
+        "treatment_send_blockers": send_readiness["blockers"],
+        "treatment_send_block_message": treatment_send_block_message(send_readiness["blockers"]),
+        "treatment_send_configuration_url": send_configuration_url,
+        "treatment_send_configuration_label": send_configuration_label,
+        "treatment_send_checks": _treatment_send_checks(brevo_integration, send_readiness["blockers"]),
+    })
     context["quality_actions"] = order.actions.select_related("completed_by").all()
+    context["checklist_total"] = len(context["quality_actions"])
+    context["checklist_completed"] = sum(action.completed for action in context["quality_actions"])
+    context["checklist_progress"] = round(context["checklist_completed"] / context["checklist_total"] * 100) if context["checklist_total"] else 0
+    context["archive_ticket_count"] = order.quality_tickets.exclude(ticket_external_id_snapshot__isnull=True).count() + order.treatments.exclude(quality_ticket_external_id__isnull=True).count()
     context["can_manage_contacts"] = request.user.has_perm(MANAGE_CONTACTS_PERMISSION)
     context["recommended_contacts"] = recommended_contacts_for_order(
         request.user,
@@ -445,6 +538,375 @@ def order_detail(request, codigo):
         "qualidade/order_detail.html",
         context,
     )
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(DELETE_QUALITY_ORDER_PERMISSION, raise_exception=True)
+@require_POST
+def quality_order_archive(request, codigo):
+    order = get_object_or_404(
+        QualityDataScopeService.orders_for(request.user).select_related("link"), code=codigo,
+    )
+    if request.POST.get("confirm_code", "").strip() != order.code:
+        messages.error(request, "O código informado não corresponde à OQ. Nenhuma alteração foi feita.")
+        return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}))
+    try:
+        _order, archived = archive_quality_order(
+            order_id=order.pk,
+            actor=request.user,
+            request=request,
+            reason=request.POST.get("reason", ""),
+        )
+    except QualityOrderArchiveBlocked as exc:
+        messages.error(request, str(exc))
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        if archived:
+            messages.success(request, f"{order.code} foi arquivada. O histórico e os registros relacionados foram preservados.")
+    return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}))
+
+
+def _scoped_treatment(request, codigo, treatment_id):
+    order = get_object_or_404(
+        QualityDataScopeService.orders_for(request.user).select_related("owner", "link", "link__operator"),
+        code=codigo,
+    )
+    treatment = get_object_or_404(
+        QualityTreatment.objects.select_related(
+            "quality_order", "quality_order__link", "quality_order__link__operator",
+            "support_ticket", "owner", "created_by",
+        ),
+        pk=treatment_id, quality_order=order,
+    )
+    return order, treatment
+
+
+def _tq_email_detail(request, order, treatment):
+    detail = get_quality_order_detail(request.user, order, tab="tratativas")
+    if treatment.support_ticket_external_id_snapshot and detail.get("link"):
+        scoped_links = DataScopeService.filter_queryset(
+            request.user,
+            CMDBLinkMirror.objects.filter(is_present_in_source=True).select_related("operator"),
+        )
+        detail["support_ticket"] = TicketQueryService.base(
+            request.user, links=scoped_links, all_queues=True,
+        ).filter(external_id=treatment.support_ticket_external_id_snapshot).first()
+    return detail
+
+
+def _tq_email_page_context(request, order, treatment):
+    detail = _tq_email_detail(request, order, treatment)
+    email = build_treatment_email(treatment, detail=detail, request=request)
+    integration = ExternalAPIIntegration.objects.filter(
+        provider=ExternalAPIIntegration.Provider.BREVO,
+    ).first()
+    readiness = brevo_send_readiness(treatment, integration)
+    config = readiness["config"]
+    sender = "Não configurado"
+    if config.get("sender_email"):
+        sender = f"{config.get('sender_name') or 'ARION OPS'} <{config['sender_email']}>"
+    send_configuration_url, send_configuration_label = _treatment_send_configuration(readiness["blockers"])
+    return {
+        "send_configuration_url": send_configuration_url,
+        "send_configuration_label": send_configuration_label,
+        "send_checks": _treatment_send_checks(integration, readiness["blockers"]),
+        "active_section": "orders",
+        "page_title": "Pré-visualização da solicitação",
+        "page_subtitle": f"Confira o conteúdo final da {treatment.code} antes de qualquer envio.",
+        "order": order,
+        "treatment": treatment,
+        "email_subject": email["subject"],
+        "email_html": email["html_content"],
+        "email_text": email["text_content"],
+        "sender_label": sender,
+        "recipient_label": config.get("quality_recipient") or "Não configurado",
+        "cc_label": config.get("quality_cc") or "Não configurado",
+        "reply_to_label": config.get("reply_to") or "Não configurado",
+        "project_label": email["context"]["project"],
+        "designation_label": email["context"]["designation"],
+        "send_ready": readiness["ready"],
+        "send_blockers": readiness["blockers"],
+        "send_block_message": treatment_send_block_message(readiness["blockers"]),
+    }
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+def quality_treatment_email_preview(request, codigo, treatment_id):
+    order, treatment = _scoped_treatment(request, codigo, treatment_id)
+    context = _tq_email_page_context(request, order, treatment)
+    context["preview_only"] = True
+    return render(request, "qualidade/treatment_email_preview.html", context)
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
+@require_http_methods(["GET", "POST"])
+def quality_treatment_send(request, codigo, treatment_id):
+    order, treatment = _scoped_treatment(request, codigo, treatment_id)
+    context = _tq_email_page_context(request, order, treatment)
+    context["preview_only"] = False
+    if request.method == "GET":
+        return render(request, "qualidade/treatment_email_preview.html", context)
+
+    if request.POST.get("confirm_send") != "yes":
+        messages.error(request, "Confirme explicitamente o envio na tela de conferência.")
+        return render(request, "qualidade/treatment_email_preview.html", context, status=400)
+
+    integration = ExternalAPIIntegration.objects.filter(
+        provider=ExternalAPIIntegration.Provider.BREVO,
+    ).first()
+    readiness = brevo_send_readiness(treatment, integration)
+    if not readiness["ready"]:
+        messages.error(request, "Envio bloqueado: " + "; ".join(readiness["blockers"]) + ".")
+        context["send_ready"] = False
+        context["send_blockers"] = readiness["blockers"]
+        return render(request, "qualidade/treatment_email_preview.html", context, status=400)
+
+    send_method = readiness["method"]
+    try:
+        if send_method == "smtp":
+            smtp_password = str(decrypt_external_api_smtp_secret(integration) or "")
+            smtp_login = str(readiness["config"].get("smtp_login") or "").strip()
+            if not smtp_password or not smtp_login:
+                raise ValueError("Credencial SMTP vazia")
+            brevo_client = None
+        else:
+            api_key = str(decrypt_external_api_secret(integration) or "").strip()
+            if not api_key:
+                raise ValueError("Credencial vazia")
+            brevo_client = BrevoTransactionalClient(api_key)
+    except Exception:
+        context["send_ready"] = False
+        context["send_blockers"] = ["API Key protegida indisponível para este processo"]
+        messages.error(request, "Envio bloqueado: não foi possível recuperar a credencial protegida da Brevo.")
+        return render(request, "qualidade/treatment_email_preview.html", context, status=400)
+
+    detail = _tq_email_detail(request, order, treatment)
+    email = build_treatment_email(treatment, detail=detail, request=request)
+    if len(email["html_content"].encode("utf-8")) + len(email["text_content"].encode("utf-8")) > 300_000:
+        messages.error(request, "Envio bloqueado: o conteúdo excede o limite operacional de tamanho.")
+        context["send_ready"] = False
+        context["send_blockers"] = ["Conteúdo acima de 300 KB"]
+        return render(request, "qualidade/treatment_email_preview.html", context, status=400)
+    payload = None
+    if send_method == "api_rest":
+        try:
+            payload = BrevoTransactionalClient.build_transactional_payload(
+                sender_email=readiness["config"].get("sender_email"),
+                sender_name=readiness["config"].get("sender_name"),
+                to_email=readiness["config"].get("quality_recipient"),
+                cc_email=readiness["config"].get("quality_cc", ""),
+                reply_to=readiness["config"].get("reply_to", ""),
+                subject=email["subject"], html_content=email["html_content"],
+                text_content=email["text_content"], tags=["arion-ops", "quality-treatment"],
+            )
+        except (TypeError, ValueError):
+            messages.error(request, "Envio bloqueado: revise os dados do remetente, destinatário e conteúdo.")
+            context["send_ready"] = False
+            context["send_blockers"] = ["Configuração de e-mail inválida"]
+            return render(request, "qualidade/treatment_email_preview.html", context, status=400)
+
+    retry = treatment.send_status == QualityTreatment.SendStatus.FAILED
+    claim = claim_quality_treatment_send(treatment.pk, allow_retry=retry, method=send_method)
+    if claim["status"] != "CLAIMED":
+        messages.warning(request, "A TQ já teve uma tentativa iniciada ou mudou de estado. Atualize a pré-visualização antes de continuar.")
+        return redirect("qualidade:tq_email_preview", codigo=order.code, treatment_id=treatment.pk)
+
+    AuditService.record(
+        request=request, user=request.user, category="QUALITY", action="TREATMENT_SEND_STARTED",
+        module="Qualidade", description=f"Envio explícito iniciado para a {treatment.code}.", obj=treatment,
+        metadata={"treatment_code": treatment.code, "attempt": claim["treatment"].send_attempt_count,
+                  "attempt_id": str(claim["treatment"].send_attempt_id), "method": send_method},
+    )
+    try:
+        if not integration.allow_real_sends:
+            raise BrevoSendingDisabled()
+        if send_method == "smtp":
+            result = send_brevo_smtp(
+                username=smtp_login, password=smtp_password, config=readiness["config"],
+                subject=email["subject"], text_content=email["text_content"],
+                html_content=email["html_content"],
+            )
+        else:
+            result = brevo_client.send_transactional(payload, allow_real_sends=integration.allow_real_sends)
+    except BrevoSendingDisabled:
+        result = BrevoResult(False, "Envios reais foram desabilitados antes do envio.")
+    except Exception as exc:
+        logger.warning("Quality treatment SMTP dispatch failed stage=smtp_dispatch exception=%s", type(exc).__name__)
+        result = SMTPResult(False, "Falha de comunicação; resultado do envio pode ser incerto.", uncertain=True,
+                            exception_class=type(exc).__name__, stage="smtp_dispatch")
+
+    accepted = result.ok and (send_method == "smtp" or bool(result.message_id))
+    if accepted:
+        message_id = result.message_id if send_method == "api_rest" else ""
+        recorded = record_tq_send_accepted(treatment.pk, message_id)
+        action = "TREATMENT_SEND_ACCEPTED"
+        description = f"Brevo aceitou a solicitação da {treatment.code} por {send_method.upper()}."
+        outcome = "SUCCESS"
+        metadata = {"treatment_code": treatment.code, "method": send_method,
+                    "attempt_id": str(claim["treatment"].send_attempt_id),
+                    **({"message_id": result.message_id} if send_method == "api_rest" else {})}
+        success_message = f"Solicitação enviada à Brevo. A {treatment.code} aguarda a vinculação real do ticket OTRS."
+    else:
+        recorded = record_tq_send_failure(treatment.pk, result.message, uncertain=result.uncertain)
+        action = "TREATMENT_SEND_UNCERTAIN" if result.uncertain else "TREATMENT_SEND_FAILED"
+        description = f"Resultado do envio da {treatment.code}: {result.message}"
+        outcome = "FAILURE"
+        metadata = {"treatment_code": treatment.code, "method": send_method,
+                    "attempt_id": str(claim["treatment"].send_attempt_id),
+                  "status_code": getattr(result, "status_code", getattr(result, "error_code", None)),
+                  "uncertain": result.uncertain,
+                  "exception_type": getattr(result, "exception_class", ""),
+                  "stage": getattr(result, "stage", ""),
+                  "sanitized_message": str(result.message or "")[:240]}
+        success_message = (
+            "Resultado incerto. O sistema não repetirá o envio automaticamente; faça a reconciliação antes de qualquer nova ação."
+            if result.uncertain else "A Brevo recusou o envio. A TQ ficou disponível para nova tentativa controlada."
+        )
+    if recorded:
+        AuditService.record(
+            request=request, user=request.user, category="QUALITY", action=action,
+            module="Qualidade", description=description, obj=treatment, result=outcome, metadata=metadata,
+        )
+        (messages.success if accepted else messages.error)(request, success_message)
+    else:
+        messages.error(request, "O estado da tentativa mudou antes de o resultado ser registrado. Consulte o histórico da TQ.")
+    return redirect("qualidade:ordem_detail", codigo=order.code)
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
+@require_POST
+def quality_treatment_reconcile_send(request, codigo, treatment_id):
+    """Manually reconcile an ambiguous send; this endpoint never sends email."""
+    import re
+    from types import SimpleNamespace
+    from django.db import transaction
+    from django.utils import timezone
+    from aplicativos.integracoes.clients.factory import configured_otrs_client
+    from aplicativos.integracoes.models import Integration
+    from aplicativos.qualidade.services.tq_correlation import extract_correlation_ids, link_quality_ticket_from_article
+    from aplicativos.qualidade.services.tq_otrs_correlation import quality_queue_names
+
+    order, treatment = _scoped_treatment(request, codigo, treatment_id)
+    if treatment.send_status != QualityTreatment.SendStatus.UNCERTAIN:
+        messages.error(request, "A reconcilia??o s? est? dispon?vel para uma tentativa em resultado incerto.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+    checks_confirmed = all(request.POST.get(name) == "yes" for name in (
+        "confirm_brevo", "confirm_mailbox", "confirm_otrs",
+    ))
+    evidence_reference = str(request.POST.get("evidence_reference") or "").strip()
+    if (not checks_confirmed or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/#-]{5,99}", evidence_reference)):
+        messages.error(request, "Confirme as tr?s verifica??es e informe a refer?ncia da evid?ncia consultada.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+
+    decision = request.POST.get("decision")
+    if decision == "not_delivered":
+        if treatment.quality_ticket_external_id or treatment.send_attempt_count != 1:
+            messages.error(request, "A tentativa n?o pode ser liberada: h? v?nculo existente ou o hist?rico n?o permite uma libera??o ?nica.")
+            return redirect("qualidade:ordem_detail", codigo=order.code)
+        with transaction.atomic():
+            updated = QualityTreatment.objects.filter(
+                pk=treatment.pk, send_status=QualityTreatment.SendStatus.UNCERTAIN,
+                status=QualityTreatment.Status.PENDING_SEND,
+                send_attempt_count=1, quality_ticket_external_id__isnull=True,
+            ).update(
+                send_status=QualityTreatment.SendStatus.FAILED,
+                status=QualityTreatment.Status.SEND_FAILED,
+                send_error="Reconciliada manualmente como n?o entregue; uma tentativa manual liberada.",
+                updated_at=timezone.now(),
+            )
+            if updated:
+                AuditService.record(
+                    request=request, user=request.user, category="QUALITY",
+                    action="TREATMENT_UNCERTAIN_RECONCILED_NOT_DELIVERED",
+                    module="Qualidade", description=f"Tentativa incerta da {treatment.code} conciliada como n?o entregue; uma nova tentativa manual foi liberada.",
+                    obj=treatment, result="SUCCESS",
+                    metadata={"treatment_code": treatment.code,
+                              "attempt_id": str(treatment.send_attempt_id),
+                              "checks": {"brevo": True, "mailbox": True, "otrs": True},
+                              "evidence_reference": evidence_reference,
+                              "manual_retry_limit": 1},
+                )
+        if updated:
+            messages.success(request, "Reconcilia??o registrada. Uma tentativa manual foi liberada para esta TQ; nenhum envio foi executado.")
+        else:
+            messages.error(request, "O estado mudou durante a reconcilia??o; nenhuma tentativa foi liberada.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+
+    if decision != "delivered":
+        messages.error(request, "Selecione uma decis?o de reconcilia??o v?lida.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+
+    ticket_number = str(request.POST.get("ticket_number") or "").strip()
+    if not ticket_number or len(ticket_number) > 80:
+        messages.error(request, "Para confirmar entrega, informe o n?mero do ticket OTRS.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+    integration = Integration.objects.filter(key=Integration.Key.OTRS, enabled=True).first()
+    try:
+        if integration is None:
+            raise ValueError("OTRS n?o configurado")
+        client = configured_otrs_client(integration)
+        rows = client.find_quality_ticket_article_by_qid(ticket_number, treatment.correlation_id, limit=20)
+    except Exception as exc:
+        logger.warning("Manual TQ reconciliation OTRS lookup failed treatment_id=%s exception=%s",
+                       treatment.pk, type(exc).__name__)
+        rows = []
+    exact_rows = [row for row in rows if treatment.correlation_id in extract_correlation_ids(row.get("article_body"))]
+    queue_names = set(quality_queue_names())
+    ticket_ids = {int(row.get("ticket_id") or 0) for row in exact_rows}
+    if not exact_rows or len(ticket_ids) != 1 or any(row.get("queue_name") not in queue_names for row in exact_rows):
+        AuditService.record(
+            request=request, user=request.user, category="QUALITY",
+            action="TREATMENT_UNCERTAIN_RECONCILIATION_REVIEWED", module="Qualidade",
+            description=f"A verifica??o de entrega da {treatment.code} n?o encontrou uma correspond?ncia ?nica na fila autorizada; o estado incerto foi preservado.",
+            obj=treatment, result="FAILURE",
+            metadata={"treatment_code": treatment.code, "decision": "delivered",
+                      "ticket_number": ticket_number, "evidence_reference": evidence_reference,
+                      "matching_articles": len(exact_rows), "queue_valid": bool(exact_rows) and all(row.get("queue_name") in queue_names for row in exact_rows)},
+        )
+        messages.error(request, "N?o foi comprovado um artigo ?nico com o QID na fila autorizada. A TQ permanece incerta e bloqueada para reenvio.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+    row = max(exact_rows, key=lambda item: int(item.get("article_id") or 0))
+    ticket = SimpleNamespace(
+        external_id=int(row.get("ticket_id") or 0), ticket_number=str(row.get("ticket_number") or ""),
+        queue_external_id=int(row.get("queue_id") or 0), queue_name=str(row.get("queue_name") or ""),
+        external_state_id=int(row.get("state_id") or 0), external_state_name=str(row.get("state_name") or ""),
+        is_present_in_queue=True,
+    )
+    linked = link_quality_ticket_from_article(
+        ticket=ticket, article_body=row.get("article_body"), allowed_queue_names=queue_names,
+        actor=request.user, request=request, trusted_source=True,
+    )
+    if linked.get("status") not in {"LINKED", "ALREADY_LINKED"} or linked.get("treatment", treatment).pk != treatment.pk:
+        messages.error(request, "O ticket foi localizado, mas houve conflito de v?nculo. A TQ n?o foi liberada para reenvio.")
+        return redirect("qualidade:ordem_detail", codigo=order.code)
+    article_time = row.get("article_time") or timezone.now()
+    if not hasattr(article_time, "tzinfo"):
+        article_time = timezone.now()
+    QualityTreatment.objects.filter(pk=treatment.pk).update(
+        send_status=QualityTreatment.SendStatus.SENT,
+        sent_at=treatment.sent_at or article_time,
+        status=QualityTreatment.Status.IN_PROGRESS,
+        send_error="",
+        updated_at=timezone.now(),
+    )
+    AuditService.record(
+        request=request, user=request.user, category="QUALITY",
+        action="TREATMENT_UNCERTAIN_RECONCILED_DELIVERED", module="Qualidade",
+        description=f"Entrega da {treatment.code} comprovada por artigo OTRS; v?nculo priorizado e reenvio bloqueado.",
+        obj=treatment, result="SUCCESS",
+        metadata={"treatment_code": treatment.code, "ticket_number": ticket.ticket_number,
+                  "ticket_external_id": ticket.external_id, "evidence_reference": evidence_reference,
+                  "correlation_source": "article_body"},
+    )
+    messages.success(request, "Entrega comprovada pelo QID no artigo OTRS. O ticket foi vinculado e nenhum reenvio foi realizado.")
+    return redirect("qualidade:ordem_detail", codigo=order.code)
 
 
 def _decorate_occurrence_ticket(ticket, review_index, *, is_valid=True):
@@ -542,6 +1004,31 @@ def quality_ticket_link(request, codigo):
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 @permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
 @require_POST
+def quality_treatment_create(request, codigo):
+    order = get_object_or_404(QualityDataScopeService.orders_for(request.user), code=codigo)
+    scoped_tickets = support_tickets_for_order(request.user, order)
+    form = QualityTreatmentCreateForm(request.POST, support_tickets=scoped_tickets)
+    if not form.is_valid():
+        messages.error(request, "Informe um motivo válido e selecione somente um chamado de suporte ativo relacionado.")
+        return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}) + "?tab=tratativas")
+    try:
+        treatment = create_quality_treatment(
+            quality_order=order, actor=request.user, request=request, **form.cleaned_data,
+        )
+    except ValidationError as exc:
+        messages.warning(request, " ".join(exc.messages))
+        return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}) + "?tab=tratativas")
+    messages.success(
+        request,
+        f"{treatment.code} criada com sucesso. Estado: Pendente de envio. Tratativa registrada no ARION OPS; o envio da solicitação será disponibilizado posteriormente.",
+    )
+    return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}) + "?tab=tratativas")
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
+@require_POST
 def quality_action_add(request, codigo):
     order = get_object_or_404(QualityDataScopeService.orders_for(request.user), code=codigo)
     form = QualityActionForm(request.POST)
@@ -562,17 +1049,55 @@ def quality_action_add(request, codigo):
 @permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
 @require_POST
 def quality_action_toggle(request, codigo, action_id):
-    order = get_object_or_404(QualityDataScopeService.orders_for(request.user), code=codigo)
-    action = get_object_or_404(QualityAction, pk=action_id, quality_order=order)
-    completed = request.POST.get("completed") == "true"
+    is_async = request.headers.get("x-requested-with") == "XMLHttpRequest"
+    completed_value = request.POST.get("completed")
+    if is_async and completed_value not in {"true", "false"}:
+        return JsonResponse({"ok": False, "message": "Estado do checklist inválido."}, status=400)
+    completed = completed_value == "true"
+
     try:
-        _action, changed = toggle_quality_action(
-            quality_order=order, action_id=action.pk, completed=completed,
-            actor=request.user, request=request,
-        )
+        # Keep the write, audit event, and response aggregates in one transaction.
+        # If SQLite is busy, the UI must not receive a false success or stale write.
+        with transaction.atomic():
+            order = get_object_or_404(QualityDataScopeService.orders_for(request.user), code=codigo)
+            action = get_object_or_404(QualityAction, pk=action_id, quality_order=order)
+            action, changed = toggle_quality_action(
+                quality_order=order, action_id=action.pk, completed=completed,
+                actor=request.user, request=request,
+            )
+            if is_async:
+                progress = order.actions.aggregate(
+                    total=Count("pk"), completed=Count("pk", filter=Q(completed=True)),
+                )
+                payload = {
+                    "ok": True,
+                    "changed": changed,
+                    "completed": action.completed,
+                    "completed_at": timezone.localtime(action.completed_at).strftime("%d/%m/%Y %H:%M") if action.completed_at else "",
+                    "completed_by": (action.completed_by.get_full_name() or action.completed_by.get_username()) if action.completed_by_id else "",
+                    "total": progress["total"],
+                    "completed_count": progress["completed"],
+                }
+    except Http404:
+        if is_async:
+            return JsonResponse({"ok": False, "message": "Ordem ou item de checklist não encontrado."}, status=404)
+        raise
     except (ValidationError, QualityAction.DoesNotExist) as exc:
-        messages.error(request, " ".join(exc.messages) if isinstance(exc, ValidationError) else "Ação indisponível.")
+        error = " ".join(exc.messages) if isinstance(exc, ValidationError) else "Ação indisponível."
+        if is_async:
+            return JsonResponse({"ok": False, "message": error}, status=404 if isinstance(exc, QualityAction.DoesNotExist) else 400)
+        messages.error(request, error)
+    except OperationalError:
+        if not is_async:
+            raise
+        logger.exception("Falha de persistência ao atualizar checklist; ordem=%s action_id=%s", codigo, action_id)
+        return JsonResponse({
+            "ok": False,
+            "message": "Banco temporariamente indisponível. A alteração não foi salva; tente novamente.",
+        }, status=503)
     else:
+        if is_async:
+            return JsonResponse(payload)
         if changed:
             messages.success(request, "Checklist atualizado.")
     return redirect(_safe_quality_return(request))

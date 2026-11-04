@@ -105,6 +105,7 @@ class IntegrationSyncState(models.Model):
     last_success_at = models.DateTimeField(null=True, blank=True, db_index=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
     last_error = models.CharField(max_length=240, blank=True)
+    failure_count = models.PositiveSmallIntegerField(default=0)
     last_duration_ms = models.PositiveIntegerField(null=True, blank=True)
     records_count = models.PositiveIntegerField(null=True, blank=True)
     change_cursor = models.DateTimeField(null=True, blank=True)
@@ -124,6 +125,79 @@ class IntegrationLease(models.Model):
 
     class Meta:
         ordering = ("key",)
+
+
+class ExternalAPIIntegration(models.Model):
+    """Credentials and health state for fixed, application-managed APIs."""
+
+    class Provider(models.TextChoices):
+        BREVO = "brevo", "Brevo"
+        MAPBOX = "mapbox", "Mapbox"
+
+    class Health(models.TextChoices):
+        NOT_TESTED = "not_tested", "Ainda não testada"
+        AVAILABLE = "available", "Disponível"
+        ERROR = "error", "Erro"
+
+    provider = models.CharField(max_length=20, choices=Provider.choices, unique=True)
+    name = models.CharField(max_length=100)
+    enabled = models.BooleanField(default=False)
+    # Only non-secret, validated settings belong here. Private API keys are encrypted below.
+    config = models.JSONField(default=dict, blank=True)
+    secret_ciphertext = models.TextField(blank=True, editable=False)
+    smtp_secret_ciphertext = models.TextField(blank=True, editable=False)
+    allow_real_sends = models.BooleanField(default=False)
+    health = models.CharField(max_length=20, choices=Health.choices, default=Health.NOT_TESTED)
+    last_test_at = models.DateTimeField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    last_error = models.CharField(max_length=240, blank=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("provider",)
+        verbose_name = "integração de API externa"
+        verbose_name_plural = "integrações de APIs externas"
+
+    @property
+    def credential_configured(self):
+        if self.provider == self.Provider.BREVO:
+            return bool(self.secret_ciphertext or self.smtp_secret_ciphertext)
+        return bool((self.config or {}).get("public_token"))
+
+    @property
+    def status_display(self):
+        if not self.credential_configured:
+            return "Não configurada"
+        if self.health == self.Health.ERROR:
+            return "Erro"
+        if self.health == self.Health.AVAILABLE:
+            return "Disponível"
+        return "Configurada"
+
+    def __str__(self):
+        return self.name
+
+
+class ExternalAPIHealthCheck(models.Model):
+    class Status(models.TextChoices):
+        SUCCESS = "success", "Sucesso"
+        ERROR = "error", "Erro"
+
+    integration = models.ForeignKey(ExternalAPIIntegration, on_delete=models.CASCADE, related_name="checks")
+    method = models.CharField(max_length=16, blank=True, choices=(("smtp", "SMTP Relay"), ("api_rest", "API REST"), ("mapbox", "Mapbox")))
+    status = models.CharField(max_length=12, choices=Status.choices)
+    message = models.CharField(max_length=240)
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+    checked_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        verbose_name = "teste de saúde de API externa"
+        verbose_name_plural = "testes de saúde de APIs externas"
 
 
 class CMDBOperatorMirror(models.Model):

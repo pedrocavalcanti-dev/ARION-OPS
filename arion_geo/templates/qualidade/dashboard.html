@@ -103,4 +103,4 @@
 <p class="quality-dashboard-note">O período gerencial filtra eventos históricos; links reincidentes ativos representam o estoque atual. Uma ocorrência dentro de até 30 dias pertence ao mesmo episódio; 30 dias completos sem nova ocorrência estabilizam o último episódio reincidente e uma queda posterior inicia nova sequência. {% if kpis.reopened_after_stability %}{{ kpis.reopened_after_stability }} novo(s) episódio(s) reaberto(s) após estabilidade neste período. {% endif %}R operacional é a posição da reincidência dentro do episódio; o nível R1–R5 da Qualidade continua sendo uma classificação manual de complexidade e criticidade.</p>
 {{ chart_data|json_script:"quality-chart-data" }}
 {% endblock %}
-{% block extra_js %}{{ block.super }}<script src="{% arion_bundle_js 'js/qualidade/dashboard.js' %}" defer></script>{% endblock %}
+{% block extra_js %}{{ block.super }}{% if has_evolution or has_status_distribution or has_recurring_links %}<script id="arion-echarts-vendor" src="{% static 'vendor/echarts/echarts.min.js' %}"></script><script type="module" src="{% arion_bundle_js 'js/qualidade/dashboard.js' %}"></script>{% endif %}{% endblock %}

@@ -22,7 +22,7 @@ from aplicativos.integracoes.services.semantics import (
 
 from .constants import QUALITY_RREIP_DAYS
 from .data_scope import QualityDataScopeService
-from ..models import QualityAuditEvent, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket
+from ..models import QualityAuditEvent, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
 from .recurrence import build_quality_recurrence_analysis
 
 
@@ -68,6 +68,12 @@ def start_monitoring_cycle(
         financial_regularization_confirmed=bool(financial and financial_regularization_confirmed),
         financial_evidence=financial_evidence if financial else "",
     )
+    treatment = QualityTreatment.objects.select_for_update().filter(
+        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
+    ).order_by("-created_at", "-pk").first()
+    if treatment:
+        treatment.status = QualityTreatment.Status.MONITORING
+        treatment.save(update_fields=("status", "active_order_key", "updated_at"))
     if order.status != QualityOrder.Status.MONITORAMENTO:
         order.status = QualityOrder.Status.MONITORAMENTO
         order.save(update_fields=("status", "updated_at"))
@@ -143,6 +149,22 @@ def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticke
         )
         order.completed_at = now if result == QualityMonitoringCycle.Result.SUCCESS else None
         order.save(update_fields=("status", "completed_at", "updated_at"))
+
+    treatment = QualityTreatment.objects.select_for_update().filter(
+        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
+    ).order_by("-created_at", "-pk").first()
+    if treatment:
+        if result == QualityMonitoringCycle.Result.SUCCESS:
+            treatment.status = QualityTreatment.Status.COMPLETED
+            treatment.completed_at = now
+        elif result == QualityMonitoringCycle.Result.RECURRENCE:
+            treatment.status = QualityTreatment.Status.RECURRENCE
+            # The recurrence itself is the terminal event that permits the next TQ cycle.
+            treatment.completed_at = trigger_occurrence.occurred_at
+        else:
+            treatment.status = QualityTreatment.Status.IN_PROGRESS
+            treatment.completed_at = None
+        treatment.save(update_fields=("status", "completed_at", "active_order_key", "updated_at"))
 
     event_values = {
         QualityMonitoringCycle.Result.SUCCESS: (

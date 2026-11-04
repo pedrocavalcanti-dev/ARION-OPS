@@ -12,7 +12,7 @@ from aplicativos.integracoes.services.semantics import (
     provider_values_for_links,
 )
 
-from ..models import QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket
+from ..models import QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
 from .data_scope import QualityDataScopeService
 from .recurrence import build_quality_recurrence_analysis
 from .ticket_validity import quality_ticket_sets
@@ -124,9 +124,14 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
     latest_review = QualityOccurrence.objects.filter(quality_order=order).order_by("-occurred_at", "-pk").first()
     previous_review = QualityOccurrence.objects.filter(quality_order=order).order_by("-occurred_at", "-pk")[1:2].first()
     latest_occurrence = valid_queryset.order_by("-source_created_at", "-external_id").first() if valid_queryset is not None else None
+    first_occurrence = (
+        valid_queryset.order_by("source_created_at", "external_id").first()
+        if valid_queryset is not None and tab == "tratativas" else None
+    )
     treatment_ticket = QualityTicket.objects.filter(
         quality_order=order, ticket_type=QualityTicket.TicketType.TREATMENT,
     ).select_related("otrs_ticket").order_by("-created_at", "-pk").first()
+    local_treatment_count = QualityTreatment.objects.filter(quality_order=order).count()
     treatment_ticket_url = ""
     if treatment_ticket and treatment_ticket.ticket_external_id_snapshot:
         from aplicativos.chamados.services import otrs_ticket_url
@@ -168,6 +173,7 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
     return {
         "order": order,
         "link": link,
+        "operator_name": semantics.contract_operator_name if semantics else "",
         "designation": designation,
         "ci_display": order.ci_snapshot or (link.source_config_item_id if link else "—"),
         "source_record": link.source_number if link else "",
@@ -202,7 +208,7 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
         "current_episode_recurrence_count": current_episode.recurrence_count if current_episode else 0,
         "operational_recurrence_level": current_episode.operational_recurrence_level if current_episode else "Inicial",
         "same_cause_count": same_cause_count,
-        "quality_ticket_count": QualityTicket.objects.filter(
+        "quality_ticket_count": local_treatment_count or QualityTicket.objects.filter(
             quality_order=order, ticket_type=QualityTicket.TicketType.TREATMENT,
         ).count(),
         "monitoring_cycle_count": order.monitoring_cycles.count(),
@@ -210,6 +216,7 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
         "pending_review_count": pending_count,
         "all_ticket_count": all_ticket_count,
         "latest_occurrence": latest_occurrence,
+        "first_occurrence": first_occurrence,
         "current_reason": order.current_reason or (latest_review.reason if latest_review else ""),
         "current_root_cause": order.current_root_cause or (latest_review.root_cause if latest_review else ""),
         "previous_reason": previous_review.reason if previous_review else "",

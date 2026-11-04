@@ -354,7 +354,8 @@ def integrations(request):
 @login_required
 @access_required("view_system_info")
 def system_info(request):
-    return render(request, "configuracoes/admin/system.html", _admin_context(request, "system", db_engine=connections["default"].vendor, timezone=settings.TIME_ZONE, environment="Desenvolvimento" if settings.DEBUG else "Produção", mapbox_configured=bool(settings.MAPBOX_PUBLIC_TOKEN)))
+    from aplicativos.integracoes.services.external_apis import get_mapbox_runtime_state
+    return render(request, "configuracoes/admin/system.html", _admin_context(request, "system", db_engine=connections["default"].vendor, timezone=settings.TIME_ZONE, environment="Desenvolvimento" if settings.DEBUG else "Produção", mapbox_configured=get_mapbox_runtime_state()["configured"]))
 
 
 @login_required

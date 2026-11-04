@@ -1,19 +1,24 @@
 from datetime import date, datetime, timedelta
+from html.parser import HTMLParser
+from pathlib import Path
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from aplicativos.base_links.models import Operadora, Projeto
 from aplicativos.auditoria.models import AuditEvent
 from aplicativos.configuracoes.models import GroupDataScope
-from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSStateMapping, OTRSTicket, OTRSTicketConfigItem
+from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, ExternalAPIHealthCheck, ExternalAPIIntegration, Integration, OTRSStateMapping, OTRSTicket, OTRSTicketConfigItem
+from aplicativos.integracoes.clients.brevo import BrevoResult
+from aplicativos.integracoes.clients.brevo_smtp import SMTPResult
 from aplicativos.integracoes.otrs_queues import NOC_QUEUE_NAME
 
-from .models import QualityAction, QualityAuditEvent, QualityContact, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket
+from .models import QualityAction, QualityAuditEvent, QualityContact, QualityCorrelationCheckpoint, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment, QualityTreatmentIdentity
 from .services.data_scope import QualityDataScopeService
 from .services.dashboard import _allowed_granularities, _make_buckets, _resolve_granularity, get_dashboard_data
 from .services.contacts import get_quality_contacts, recommended_contacts_for_order
@@ -24,10 +29,24 @@ from .services.orders_queue import get_quality_orders_queue
 from .services.priority_links import business_priority, get_priority_links
 from .services.recurrence import build_occurrence_episodes, build_quality_recurrence_analysis
 from .services.order_detail import get_quality_order_detail
-from .services.treatments import link_quality_ticket, toggle_quality_action
+from .services.tq_delivery import claim_quality_treatment_send, record_tq_send_accepted, record_tq_send_failure
+from .services.tq_email import build_treatment_email
+from .services.tq_correlation import build_quality_treatment_email_payload, extract_correlation_ids, link_quality_ticket_from_article
+from .services.tq_otrs_correlation import reconcile_quality_articles, refresh_linked_quality_ticket_states
+from .services.treatments import create_quality_treatment, link_quality_ticket, toggle_quality_action
 
 
 User = get_user_model()
+
+
+class _IframeSrcdocParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.srcdoc = ""
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "iframe":
+            self.srcdoc = dict(attrs).get("srcdoc", "")
 
 
 class QualityModuleTestCase(TestCase):
@@ -68,6 +87,627 @@ class QualityModuleTestCase(TestCase):
             relation_state="Valid",
         )
         return ticket
+
+
+class QualityTreatmentCreationTests(QualityModuleTestCase):
+    def setUp(self):
+        self.user = self.create_authorized_user('quality-tq-manager')
+        self.user.user_permissions.add(Permission.objects.get(
+            content_type__app_label='qualidade', codename='manage_quality_orders'))
+        self.link = CMDBLinkMirror.objects.create(source_config_item_id=
+            'QUALITY-TQ-CI', designation='VIVO.PI.LIVR000267', contracting_client=
+            'Operadora Alfa', business_project='Projeto Alfa')
+        self.order = QualityOrder.objects.create(link=self.link, current_reason=
+            'ReincidÃªncia confirmada')
+        self.support_ticket = self.create_ticket(link=self.link, external_id=91231)
+        from .services.tq_otrs_correlation import quality_queue_names
+        Integration.objects.create(key=Integration.Key.OTRS, name='OTRS', kind=
+            'MySQL', enabled=True, username='test-reader', secret_ciphertext=
+            'protected-test', config={'host': 'otrs.test', 'database': 'otrs'})
+        for queue_name in quality_queue_names():
+            QualityCorrelationCheckpoint.objects.create(queue_name=queue_name,
+                last_success_at=timezone.now())
+        self.client.force_login(self.user)
+        return None
+
+    def test_quality_dashboard_loads_its_es_module_entrypoint_and_modern_pwa_meta(self):
+        response = self.client.get(reverse('qualidade:dashboard'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response,
+            'id="arion-echarts-vendor" src="/static/vendor/echarts/echarts.min.js"')
+        self.assertContains(response,
+            'type="module" src="/static/js/qualidade/dashboard.js"')
+        self.assertContains(response, 'name="mobile-web-app-capable" content="yes"')
+        self.assertContains(response,
+            'name="apple-mobile-web-app-capable" content="yes"')
+        html = response.content.decode('utf-8')
+        self.assertLess(html.index('id="arion-echarts-vendor"'), html.index(
+            'type="module" src="/static/js/qualidade/dashboard.js"'))
+        source_root = Path(__file__).resolve().parents[3
+            ] / 'frontend_src' / 'js' / 'qualidade'
+        chart_source = (source_root / 'charts.js').read_text(encoding='utf-8')
+        dashboard_source = (source_root / 'dashboard.js').read_text(encoding='utf-8')
+        self.assertNotRegex(chart_source, 'from\\s+[\'\\"]echarts/')
+        self.assertIn('window.echarts', chart_source)
+        self.assertNotIn('echarts.use(', chart_source)
+        self.assertIn('from "./charts.js"', dashboard_source)
+        return None
+
+    def test_authorized_post_creates_unique_immutable_tq_and_keeps_support_separate(self):
+        response = self.client.post(reverse('qualidade:tq_gerar', kwargs={'codigo':
+            self.order.code}), {'reason': 'Investigar a causa raiz confirmada',
+            'description': 'Validar aÃ§Ã£o corretiva', 'support_ticket': self.
+            support_ticket.pk})
+        self.assertEqual(response.status_code, 302)
+        treatment = QualityTreatment.objects.get()
+        self.assertRegex(treatment.code, '^TQ-\\d{4}-\\d{6}$')
+        self.assertEqual(treatment.quality_order, self.order)
+        self.assertEqual(treatment.support_ticket, self.support_ticket)
+        self.assertEqual(treatment.support_ticket_number, self.support_ticket.
+            ticket_number)
+        self.assertEqual(treatment.status, QualityTreatment.Status.PENDING_SEND)
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.NOT_SENT)
+        self.assertFalse(treatment.sent_at)
+        self.assertFalse(treatment.brevo_message_id)
+        self.assertEqual(treatment.created_by, self.user)
+        old_code = treatment.code
+        treatment.code = 'TQ-1999-000001'
+        treatment.save()
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.code, old_code)
+        self.assertTrue(self.order.audit_events.filter(event_type=
+            'TREATMENT_CREATED').exists())
+        return None
+
+    def test_uncertain_send_reconciliation_unlocks_exactly_one_manual_retry(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason="Reconciliacao controlada", actor=self.user)
+        first_claim = claim_quality_treatment_send(treatment.pk, method="smtp")
+        self.assertEqual(first_claim["status"], "CLAIMED")
+        self.assertTrue(record_tq_send_failure(treatment.pk, "Resultado incerto.", uncertain=True))
+        treatment.refresh_from_db()
+        qid = treatment.correlation_id
+
+        response = self.client.post(reverse("qualidade:tq_send_reconcile", kwargs={
+            "codigo": self.order.code, "treatment_id": treatment.pk,
+        }), {
+            "decision": "not_delivered", "confirm_brevo": "yes",
+            "confirm_mailbox": "yes", "confirm_otrs": "yes",
+            "evidence_reference": "CASE-2026-1104",
+        })
+        self.assertEqual(response.status_code, 302)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.FAILED)
+        self.assertEqual(treatment.correlation_id, qid)
+        self.assertTrue(AuditEvent.objects.filter(
+            action="TREATMENT_UNCERTAIN_RECONCILED_NOT_DELIVERED",
+            object_id=str(treatment.pk),
+        ).exists())
+
+        retry = claim_quality_treatment_send(treatment.pk, allow_retry=True, method="smtp")
+        self.assertEqual(retry["status"], "CLAIMED")
+        self.assertTrue(record_tq_send_failure(treatment.pk, "Recusa SMTP definitiva.", uncertain=False))
+        second_retry = claim_quality_treatment_send(treatment.pk, allow_retry=True, method="smtp")
+        self.assertEqual(second_retry["status"], "NOT_CLAIMED")
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.send_attempt_count, 2)
+        self.assertEqual(treatment.correlation_id, qid)
+
+    def test_tq_send_claim_is_idempotent_and_ambiguous_result_stays_non_retryable(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Teste', actor=self.user)
+        first = claim_quality_treatment_send(treatment.pk)
+        second = claim_quality_treatment_send(treatment.pk)
+        self.assertEqual(first['status'], 'CLAIMED')
+        self.assertEqual(second['status'], 'NOT_CLAIMED')
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.send_attempt_count, 1)
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.IN_PROGRESS
+            )
+        self.assertTrue(record_tq_send_failure(treatment.pk,
+            'Resultado de rede incerto.', uncertain=True))
+        retry = claim_quality_treatment_send(treatment.pk)
+        treatment.refresh_from_db()
+        self.assertEqual(retry['status'], 'NOT_CLAIMED')
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.UNCERTAIN)
+        self.assertEqual(treatment.send_attempt_count, 1)
+        self.assertFalse(treatment.quality_ticket_external_id)
+        return None
+
+    def test_confirmed_failure_allows_only_an_explicit_controlled_retry(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Teste', actor=self.user)
+        self.assertEqual(claim_quality_treatment_send(treatment.pk)['status'],
+            'CLAIMED')
+        self.assertTrue(record_tq_send_failure(treatment.pk,
+            'A Brevo recusou a solicitaÃ§Ã£o.'))
+        self.assertEqual(claim_quality_treatment_send(treatment.pk)['status'],
+            'NOT_CLAIMED')
+        retry = claim_quality_treatment_send(treatment.pk, allow_retry=True)
+        self.assertEqual(retry['status'], 'CLAIMED')
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.send_attempt_count, 2)
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.IN_PROGRESS
+            )
+        return None
+
+    @override_settings(ARION_CSP_REPORT_ONLY=True)
+    @override_settings(ARION_CSP_REPORT_ONLY=True)
+    def test_email_preview_works_without_brevo_and_escapes_user_content(self):
+        treatment = create_quality_treatment(
+            quality_order=self.order, reason="<script>alert('x')</script>\nVerificar enlace", actor=self.user,
+        )
+        response = self.client.get(reverse("qualidade:tq_email_preview", kwargs={
+            "codigo": self.order.code, "treatment_id": treatment.pk,
+        }))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, treatment.code)
+        self.assertContains(response, treatment.correlation_id)
+        self.assertContains(response, 'sandbox=""')
+        self.assertNotContains(response, "<script>alert")
+        srcdoc_parser = _IframeSrcdocParser()
+        srcdoc_parser.feed(response.content.decode("utf-8"))
+        self.assertIn("<!doctype html>", srcdoc_parser.srcdoc.lower())
+        self.assertIn("&lt;script&gt;", srcdoc_parser.srcdoc)
+        self.assertEqual(response["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", response["Content-Security-Policy-Report-Only"])
+        self.assertFalse(ExternalAPIIntegration.objects.filter(
+            provider=ExternalAPIIntegration.Provider.BREVO,
+        ).exists())
+        detail = get_quality_order_detail(self.user, self.order, tab="tratativas")
+        email = build_treatment_email(treatment, detail=detail)
+        self.assertEqual(response.context["email_subject"], email["subject"])
+        utf8_example = build_treatment_email(
+            treatment, detail={**detail, "client": "Vivo", "project": "FUST", "operator_name": "Vivo"},
+        )
+        self.assertIn("Vivo &middot; FUST", utf8_example["html_content"])
+        self.assertEqual(response["Content-Type"], "text/html; charset=utf-8")
+        self.assertEqual(len(email["context"]["requested_actions"]), 5)
+        self.assertIn("reparo", email["text_content"])
+        self.assertIn("Respons" + chr(0xe1) + "vel", email["text_content"])
+        self.assertIn("NOC - QUALIDADE ATACADO", email["html_content"])
+        solicitacao = "SOLICITA" + chr(0xc7) + chr(0xc3) + "O"
+        self.assertIn(solicitacao + " DE TRATATIVA DE QUALIDADE", email["html_content"])
+        self.assertIn("Identifica" + chr(0xe7) + chr(0xe3) + "o", email["html_content"])
+        self.assertIn("Respons" + chr(0xe1) + "vel", email["html_content"])
+        self.assertIn("GEST" + chr(0xc3) + "O DA QUALIDADE", email["html_content"])
+        self.assertIn(solicitacao + " DE TRATATIVA DE QUALIDADE", email["subject"])
+        self.assertEqual(email["html_content"].encode("utf-8").decode("utf-8"), email["html_content"])
+        self.assertNotIn(treatment.correlation_id, email["subject"])
+        self.assertEqual(email["html_content"].count(treatment.correlation_id), 1)
+    def test_checklist_toggle_returns_confirmed_state_without_full_page_redirect(self):
+        from aplicativos.qualidade.models import QualityAction
+        action = QualityAction.objects.create(quality_order=self.order, title="Validar circuito", order=1)
+        page = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": self.order.code}), {"tab": "tratativas"})
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "/static/js/qualidade/checklist.js")
+        self.assertContains(page, "/static/css/qualidade/qualidade.css")
+        self.assertTrue(Path("arion_geo/static/js/qualidade/checklist.js").is_file())
+        self.assertTrue(Path("arion_geo/static/css/qualidade/qualidade.css").is_file())
+        response = self.client.post(
+            reverse("qualidade:checklist_toggle", kwargs={"codigo": self.order.code, "action_id": action.pk}),
+            {"completed": "true", "csrfmiddlewaretoken": "test"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["completed"])
+        self.assertEqual(result["completed_count"], 1)
+        action.refresh_from_db()
+        self.assertTrue(action.completed)
+        self.assertIsNotNone(action.completed_at)
+        self.assertEqual(action.completed_by, self.user)
+        self.assertTrue(QualityAuditEvent.objects.filter(
+            quality_order=self.order, event_type=QualityAuditEvent.EventType.CHECKLIST_ITEM_CHANGED,
+        ).exists())
+
+    def test_detail_date_input_renders_iso_value(self):
+        self.order.treatment_deadline = timezone.make_aware(datetime(2026, 11, 30, 12, 0))
+        self.order.save(update_fields=("treatment_deadline", "updated_at"))
+
+        response = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": self.order.code}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'type="date"')
+        self.assertContains(response, 'value="2026-11-30"')
+        self.assertNotContains(response, 'value="30/11/2026"')
+
+    def test_otrs_blocker_points_to_otrs_instead_of_brevo(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason="Verificar reincid" + chr(0xea) + "ncia", actor=self.user)
+        integration_permission = Permission.objects.get(content_type__app_label="configuracoes", codename="manage_integrations")
+        self.user.user_permissions.add(integration_permission)
+        Integration.objects.filter(key=Integration.Key.OTRS).update(enabled=False)
+        response = self.client.get(
+            reverse("qualidade:ordem_detail", kwargs={"codigo": self.order.code}), {"tab": "tratativas"},
+        )
+        self.assertEqual(response.status_code, 200)
+        otrs_label = "Integra" + chr(0xe7) + chr(0xe3) + "o OTRS"
+        self.assertContains(response, otrs_label + " somente leitura")
+        self.assertContains(response, "Ver integra" + chr(0xe7) + chr(0xe3) + "o OTRS")
+        self.assertContains(response, reverse("configuracoes:integracoes:otrs"))
+        self.assertNotContains(response, "Configurar Brevo")
+        self.assertEqual(response.context["treatment_send_configuration_label"], "Ver integra" + chr(0xe7) + chr(0xe3) + "o OTRS")
+        self.assertEqual(treatment.send_attempt_count, 0)
+
+    def test_send_without_brevo_configuration_is_blocked_before_claim(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Teste', actor=self.user)
+        url = reverse('qualidade:tq_email_send', kwargs={'codigo': self.order.code,
+            'treatment_id': treatment.pk})
+        self.assertEqual(self.client.get(url).status_code, 200)
+        response = self.client.post(url, {'confirm_send': 'yes'})
+        self.assertEqual(response.status_code, 400)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.NOT_SENT)
+        self.assertEqual(treatment.send_attempt_count, 0)
+        return None
+
+    def test_mocked_brevo_send_records_message_and_second_post_cannot_repeat(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Investigar', actor=self.user)
+        ExternalAPIIntegration.objects.create(provider=ExternalAPIIntegration.
+            Provider.BREVO, name='Brevo', enabled=True, allow_real_sends=True,
+            secret_ciphertext='encrypted-test-key', config={'sender_name':
+            'ARION OPS', 'sender_email': 'noc@example.com', 'quality_recipient':
+            'quality@example.com', 'quality_cc': 'noc@example.com',
+            'quality_recipient_validated': True, 'reply_to': ''})
+        url = reverse('qualidade:tq_email_send', kwargs={'codigo': self.order.code,
+            'treatment_id': treatment.pk})
+        with patch('aplicativos.qualidade.views.decrypt_external_api_secret',
+            return_value='mock-key') as __temp_135:
+            with patch(
+                'aplicativos.qualidade.views.BrevoTransactionalClient.send_transactional'
+                , return_value=BrevoResult(True, 'SolicitaÃ§Ã£o aceita pela Brevo.',
+                message_id='<mock-tq-message>')) as __temp_138:
+                mocked_send = __temp_138
+                response = self.client.post(url, {'confirm_send': 'yes'})
+                self.assertEqual(response.status_code, 302)
+                treatment.refresh_from_db()
+                self.assertEqual(treatment.send_status, QualityTreatment.SendStatus
+                    .SENT)
+                self.assertEqual(treatment.status, QualityTreatment.Status.WAITING_OTRS
+                    )
+                self.assertEqual(treatment.brevo_message_id, '<mock-tq-message>')
+                self.assertFalse(treatment.quality_ticket_external_id)
+                duplicate = self.client.post(url, {'confirm_send': 'yes'})
+                self.assertEqual(duplicate.status_code, 400)
+                self.assertEqual(mocked_send.call_count, 1)
+                self.assertEqual(mocked_send.call_args.args[0]['cc'], [{'email':
+                    'noc@example.com'}])
+                return None
+
+    def test_mocked_smtp_send_records_local_attempt_without_fake_brevo_id(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'SMTP teste', actor=self.user)
+        ExternalAPIIntegration.objects.create(provider=ExternalAPIIntegration.
+            Provider.BREVO, name='Brevo', enabled=True, allow_real_sends=True,
+            smtp_secret_ciphertext='encrypted-smtp-test', config={'send_method':
+            'smtp', 'smtp_login': 'login', 'sender_name': 'ARION OPS', 'sender_email':
+            'noc@example.com', 'quality_recipient': 'testbox@example.com', 'quality_cc':
+            'noc-copy@example.com', 'quality_recipient_validated': True, 'reply_to': ''})
+        ExternalAPIHealthCheck.objects.create(integration=ExternalAPIIntegration.
+            objects.get(provider=ExternalAPIIntegration.Provider.BREVO), method=
+            'smtp', status=ExternalAPIHealthCheck.Status.SUCCESS, message=
+            'Autentica??o SMTP aceita')
+        url = reverse('qualidade:tq_email_send', kwargs={'codigo': self.order.code,
+            'treatment_id': treatment.pk})
+        with patch('aplicativos.qualidade.views.decrypt_external_api_smtp_secret',
+            return_value='smtp-secret') as __temp_164:
+            with patch('aplicativos.qualidade.views.send_brevo_smtp', return_value=
+                SMTPResult(True, 'accepted')) as __temp_167:
+                send = __temp_167
+                preview = self.client.get(url)
+                self.assertEqual(preview.status_code, 200)
+                self.assertContains(preview, '(Cc)')
+                self.assertContains(preview, 'noc-copy@example.com')
+                self.assertNotContains(preview, 'SMTP Relay')
+                send.assert_not_called()
+                response = self.client.post(url, {'confirm_send': 'yes'})
+                self.assertEqual(response.status_code, 302)
+                treatment.refresh_from_db()
+                self.assertEqual(treatment.send_status, QualityTreatment.SendStatus
+                    .SENT)
+                self.assertEqual(treatment.send_method, 'smtp')
+                self.assertIsNotNone(treatment.send_attempt_id)
+                self.assertEqual(treatment.brevo_message_id, '')
+                self.assertEqual(send.call_args.kwargs['config']['quality_cc'],
+                    'noc-copy@example.com')
+                self.assertFalse(treatment.quality_ticket_external_id)
+                duplicate = self.client.post(url, {'confirm_send': 'yes'})
+                self.assertEqual(duplicate.status_code, 400)
+                self.assertEqual(send.call_count, 1)
+                return None
+
+    def test_brevo_acceptance_keeps_tq_waiting_for_actual_otrs_ticket(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Teste', actor=self.user)
+        self.assertEqual(claim_quality_treatment_send(treatment.pk)['status'],
+            'CLAIMED')
+        self.assertTrue(record_tq_send_accepted(treatment.pk, '<mock-message-id>'))
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.SENT)
+        self.assertEqual(treatment.status, QualityTreatment.Status.WAITING_OTRS)
+        self.assertEqual(treatment.brevo_message_id, '<mock-message-id>')
+        self.assertIsNone(treatment.quality_ticket_external_id)
+        return None
+
+    def test_active_tq_blocks_duplicate_and_preserves_first_cycle(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Ciclo inicial', support_ticket=self.support_ticket, actor=self.user)
+        response = self.client.post(reverse('qualidade:tq_gerar', kwargs={'codigo':
+            self.order.code}), {'reason': 'Tentativa duplicada', 'support_ticket': self
+            .support_ticket.pk})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(QualityTreatment.objects.filter(quality_order=self.order).
+            count(), 1)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.reason, 'Ciclo inicial')
+        detail = self.client.get(reverse('qualidade:ordem_detail', kwargs={'codigo':
+            self.order.code}), {'tab': 'tratativas'})
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.context['local_treatment'], treatment)
+        self.assertContains(detail, treatment.code)
+        return None
+
+    def test_treatment_card_shows_safe_block_message_and_hides_transport_method(self):
+        create_quality_treatment(quality_order=self.order, reason="Investigar reincidencia", actor=self.user)
+        response = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": self.order.code}), {"tab": "tratativas"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Envio indispon")
+        self.assertContains(response, 'aria-disabled="true"')
+        self.assertNotContains(response, "SMTP Relay")
+    def test_only_active_support_ticket_related_to_oq_can_be_selected(self):
+        other_link = CMDBLinkMirror.objects.create(source_config_item_id=
+            'QUALITY-TQ-OTHER-CI')
+        unrelated_ticket = self.create_ticket(link=other_link, external_id=91232)
+        response = self.client.post(reverse('qualidade:tq_gerar', kwargs={'codigo':
+            self.order.code}), {'reason': 'Investigar reincidÃªncia', 'support_ticket':
+            unrelated_ticket.pk})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(QualityTreatment.objects.exists())
+        return None
+
+    def test_user_without_manage_permission_cannot_generate_tq(self):
+        self.user.user_permissions.remove(Permission.objects.get(
+            content_type__app_label='qualidade', codename='manage_quality_orders'))
+        response = self.client.post(reverse('qualidade:tq_gerar', kwargs={'codigo':
+            self.order.code}), {'reason': 'Sem autorizaÃ§Ã£o'})
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(QualityTreatment.objects.exists())
+        return None
+
+    def test_support_resolution_does_not_close_or_change_tq(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Investigar causa', support_ticket=self.support_ticket, actor=self.user)
+        self.support_ticket.business_status = OTRSStateMapping.BusinessStatus.RESOLVED
+        self.support_ticket.is_business_open = False
+        self.support_ticket.save(update_fields=('business_status', 'is_business_open'))
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.status, QualityTreatment.Status.PENDING_SEND)
+        self.assertTrue(treatment.is_active)
+        self.assertEqual(treatment.support_ticket_number, self.support_ticket.
+            ticket_number)
+        return None
+
+    def test_payload_uses_readable_subject_and_stable_qid_only_in_body(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason="Confirmar a causa raiz", actor=self.user)
+        qid = treatment.correlation_id
+        self.assertRegex(qid, r"^ARION-QID-[0-9A-F]{32}$")
+        payload = build_quality_treatment_email_payload(
+            treatment, designation="VIVO.PI.LIVR000267", client="Operadora Alfa",
+            project="Projeto Alfa", operator="Operadora Alfa", provider="Vivo",
+            recurrence_summary="4 ocorrencias validas; 3 reincidencias",
+            support_ticket_number=self.support_ticket.ticket_number,
+        )
+        self.assertTrue(payload["subject"].startswith("SOLICITA"))
+        self.assertIn(self.order.code, payload["subject"])
+        self.assertIn(treatment.code, payload["subject"])
+        self.assertIn("Projeto Alfa | Operadora Alfa | VIVO.PI.LIVR000267", payload["subject"])
+        self.assertLessEqual(len(payload["subject"]), 255)
+        self.assertNotIn(qid, payload["subject"])
+        for expected in ("ENCAMINHAMENTO SOLICITADO: NOC - QUALIDADE ATACADO", "Contexto da", "causa raiz", "diagn", "evid", self.support_ticket.ticket_number):
+            self.assertIn(expected, payload["body"])
+        self.assertEqual(payload["body"].count(qid), 1)
+        unsafe = build_quality_treatment_email_payload(treatment, designation="VIVO\r\nBcc: attacker@example.com")["subject"]
+        self.assertNotIn("\r", unsafe)
+        self.assertNotIn("\n", unsafe)
+        treatment.correlation_id = "ARION-QID-00000000000000000000000000000000"
+        treatment.save()
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.correlation_id, qid)
+    def test_article_correlation_requires_exact_body_id_and_configured_queue(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Investigar', actor=self.user)
+        self.support_ticket.queue_name = 'NOC - QUALIDADE ATACADO'
+        self.support_ticket.external_state_name = 'Pendente'
+        self.support_ticket.save(update_fields=('queue_name', 'external_state_name'))
+        self.assertEqual(extract_correlation_ids('<p>ID: ' + str(treatment.
+            correlation_id) + '</p>'), (treatment.correlation_id,))
+        self.assertEqual(extract_correlation_ids('prefixo-' + str(treatment.
+            correlation_id) + '0'), ())
+        self.assertEqual(extract_correlation_ids(str(treatment.correlation_id) +
+            'G'), ())
+        missing = link_quality_ticket_from_article(ticket=self.support_ticket,
+            article_body='sem identificador', allowed_queue_names=(
+            'NOC - QUALIDADE ATACADO',))
+        self.assertEqual(missing['status'], 'MISSING_CORRELATION_ID')
+        not_configured = link_quality_ticket_from_article(ticket=self.
+            support_ticket, article_body=treatment.correlation_id,
+            allowed_queue_names=())
+        self.assertEqual(not_configured['status'], 'QUEUE_NOT_CONFIGURED')
+        result = link_quality_ticket_from_article(ticket=self.support_ticket,
+            article_body='SolicitaÃ§Ã£o ' + str(treatment.correlation_id),
+            allowed_queue_names=('NOC - QUALIDADE ATACADO',), actor=self.user)
+        self.assertEqual(result['status'], 'LINKED')
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.quality_ticket_external_id, self.support_ticket.
+            external_id)
+        self.assertEqual(treatment.quality_ticket_number, self.support_ticket.
+            ticket_number)
+        self.assertEqual(treatment.quality_ticket_queue_snapshot,
+            'NOC - QUALIDADE ATACADO')
+        self.assertEqual(treatment.status, QualityTreatment.Status.PENDING_SEND)
+        self.assertEqual(treatment.send_status, QualityTreatment.SendStatus.NOT_SENT)
+        self.assertTrue(treatment.quality_ticket_linked_at)
+        return None
+
+    def test_article_queue_and_ticket_conflicts_never_overwrite_existing_link(self):
+        first = create_quality_treatment(quality_order=self.order, reason='Ciclo 1',
+            actor=self.user)
+        self.support_ticket.queue_name = 'OUTRA FILA'
+        self.support_ticket.save(update_fields=('queue_name',))
+        mismatch = link_quality_ticket_from_article(ticket=self.support_ticket,
+            article_body=first.correlation_id, allowed_queue_names=(
+            'NOC - QUALIDADE ATACADO',))
+        self.assertEqual(mismatch['status'], 'QUEUE_MISMATCH')
+        self.support_ticket.queue_name = 'NOC - QUALIDADE ATACADO'
+        self.support_ticket.save(update_fields=('queue_name',))
+        linked = link_quality_ticket_from_article(ticket=self.support_ticket,
+            article_body=first.correlation_id, allowed_queue_names=(
+            'NOC - QUALIDADE ATACADO',), actor=self.user)
+        self.assertEqual(linked['status'], 'LINKED')
+        first.refresh_from_db()
+        first.status = QualityTreatment.Status.RECURRENCE
+        first.completed_at = timezone.now()
+        first.save(update_fields=('status', 'completed_at', 'active_order_key',
+            'updated_at'))
+        QualityOccurrence.objects.create(quality_order=self.order,
+            ticket_external_id_snapshot=91234, ticket_number='REC-91234',
+            occurred_at=first.completed_at, counts_as_recurrence=True)
+        self.order.status = QualityOrder.Status.CONCLUIDA
+        self.order.completed_at = first.completed_at
+        self.order.save(update_fields=('status', 'completed_at', 'updated_at'))
+        second = create_quality_treatment(quality_order=self.order, reason=
+            'Novo ciclo apÃ³s reincidÃªncia', actor=self.user)
+        self.assertNotEqual(first.correlation_id, second.correlation_id)
+        second_ticket = self.create_ticket(link=self.link, external_id=91233)
+        second_ticket.queue_name = 'NOC - QUALIDADE ATACADO'
+        second_ticket.save(update_fields=('queue_name',))
+        collision = link_quality_ticket_from_article(ticket=second_ticket,
+            article_body=first.correlation_id, allowed_queue_names=(
+            'NOC - QUALIDADE ATACADO',))
+        self.assertEqual(collision['status'], 'TREATMENT_TICKET_CONFLICT')
+        second.refresh_from_db()
+        self.assertIsNone(second.quality_ticket_external_id)
+        return None
+
+
+    # FAILED test_incremental_article_batch_links_waiting_tq_by_body_qid: DecompilationError: Failed to decompile instruction Instruction(opcode=71, opname='LOAD_BUILD_CLASS', arg=None, argval=None, argrepr='', offset=234, starts_line=588, is_jump_target=False) in test_incremental_article_batch_links_waiting_tq_by_body_qid
+
+    def test_formal_completion_and_new_valid_recurrence_are_required_for_next_tq(self):
+        first = create_quality_treatment(quality_order=self.order, reason=
+            'Primeiro ciclo', actor=self.user)
+        first.status = QualityTreatment.Status.COMPLETED
+        first.completed_at = timezone.now()
+        first.save(update_fields=('status', 'completed_at', 'active_order_key',
+            'updated_at'))
+        with self.assertRaisesRegex(ValidationError, 'nova reincid') as __temp_319:
+            create_quality_treatment(quality_order=self.order, reason=
+                'Sem reincidÃªncia', actor=self.user)
+            recurrence_time = first.completed_at + timedelta(seconds=1)
+            QualityOccurrence.objects.create(quality_order=self.order,
+                ticket_number='REC-NEW', occurred_at=recurrence_time,
+                counts_as_recurrence=True, reason='ReincidÃªncia vÃ¡lida')
+            self.order.status = QualityOrder.Status.CONCLUIDA
+            self.order.completed_at = first.completed_at
+            self.order.save(update_fields=('status', 'completed_at', 'updated_at'))
+            second = create_quality_treatment(quality_order=self.order, reason=
+                'Novo ciclo', actor=self.user)
+            self.assertNotEqual(first.correlation_id, second.correlation_id)
+            self.assertRegex(first.code, '^TQ-\\d{4}-\\d{6}$')
+            self.assertRegex(second.code, '^TQ-\\d{4}-\\d{6}$')
+            self.assertEqual(int(second.code[-6:None]), int(first.code[-6:None]) + 1)
+            self.order.refresh_from_db()
+            self.assertEqual(self.order.status, QualityOrder.Status.TRATAMENTO)
+            self.assertIsNone(self.order.completed_at)
+            return None
+
+    def test_recurrence_during_monitoring_closes_current_tq_as_recurrence(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Monitorar reincidÃªncia', actor=self.user)
+        treatment.status = QualityTreatment.Status.IN_PROGRESS
+        treatment.send_status = QualityTreatment.SendStatus.SENT
+        treatment.save(update_fields=('status', 'send_status', 'active_order_key',
+            'updated_at'))
+        started_at = timezone.now() - timedelta(days=2)
+        cycle = start_monitoring_cycle(quality_order=self.order, actor=self.user,
+            started_at=started_at)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.status, QualityTreatment.Status.MONITORING)
+        recurrence_ticket = self.create_ticket(link=self.link, external_id=99121,
+            created_at=timezone.now() - timedelta(hours=1))
+        cycle = finish_monitoring_cycle(cycle=cycle, result=QualityMonitoringCycle.
+            Result.RECURRENCE, trigger_ticket_identifier=recurrence_ticket.
+            ticket_number, actor=self.user)
+        treatment.refresh_from_db()
+        self.assertEqual(cycle.result, QualityMonitoringCycle.Result.RECURRENCE)
+        self.assertEqual(treatment.status, QualityTreatment.Status.RECURRENCE)
+        self.assertEqual(treatment.completed_at, recurrence_ticket.source_created_at)
+        next_treatment = create_quality_treatment(quality_order=self.order, reason=
+            'Novo ciclo apÃ³s reincidÃªncia', actor=self.user)
+        self.assertNotEqual(treatment.correlation_id, next_treatment.correlation_id)
+        return None
+
+    def test_email_uses_structured_operator_and_keeps_isp_separate(self):
+        regional_provider = CMDBOperatorMirror.objects.create(source_config_item_id="CMDB-TQ-ISP", name="GIGANET TELECOM")
+        self.link.operator = regional_provider
+        self.link.contracting_client = "VIVO"
+        self.link.business_project = "FUST"
+        self.link.isp_raw = str(regional_provider.pk)
+        self.link.save(update_fields=("operator", "contracting_client", "business_project", "isp_raw"))
+        self.order.owner = self.user
+        self.order.save(update_fields=("owner", "updated_at"))
+        treatment = create_quality_treatment(quality_order=self.order, reason="Validar operadora e provedor", actor=self.user)
+        other_owner = User.objects.create_user(username="tq-owner-different", first_name="TQ", last_name="Owner")
+        treatment.owner = other_owner
+        treatment.save(update_fields=("owner", "updated_at"))
+        email = build_treatment_email(treatment, detail=get_quality_order_detail(self.user, self.order, tab="tratativas"))
+        self.assertIn("| FUST | VIVO | VIVO.PI.LIVR000267", email["subject"])
+        self.assertNotIn("GIGANET", email["subject"])
+        self.assertIn("Operadora: VIVO", email["text_content"])
+        self.assertIn("ISP/provedor: GIGANET TELECOM", email["text_content"])
+        self.assertIn("pela OQ:", email["text_content"])
+        self.assertIn("pela TQ: TQ Owner", email["text_content"])
+        self.assertEqual(email["text_content"].splitlines()[0], "ARION OPS - QUALIDADE OPERACIONAL")
+        self.assertEqual(email["text_content"].splitlines()[1], "ENCAMINHAMENTO SOLICITADO: NOC - QUALIDADE ATACADO")
+        self.assertNotIn(treatment.correlation_id, email["subject"])
+        self.assertIn(treatment.correlation_id, email["text_content"])
+    def test_tq_codes_and_qids_remain_reserved_after_local_tq_deletion(self):
+        first = create_quality_treatment(quality_order=self.order, reason="Ciclo descartado", actor=self.user)
+        first_code, first_qid = first.code, first.correlation_id
+        first_sequence = int(first_code.rsplit("-", 1)[1])
+        first.delete()
+        second = create_quality_treatment(quality_order=self.order, reason="Novo ciclo", actor=self.user)
+        self.assertNotEqual(second.code, first_code)
+        self.assertNotEqual(second.correlation_id, first_qid)
+        self.assertGreater(int(second.code.rsplit("-", 1)[1]), first_sequence)
+        self.assertTrue(QualityTreatmentIdentity.objects.filter(code=first_code, correlation_id=first_qid, sequence_number=first_sequence).exists())
+        other_order = QualityOrder.objects.create(current_reason="Outro circuito")
+        attempted = QualityTreatment.objects.create(quality_order=other_order, reason="Teste", correlation_id=first_qid)
+        self.assertNotEqual(attempted.correlation_id, first_qid)
+        self.assertRegex(attempted.correlation_id, r"^ARION-QID-[0-9A-F]{32}$")
+
+    def test_missing_linked_ticket_is_marked_unavailable_and_audited_without_erasing_id(self):
+        treatment = create_quality_treatment(quality_order=self.order, reason="Ticket removido", actor=self.user)
+        treatment.quality_ticket_external_id = 99887766
+        treatment.quality_ticket_number = "202611040000099"
+        treatment.quality_ticket_queue_snapshot = "NOC - QUALIDADE ATACADO"
+        treatment.quality_ticket_state_snapshot = "Open"
+        treatment.save(update_fields=("quality_ticket_external_id", "quality_ticket_number", "quality_ticket_queue_snapshot", "quality_ticket_state_snapshot", "updated_at"))
+        class MissingTicketClient:
+            def fetch_quality_ticket_states(inner_self, ticket_ids, *, queue_names, limit):
+                return []
+        self.assertEqual(refresh_linked_quality_ticket_states(MissingTicketClient(), queue_names=("NOC - QUALIDADE ATACADO",)), 1)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.quality_ticket_external_id, 99887766)
+        self.assertEqual(treatment.quality_ticket_number, "202611040000099")
+        self.assertEqual(treatment.quality_ticket_state_snapshot, "Indisponivel no OTRS")
+        self.assertTrue(AuditEvent.objects.filter(action="QUALITY_TICKET_UNAVAILABLE", object_id=str(self.order.pk)).exists())
+        response = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": self.order.code}), {"tab": "tratativas"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Indisponivel no OTRS")
+
 
 
 class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
@@ -133,7 +773,7 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         manager = self.create_manager("quality-detail-tabs")
         link = CMDBLinkMirror.objects.create(
             source_config_item_id="QUALITY-CI-TABS", designation="BL30000074375",
-            contracting_client="Vivo", business_project="Arcos Dourados", isp_raw="Elo Soluções", state="SP",
+            contracting_client="Vivo", business_project="Arcos Dourados", isp_raw="Elo SoluÃ§Ãµes", state="SP",
         )
         now = timezone.now()
         initial = self.create_ticket(link=link, external_id=84201, created_at=now - timedelta(days=3))
@@ -147,7 +787,7 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         order = QualityOrder.objects.create(
             link=link, status=QualityOrder.Status.TRATAMENTO, priority=QualityOrder.Priority.ALTA,
             recurrence_level=QualityOrder.RecurrenceLevel.R2,
-            current_reason="Oscilação registrada", current_root_cause="Falha no enlace",
+            current_reason="OscilaÃ§Ã£o registrada", current_root_cause="Falha no enlace",
         )
         QualityOccurrence.objects.create(
             quality_order=order, otrs_ticket=initial, occurred_at=initial.source_created_at,
@@ -156,7 +796,7 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         QualityOccurrence.objects.create(
             quality_order=order, otrs_ticket=recurrence, occurred_at=recurrence.source_created_at,
             counts_as_recurrence=True, same_root_cause=True,
-            reason="Oscilação", root_cause="Falha no enlace",
+            reason="OscilaÃ§Ã£o", root_cause="Falha no enlace",
         )
         self.client.force_login(manager)
 
@@ -172,7 +812,7 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         self.assertEqual(summary.context["excluded_history_count"], 1)
         self.assertContains(summary, "BL30000074375")
         self.assertContains(summary, "R2")
-        self.assertContains(summary, "Elo Soluções")
+        self.assertContains(summary, "Elo SoluÃ§Ãµes")
 
         pending_response = self.client.get(
             reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}),
@@ -183,9 +823,9 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         all_response = self.client.get(
             reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}), {"tab": "ocorrencias"},
         )
-        self.assertContains(all_response, "Ocorrência inicial")
-        self.assertContains(all_response, "Reincidência #1")
-        self.assertContains(all_response, "Ocorrências desconsideradas")
+        self.assertContains(all_response, "OcorrÃªncia inicial")
+        self.assertContains(all_response, "ReincidÃªncia #1")
+        self.assertContains(all_response, "OcorrÃªncias desconsideradas")
 
     def test_occurrence_exclusion_requires_reason_and_review_recalculates_metrics_with_audit(self):
         from aplicativos.auditoria.models import AuditEvent
@@ -284,7 +924,7 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         allowed_operator = Operadora.objects.create(name="Operadora permitida", normalized_name="operadora permitida")
         allowed_project = Projeto.objects.create(name="Projeto permitido", normalized_name="projeto permitido")
         denied_project = Projeto.objects.create(name="Projeto negado", normalized_name="projeto negado")
-        group = Group.objects.create(name="Escopo Qualidade revisão")
+        group = Group.objects.create(name="Escopo Qualidade revisÃ£o")
         scope = GroupDataScope.objects.create(group=group, mode=GroupDataScope.Mode.CUSTOM)
         scope.allowed_operators.add(allowed_operator)
         scope.allowed_projects.add(allowed_project)
@@ -407,9 +1047,9 @@ class QualityDashboardGranularityTests(SimpleTestCase):
         self.assertEqual(daily[0]["tooltip"], "03/10/2026")
 
         weekly = _make_buckets(date(2026, 9, 30), date(2026, 10, 6), "week")
-        self.assertEqual([item["label"] for item in weekly], ["30 set–04 out", "05–06 out"])
-        self.assertEqual(weekly[0]["tooltip"], "30/09/2026 – 04/10/2026")
-        self.assertEqual(weekly[1]["tooltip"], "05/10/2026 – 06/10/2026")
+        self.assertEqual([item["label"] for item in weekly], ["30 setâ€“04 out", "05â€“06 out"])
+        self.assertEqual(weekly[0]["tooltip"], "30/09/2026 â€“ 04/10/2026")
+        self.assertEqual(weekly[1]["tooltip"], "05/10/2026 â€“ 06/10/2026")
 
         monthly = _make_buckets(date(2026, 11, 30), date(2027, 1, 2), "month")
         self.assertEqual([item["label"] for item in monthly], ["nov 2026", "dez 2026", "jan 2027"])
@@ -532,7 +1172,7 @@ class QualityDashboardTests(QualityModuleTestCase):
         closure_event = QualityAuditEvent.objects.create(
             quality_order=closed_order,
             event_type=QualityAuditEvent.EventType.STATUS_CHANGED,
-            description="Concluída no período.",
+            description="ConcluÃ­da no perÃ­odo.",
             metadata={"status": QualityOrder.Status.CONCLUIDA},
         )
         QualityAuditEvent.objects.filter(pk=closure_event.pk).update(created_at=concluded_at)
@@ -573,7 +1213,7 @@ class QualityDashboardTests(QualityModuleTestCase):
         self.assertEqual(result["effectiveness"]["total"], 2)
         self.assertEqual(sum(result["evolution"]["completed"]), 1)
         self.assertEqual(sum(result["evolution"]["post_treatment"]), 1)
-        self.assertEqual(result["evolution"]["granularity"], "Diária")
+        self.assertEqual(result["evolution"]["granularity"], "DiÃ¡ria")
 
     def test_rreip_cycle_uses_configured_default_duration(self):
         actor = self.create_authorized_user("quality-rreip-default-duration")
@@ -586,6 +1226,16 @@ class QualityDashboardTests(QualityModuleTestCase):
         order.refresh_from_db()
         self.assertEqual(order.status, QualityOrder.Status.MONITORAMENTO)
         self.assertEqual(order.audit_events.get().event_type, "MONITORING_STARTED")
+
+
+    def test_empty_quality_dashboard_does_not_load_chart_assets(self):
+        user = self.create_authorized_user("empty-quality-dashboard")
+        self.client.force_login(user)
+        response = self.client.get(reverse("qualidade:dashboard"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "/static/vendor/echarts/echarts.min.js")
+        self.assertNotContains(response, "/static/js/qualidade/dashboard.js")
+
 
 
 class QualityRecurrenceIntegrationTests(QualityModuleTestCase):
@@ -659,7 +1309,7 @@ class QualityRecurrenceIntegrationTests(QualityModuleTestCase):
             created_at=now - timedelta(days=20),
         )
         recurrence = self.create_ticket(
-            link=link, external_id=84602, closing_reason="Pendência financeira",
+            link=link, external_id=84602, closing_reason="PendÃªncia financeira",
             created_at=now - timedelta(days=2),
         )
         order = QualityOrder.objects.create(link=link, status=QualityOrder.Status.NOVA)
@@ -925,7 +1575,7 @@ class QualityQueueTests(QualityModuleTestCase):
         operator = Operadora.objects.create(name="Operadora Qualidade", normalized_name="operadora qualidade")
         allowed_project = Projeto.objects.create(name="Projeto Qualidade", normalized_name="projeto qualidade")
         denied_project = Projeto.objects.create(name="Projeto Restrito", normalized_name="projeto restrito")
-        scope_group = Group.objects.create(name="Escopo Links Prioritários")
+        scope_group = Group.objects.create(name="Escopo Links PrioritÃ¡rios")
         scope = GroupDataScope.objects.create(group=scope_group, mode=GroupDataScope.Mode.CUSTOM)
         scope.allowed_operators.add(operator)
         scope.allowed_projects.add(allowed_project)
@@ -974,12 +1624,12 @@ class QualityQueueTests(QualityModuleTestCase):
         orders_response = self.client.get(reverse("qualidade:ordens"))
 
         self.assertEqual(priority_response.status_code, 200)
-        self.assertContains(priority_response, "Links prioritários")
-        self.assertContains(priority_response, "ARION OPS · Links prioritários · Qualidade Operacional")
+        self.assertContains(priority_response, "Links prioritÃ¡rios")
+        self.assertContains(priority_response, "ARION OPS Â· Links prioritÃ¡rios Â· Qualidade Operacional")
         self.assertEqual(priority_response.headers["Content-Type"], "text/html; charset=utf-8")
         self.assertEqual(orders_response.status_code, 200)
         self.assertContains(orders_response, "Ordens de Qualidade")
-        self.assertContains(orders_response, "ARION OPS · Ordens de Qualidade")
+        self.assertContains(orders_response, "ARION OPS Â· Ordens de Qualidade")
         for response in (priority_response, orders_response):
             rendered = response.content.decode("utf-8")
             mojibake_sequences = (
@@ -1016,7 +1666,7 @@ class QualityQueueTests(QualityModuleTestCase):
         QualityOccurrence.objects.create(
             quality_order=order, otrs_ticket=recurrence, occurred_at=now - timedelta(days=4),
             counts_as_recurrence=True, same_root_cause=True,
-            reason="Oscilação confirmada", root_cause="Falha no enlace de acesso",
+            reason="OscilaÃ§Ã£o confirmada", root_cause="Falha no enlace de acesso",
         )
         QualityOccurrence.objects.create(
             quality_order=order, otrs_ticket=duplicate, occurred_at=now - timedelta(days=1),
@@ -1033,14 +1683,14 @@ class QualityQueueTests(QualityModuleTestCase):
         self.assertEqual(response.context["recurrence_count"], 1)
         self.assertEqual(response.context["same_cause_recurrences"], 1)
         self.assertEqual(response.context["period"], "60")
-        self.assertContains(response, "Ocorrência inicial")
-        self.assertContains(response, "Reincidência #1")
-        self.assertContains(response, "Oscilação confirmada")
+        self.assertContains(response, "OcorrÃªncia inicial")
+        self.assertContains(response, "ReincidÃªncia #1")
+        self.assertContains(response, "OscilaÃ§Ã£o confirmada")
         self.assertContains(response, "Falha no enlace de acesso")
         self.assertContains(response, "Mesma causa confirmada")
-        self.assertContains(response, "Improcedente · não contabilizado")
-        self.assertContains(response, "Cancelado · não contabilizado")
-        self.assertContains(response, "Duplicado · não contabilizado")
+        self.assertContains(response, "Improcedente Â· nÃ£o contabilizado")
+        self.assertContains(response, "Cancelado Â· nÃ£o contabilizado")
+        self.assertContains(response, "Duplicado Â· nÃ£o contabilizado")
         self.assertContains(response, order.code)
         self.assertContains(response, "Abrir OQ")
         self.assertEqual(response.context["history_count"], 5)
@@ -1119,7 +1769,7 @@ class QualityQueueTests(QualityModuleTestCase):
             "priority": QualityOrder.Priority.ALTA,
             "owner": "",
             "treatment_deadline": "",
-            "initial_note": "Avaliar o histórico do circuito",
+            "initial_note": "Avaliar o histÃ³rico do circuito",
             "next": f"{detail_url}?period=60",
         })
         order = QualityOrder.objects.get(link=link)
@@ -1133,7 +1783,7 @@ class QualityQueueTests(QualityModuleTestCase):
         visible = QualityOrder.objects.create(
             status=QualityOrder.Status.TRATAMENTO,
             priority=QualityOrder.Priority.CRITICA,
-            designation_snapshot="Fila visível",
+            designation_snapshot="Fila visÃ­vel",
             ci_snapshot="Q-QUEUE-1",
         )
         QualityOrder.objects.create(designation_snapshot="Outra fila", ci_snapshot="Q-QUEUE-2")
@@ -1222,7 +1872,7 @@ class QualityQueueTests(QualityModuleTestCase):
             "priority": QualityOrder.Priority.ALTA,
             "owner": "",
             "treatment_deadline": "",
-            "initial_note": "Avaliar reincidência",
+            "initial_note": "Avaliar reincidÃªncia",
             "next": reverse("qualidade:ordens"),
         })
 
@@ -1230,7 +1880,7 @@ class QualityQueueTests(QualityModuleTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(order.status, QualityOrder.Status.NOVA)
         self.assertEqual(order.client_snapshot, "Cliente")
-        self.assertEqual(order.internal_notes, "Avaliar reincidência")
+        self.assertEqual(order.internal_notes, "Avaliar reincidÃªncia")
         self.assertEqual(order.audit_events.get().event_type, "OQ_CREATED")
         duplicate_response = self.client.post(reverse("qualidade:ordem_create"), {
             "link": link.pk,
@@ -1344,7 +1994,7 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         self.assertContains(detail, NOC_QUEUE_NAME)
         self.assertContains(detail, "Abrir no OTRS")
         self.assertContains(detail, "Checklist da Qualidade")
-        self.assertContains(detail, "Revisar o histórico do circuito")
+        self.assertContains(detail, "Revisar o histÃ³rico do circuito")
         self.assertEqual(detail.context["current_treatment"]["ticket_number"], active.ticket_number)
         self.assertEqual(detail.context["treatment_history"][0]["ticket_number"], closed.ticket_number)
         self.assertTrue(AuditEvent.objects.filter(action="QUALITY_TICKET_LINKED").exists())
@@ -1418,12 +2068,12 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
     def test_financial_monitoring_requires_evidence_and_recurrence_is_manual(self):
         manager = self.create_manager("quality-monitoring-financial")
         link, order = self.create_link_and_order(
-            manager, key="FINANCIAL", reason="Pendência financeira",
+            manager, key="FINANCIAL", reason="PendÃªncia financeira",
         )
         self.client.force_login(manager)
         page = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}), {"tab": "monitoramento"})
-        self.assertContains(page, "Desbloqueio não significa regularização definitiva.")
-        self.assertContains(page, "Evidência da regularização")
+        self.assertContains(page, "Desbloqueio nÃ£o significa regularizaÃ§Ã£o definitiva.")
+        self.assertContains(page, "EvidÃªncia da regularizaÃ§Ã£o")
         with self.assertRaises(ValidationError):
             start_monitoring_cycle(quality_order=order, actor=manager)
         with self.assertRaises(ValidationError):
@@ -1446,7 +2096,7 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         ticket = self.create_ticket(
             link=link, external_id=85104, created_at=timezone.now() - timedelta(days=2),
         )
-        with self.assertRaisesRegex(ValidationError, "ocorrência válida"):
+        with self.assertRaisesRegex(ValidationError, "ocorrÃªncia vÃ¡lida"):
             finish_monitoring_cycle(
                 cycle=cycle, result=QualityMonitoringCycle.Result.SUCCESS, actor=manager,
             )
@@ -1546,28 +2196,28 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
 
         self.client.force_login(scoped_user)
         denied_write = self.client.post(reverse("qualidade:contato_salvar"), {
-            "name": "Contato não permitido", "client": allowed_operator.name,
+            "name": "Contato nÃ£o permitido", "client": allowed_operator.name,
             "project": "Outro Projeto", "escalation_level": "1", "active": "on",
         })
         self.assertEqual(denied_write.status_code, 302)
-        self.assertFalse(QualityContact.objects.filter(name="Contato não permitido").exists())
+        self.assertFalse(QualityContact.objects.filter(name="Contato nÃ£o permitido").exists())
 
     def test_order_and_global_history_are_filtered_paginated_and_formatted(self):
         manager = self.create_manager("quality-history-paging")
-        link, order = self.create_link_and_order(manager, key="HISTORY", provider="Elo Soluções")
+        link, order = self.create_link_and_order(manager, key="HISTORY", provider="Elo SoluÃ§Ãµes")
         QualityAuditEvent.objects.create(
             quality_order=order, event_type="LEVEL_CHANGED", actor=manager,
-            description="Nível alterado de R1 para R2.", metadata={"previous_level": "R1", "level": "R2"},
+            description="NÃ­vel alterado de R1 para R2.", metadata={"previous_level": "R1", "level": "R2"},
         )
         local = get_order_history(manager, order, category="order")
         self.assertEqual(local["history_page"].paginator.count, 2)
-        self.assertEqual(local["history_events"][0]["label"], "Nível alterado")
+        self.assertEqual(local["history_events"][0]["label"], "NÃ­vel alterado")
 
         for index in range(26):
             AuditEvent.objects.create(
                 user=manager, category="QUALITY", action="STATUS_CHANGED", module="Qualidade",
                 object_type="QualityOrder", object_id=str(order.pk),
-                description=f"Status {index}: Triagem → Tratamento.",
+                description=f"Status {index}: Triagem â†’ Tratamento.",
                 metadata={"old": "TRIAGEM", "new": "TRATAMENTO"},
             )
         first = get_global_quality_history(manager, {"per_page": "25", "q": "BD0001200"})
@@ -1578,7 +2228,7 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         self.assertEqual(second["history_page"].number, 2)
         self.assertEqual(len(second["history_events"]), 2)
         self.assertEqual(first["history_events"][0].designation, "BD0001200")
-        self.assertEqual(first["history_events"][0].provider_name, "Elo Soluções")
+        self.assertEqual(first["history_events"][0].provider_name, "Elo SoluÃ§Ãµes")
         self.client.force_login(manager)
         global_page = self.client.get(reverse("qualidade:historico"))
         self.assertContains(global_page, "BD0001200")
@@ -1642,14 +2292,14 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         self.assertEqual({item.pk for item in recommendations}, {contact.pk, legacy_contact.pk})
 
         update_response = self.client.post(reverse("qualidade:contato_salvar"), {
-            "contact_id": str(contact.pk), "name": "Ana Silva", "role": "Coordenação",
+            "contact_id": str(contact.pk), "name": "Ana Silva", "role": "CoordenaÃ§Ã£o",
             "company": "Vivo", "region": "SP", "client": "Cliente Fase 4", "project": "Projeto Fase 4",
             "contact_type": "COORDENACAO", "escalation_level": "3", "email": "ana@example.com",
             "active": "on", "next": "/qualidade/contatos/",
         })
         self.assertEqual(update_response.status_code, 302)
         contact.refresh_from_db()
-        self.assertEqual(contact.role, "Coordenação")
+        self.assertEqual(contact.role, "CoordenaÃ§Ã£o")
         self.assertEqual(contact.escalation_level, 3)
         deactivate = self.client.post(reverse("qualidade:contato_status", kwargs={"contact_id": contact.pk}), {
             "active": "false", "next": "/qualidade/contatos/",

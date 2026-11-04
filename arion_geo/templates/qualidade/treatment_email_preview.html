@@ -1,0 +1,48 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% block quality_title %}{{ page_title }}{% endblock %}
+{% block quality_content %}
+<header class="quality-page-header quality-page-header--simple">
+  <div><p class="quality-eyebrow">ARION OPS <span>/</span> NOC ATACADO <span>/</span> QUALIDADE</p><h1>{{ page_title }}</h1><p class="quality-page-subtitle">Revise a solicitação e os destinatários antes de qualquer envio.</p></div>
+</header>
+<section class="quality-order-section quality-email-review">
+  <header class="quality-email-review__header">
+    <div><p class="quality-eyebrow">TQ · ORDEM DE QUALIDADE {{ order.code }}</p><h2>{{ treatment.code }}</h2><p>Esta solicitação registra investigação de reincidências e acompanhamento de ações de Qualidade. Ela não abre chamado de reparo.</p></div>
+    <a class="quality-action-button quality-action-button--subtle" href="{% url 'qualidade:ordem_detail' codigo=order.code %}?tab=tratativas">Voltar à TQ</a>
+  </header>
+  <dl class="quality-email-preview__facts">
+    <div><dt>Assunto</dt><dd>{{ email_subject }}</dd></div>
+    <div><dt>Remetente</dt><dd>{{ sender_label }}</dd></div>
+    <div><dt>Para</dt><dd>{{ recipient_label }}</dd></div>
+    <div><dt>Cópia (Cc)</dt><dd>{{ cc_label }}</dd></div>
+    <div><dt>Reply-To</dt><dd>{{ reply_to_label }}</dd></div>
+    <div><dt>Estado</dt><dd>{{ treatment.get_status_display }} · {{ treatment.get_send_status_display }}</dd></div>
+    <div><dt>Projeto / contrato</dt><dd>{{ project_label }}</dd></div>
+    <div><dt>Designação do link</dt><dd>{{ designation_label }}</dd></div>
+  </dl>
+
+  {% if not preview_only %}
+    <section class="quality-email-preview__confirmation" aria-labelledby="tq-send-confirm-title">
+      <h2 id="tq-send-confirm-title">{% if treatment.send_status == "FAILED" %}Confirmar nova tentativa{% else %}Confirmar envio externo{% endif %}</h2>
+      <p>Confira a TQ, a OQ, o circuito, o remetente e os destinatários. A aceitação da mensagem não confirma a criação de ticket OTRS.</p>
+      {% if send_ready %}
+        <form method="post" action="{% url 'qualidade:tq_email_send' codigo=order.code treatment_id=treatment.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="confirm_send" value="yes">
+          <button class="quality-action-button quality-action-button--send-confirm" type="submit">{% if treatment.send_status == "FAILED" %}Confirmar nova tentativa da {{ treatment.code }}{% else %}Confirmar envio da {{ treatment.code }}{% endif %}</button>
+        </form>
+      {% else %}
+        <div class="quality-treatment-blocked" role="status"><p>{{ send_block_message }}{% if perms.configuracoes.manage_integrations %} <a href="{{ send_configuration_url }}">{{ send_configuration_label }}</a>{% endif %}</p><ul>{% for check in send_checks %}<li><span>{{ check.label }}</span><strong>{{ check.state }}</strong></li>{% endfor %}</ul></div>
+      {% endif %}
+    </section>
+  {% else %}
+    {% if send_ready %}<p class="quality-email-preview__notice">A mensagem ainda não foi enviada. Para continuar, abra a confirmação individual de envio.</p><p><a class="quality-action-button quality-action-button--send-confirm" href="{% url 'qualidade:tq_email_send' codigo=order.code treatment_id=treatment.pk %}">Continuar para confirmação</a></p>{% else %}<div class="quality-treatment-blocked" role="status"><p>{{ send_block_message }}{% if perms.configuracoes.manage_integrations %} <a href="{{ send_configuration_url }}">{{ send_configuration_label }}</a>{% endif %}</p><ul>{% for check in send_checks %}<li><span>{{ check.label }}</span><strong>{{ check.state }}</strong></li>{% endfor %}</ul></div>{% endif %}
+  {% endif %}
+
+  <section class="quality-email-message" aria-labelledby="email-html-title">
+    <header><div><p class="quality-eyebrow">CONTEÚDO DA MENSAGEM</p><h2 id="email-html-title">Prévia HTML</h2></div></header>
+    <p class="quality-email-preview__fallback">Se a prévia visual não aparecer, consulte a versão em texto simples logo abaixo.</p>
+    <iframe class="quality-email-preview__frame" title="Prévia isolada do e-mail da {{ treatment.code }}" loading="eager" referrerpolicy="no-referrer" sandbox="" srcdoc="{{ email_html|force_escape }}"></iframe>
+    <details class="quality-section-disclosure"><summary>Consultar versão em texto simples</summary><pre class="quality-email-preview__text">{{ email_text }}</pre></details>
+  </section>
+</section>
+{% endblock %}

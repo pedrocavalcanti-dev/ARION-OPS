@@ -5,6 +5,7 @@
 {% block integration_description %}{{ integration.kind }} · configuração, saúde e diagnóstico da fonte.{% endblock %}
 {% block integration_content %}
 <div class="integration-detail-top"><a class="integration-back" href="{% url 'configuracoes:integrations' %}">← Todas as integrações</a><span class="integration-status integration-status--{{ integration.status }}"><i></i>{{ integration.connection_status_display }}</span></div>
+{% if integration.key == "otrs" and otrs_setup_notice %}<p class="integration-inline-warning" role="status">OTRS não configurado ou desabilitado neste ambiente.</p>{% endif %}
 <nav class="integration-tabs" aria-label="Seções da integração">
   <a href="?tab=overview"{% if active_tab == "overview" %} aria-current="page"{% endif %}>Visão geral</a>
   {% if perms.configuracoes.manage_integrations %}<a href="?tab=configuration"{% if active_tab == "configuration" %} aria-current="page"{% endif %}>Configuração</a>{% endif %}

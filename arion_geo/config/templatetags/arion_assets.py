@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.contrib.staticfiles import finders
 from django.templatetags.static import static
 from django import template
 
@@ -61,6 +62,6 @@ def arion_bundle_js(source_path):
             output_path = _production_manifest().get(path.as_posix())
         except ImproperlyConfigured:
             output_path = None
-        if output_path:
+        if output_path and finders.find(output_path):
             return static(output_path)
     return static(path.as_posix())

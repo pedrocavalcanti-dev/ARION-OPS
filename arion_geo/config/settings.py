@@ -238,6 +238,9 @@ OTRS_NOC_ATACADO_QUEUE_URL = os.getenv(
     ),
 ).strip()
 
+# Non-TLS compatibility is limited to this explicitly configured legacy host.
+OTRS_LEGACY_NO_TLS_HOST = os.getenv("ARION_OTRS_LEGACY_NO_TLS_HOST", "").strip().casefold()
+
 
 # =============================================================================
 # APLICAÇÕES
@@ -416,6 +419,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # =============================================================================
 
 LANGUAGE_CODE = "pt-br"
+DEFAULT_CHARSET = "utf-8"
 TIME_ZONE = "America/Sao_Paulo"
 
 USE_I18N = True

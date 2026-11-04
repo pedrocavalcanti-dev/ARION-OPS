@@ -172,6 +172,45 @@ Para avaliação visual local, `seed_qualidade_demo` cria OQs em datas diferente
 
 Qualidade reutiliza `integracoes.services.project_names`, já compartilhado com o Cockpit. Aliases reconhecidos, como `PROJETO BB`, `BB` e `BANCO DO BRASIL`, são apresentados como “Banco do Brasil” e reunidos nos filtros/agregações. O valor original pode permanecer nos snapshots; o service resolve o nome canônico para interface e filtros. A ordem de atenção lê a configuração compartilhada de prioridade de negócio e não filtra carteiras por padrão.
 
-## Automação futura de abertura de TQ — PLANEJADO (NÃO IMPLEMENTADO)
+## Solicitacao de tratativa por e-mail
 
-Uma fase futura poderá preparar uma solicitação de TQ a partir de número da OQ, nível de reincidência, Designação, cliente/projeto, ISP, ocorrências relacionadas e resumo da solicitação. O módulo atual não envia e-mail, não monta integração de escrita e não cria/edita tickets remotos automaticamente. Toda confirmação nesta fase ocorre manualmente e localmente.
+A TQ local recebe codigo legivel `TQ-AAAA-NNNNNN` e ID de correlacao `ARION-QID-<32 hex>` imutavel. O assunto segue `SOLICITACAO DE TRATATIVA DE QUALIDADE | {TQ_CODE} | {DESIGNACAO_LINK}`; o QID aparece somente no corpo HTML/texto. A mensagem reune codigos da TQ/OQ, designacao, cliente/projeto, operadora/provedor, reincidencias resumidas, motivo/tratativa e chamado de suporte relacionado quando houver.
+
+A pre-visualizacao funciona sem credencial Brevo e nao envia mensagem. O metodo pode ser API REST ou SMTP Relay no host fixo `smtp-relay.brevo.com:587`, com STARTTLS obrigatorio e validacao de certificado. A API Key REST e a chave SMTP ficam criptografadas separadamente por DPAPI. O teste SMTP realiza EHLO/STARTTLS/AUTH/QUIT sem enviar e-mail; autenticacao aceita nao confirma entrega.
+
+O envio exige integracao habilitada, credencial do metodo protegida, remetente/destinatario configurados, endereco da fila Qualidade validado no OTRS, autorizacao administrativa e confirmacao individual por POST. Antes do primeiro envio controlado deve ser usada uma caixa de testes autorizada. A criacao da TQ nunca dispara e-mail automaticamente. Tentativas simultaneas sao bloqueadas; cada tentativa registra metodo e UUID local. SMTP nao inventa `messageId`. Falhas confirmadas permitem nova tentativa explicita, enquanto resultado incerto fica bloqueado para reconciliacao.
+
+A aceitacao do servidor Brevo nao confirma a criacao do ticket OTRS. A correlacao futura usa o QID completo encontrado no corpo do artigo original do ticket na fila de Qualidade. O ARION nao escreve no OTRS.
+## Envio Brevo e correla??o autom?tica
+
+A TQ possui pr?via HTML/texto e confirma??o individual por POST. O m?todo SMTP Relay ? o padr?o quando n?o h? prefer?ncia salva; API REST permanece dispon?vel. To, Cc e Reply-To s?o campos distintos e edit?veis. Cc ? enviado como destinat?rio de c?pia por SMTP e pela API REST; o roteamento pode criar outro ticket e ainda precisa de confirma??o operacional. O envio continua bloqueado sem autoriza??o, credencial recuper?vel, remetente/destinat?rio v?lidos e confirma??o administrativa do endere?o de entrada da fila.
+
+O worker dedicado agenda leitura read-only de artigos por lote e cursor incremental, com sobreposi??o para atualiza??es tardias, lease OTRS compartilhado e retry com backoff. Cad?ncia, lote e filas aceitam configura??es `ARION_QUALITY_OTRS_CORRELATION_INTERVAL_SECONDS`, `ARION_QUALITY_OTRS_CORRELATION_BATCH_SIZE` e `ARION_QUALITY_OTRS_QUEUE_NAMES`. Correlaciona somente o QID completo no corpo, valida a fila pelo nome exato configurado e mant?m o corpo do artigo apenas em mem?ria. O cursor e a falha sanitizada s?o locais. A configura??o DEV atual n?o informa o schema/banco OTRS necess?rio; por isso a rotina est? implementada, mas a descoberta da fila/schema e o v?nculo autom?tico real aguardam configura??o e valida??o no ambiente conectado. N?o h? escrita no OTRS.
+
+## Arquivamento logico de OQ
+
+O detalhe da OQ oferece arquivamento administrativo somente para superuser ou para quem possui `qualidade.delete_qualityorder`, permissao disponivel no editor de Grupos e acessos. A confirmacao exige motivo e repeticao do codigo da OQ via POST. O registro recebe data, usuario e motivo de arquivamento e permanece consultavel por quem possui a permissao de exclusao; ocorrencias, TQs, ciclos, checklist e auditoria nao sao apagados.
+
+OQs arquivadas saem das consultas operacionais, indicadores e rankings. O arquivamento e bloqueado enquanto houver envio pendente/incerto, TQ em acompanhamento, ticket de Qualidade sem encerramento confirmado ou ciclo RREIP ativo. A operacao e transacional e registrada no historico local e na auditoria central.
+
+
+## Homologacao final de TQ e roteamento
+
+- Cada OQ aceita somente uma TQ ativa. A restricao usa transacao e chave unica local. Depois de conclusao formal, um novo ciclo exige uma reincidencia valida; reincidencia durante RREIP encerra a TQ como `Reincidiu` e preserva o historico. OQ e TQ mantem sequencias globais independentes e cada TQ conserva seu ARION-QID.
+- O RREIP move a mesma TQ para monitoramento. Sucesso conclui a TQ; reincidencia conclui como `Reincidiu` e permite novo ciclo a partir da ocorrencia vinculada. Cancelamento do RREIP retorna a TQ para tratativa.
+- No e-mail, cliente, projeto, operadora contratante (`contracting_client`) e ISP/provedor resolvido pela relacao CMDB ficam separados. Responsavel da OQ e responsavel da TQ aparecem em campos distintos. O assunto inclui OQ, TQ, projeto, operadora e designacao, sem QID; o QID completo fica no corpo.
+- O envio TQ exige credencial do metodo protegido, teste de autenticacao SMTP bem-sucedido (quando SMTP esta ativo), integracao habilitada, destinatarios validos, roteamento aprovado, autorizacao administrativa, OTRS somente leitura configurado, leitura incremental bem-sucedida de cada fila de Qualidade e confirmacao individual. A aceitacao SMTP nao confirma entrega nem ticket.
+- **Testar roteamento de e-mail** e uma acao administrativa separada. Configure primeiro uma caixa controlada no campo de destinatario de homologacao. Cada envio exige a caixa de confirmacao da pagina, recebe `ARION-ROUTE-<32 hex>`, nao inclui Cc/Reply-To nem QID de TQ, e nao altera a validacao da fila ou qualquer TQ. Para apontar a homologacao ao destinatario operacional, marque antes a autorizacao administrativa especifica e confirme cada envio individualmente. O resultado aceito pelo relay precisa ser verificado manualmente na caixa e no OTRS.
+- A primeira verificacao operacional deve ser To isolado. Cc permanece fora do teste para evitar ticket duplicado; valide Cc em procedimento separado somente depois de confirmar o comportamento do To e aprovar explicitamente a mensagem de homologacao.
+- A correlacao le artigos incrementalmente, procura o QID completo no corpo simples/HTML, exige fila exata e registra checkpoints. Nao correlaciona por assunto, circuito ou sequencia. Em 04/11/2026 a integracao OTRS do banco DEV nao esta configurada; portanto, o schema real e a correlacao ponta a ponta continuam sem homologacao.
+
+## Checklist antes da publicacao de Qualidade
+
+- [ ] Comparar migrations do codigo e `showmigrations` no MySQL de destino; revisar cada migration pendente antes de autorizar qualquer aplicacao.
+- [ ] Inventariar arquivos rastreados e nao rastreados, incluindo ECharts 6.1.0 e avisos de licenca; conferir `collectstatic` sem introduzir requisito Node/npm no DEV.
+- [ ] Confirmar a identidade Windows do web/worker e acesso DPAPI no servidor sem copiar credenciais entre usuarios.
+- [ ] Confirmar credencial SMTP nova do ARION OPS e teste de autenticacao sem envio.
+- [ ] Validar roteamento primeiro em caixa controlada; depois autorizar teste individual do To operacional; testar Cc separadamente para detectar duplicidade.
+- [ ] Confirmar leitura somente leitura do schema de artigos, fila exata, checkpoint e correlacao pelo QID do corpo; nao executar FULL para essa validacao.
+- [ ] Preservar `deploy/windows/production_check.py` especifico do servidor e revisar configuracao TLS legada somente para o host aprovado.
+- [ ] Conferir integridade dos registros OQ/TQ existentes, worker, URLs OTRS e staticfiles; nao alterar versao nem publicar antes do teste ponta a ponta aprovado.

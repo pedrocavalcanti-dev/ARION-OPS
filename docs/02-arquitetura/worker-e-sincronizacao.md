@@ -4,6 +4,12 @@
 
 `integration_worker` é uma management command do ARION OPS executada em processo separado do servidor HTTP. Views, middleware e `AppConfig.ready()` não iniciam a sincronização. A web lê o último snapshot local e continua disponível se o worker parar; o dado pode ficar stale.
 
+### Compatibilidade com OTRS MySQL legado
+
+TLS permanece obrigatório para qualquer host remoto por padrão. Um MySQL legado sem suporte a TLS só pode usar o opt-in existente `use_tls=False` + `allow_insecure_remote=True` quando o host também corresponder exatamente a `ARION_OTRS_LEGACY_NO_TLS_HOST`, configurado no ambiente do servidor. Essa exceção temporária não se aplica a CMDB, Brevo, Mapbox ou ao banco principal. O tráfego OTRS nesse modo não é criptografado; prefira restaurar TLS no MySQL ou usar túnel privado e remova a variável e o opt-in após a migração.
+
+Antes de iniciar o worker em produção, configure a integração OTRS com host autorizado, schema, usuário somente leitura e credencial protegida; habilite-a somente após teste operacional autorizado. O worker suspende OTRS Full e a correlação de Qualidade quando a integração está desabilitada ou sem schema/credenciais e não altera automaticamente a configuração. `deploy/windows/production_check.py` é uma configuração local do servidor e não deve ser substituída ao preparar os bundles.
+
 ```powershell
 .venv\Scripts\python.exe arion_geo\gerenciar.py integration_worker
 .venv\Scripts\python.exe arion_geo\gerenciar.py integration_worker --once
@@ -14,14 +20,14 @@
 
 ## Cadências configuradas
 
-O scheduler compara a última execução e o estado sincronizado de cada fonte. FULL OTRS, quando devido, encerra a avaliação daquela passagem e adia FAST; falha agenda retry em 2 minutos; execução RUNNING/PENDING só volta a ser considerada após o prazo de lease. CMDB é avaliado separadamente.
+O scheduler compara a ultima execucao e o estado sincronizado de cada fonte. OTRS FAST/FULL e a correlacao de Qualidade so rodam quando a integracao OTRS esta habilitada. FULL OTRS, quando devido, encerra a avaliacao daquela passagem e adia FAST; falhas aplicam backoff persistido de 2, 4, 8, 16 e ate 30 minutos. Execucao RUNNING/PENDING so volta a ser considerada apos o prazo de lease. CMDB e avaliado separadamente.
 
 | Rotina | Cadência | Trabalho |
 |---|---:|---|
 | OTRS FAST | 2 min | Delta por `ticket.change_time`; janela de segurança de 2 min. |
 | OTRS FULL | 30 min | Reconcilia as quatro filas configuradas para o Cockpit e relações; tem prioridade sobre FAST. Um FULL é antecipado quando a cobertura configurada ainda não foi aplicada. |
 | CMDB FULL | 10 min | Busca Search/Get completa e reconcilia snapshot validado. |
-| Retry de falha | 2 min | Agenda nova tentativa e preserva o mirror atual. |
+| Retry de falha | 2-30 min | Backoff progressivo persistido; preserva o mirror atual e informa a proxima tentativa. |
 
 Primeira carga e reconstrução requerem FULL. O scheduler é verificado em intervalos menores do que as cadências. Horários abaixo mostram somente uma sequência ilustrativa de um ciclo estável; início real depende do processo e não é promessa de minuto civil:
 
@@ -79,6 +85,10 @@ C --> K[Pular esta execução]
 
 Execução sem lease não deve duplicar trabalho. O lease é coordenação, não garantia de exactly-once: services e upserts ainda precisam permanecer idempotentes.
 
+## Correlacao incremental de Qualidade
+
+Quando OTRS esta habilitado, `QualityCorrelationCheckpoint` controla a leitura incremental de artigos nas filas configuradas por `QUALITY_OTRS_QUEUE_NAMES` ou `ARION_QUALITY_OTRS_QUEUE_NAMES`. O worker consulta lotes limitados, procura o QID completo somente no corpo do artigo e guarda o maior ID lido como cursor. Corpos nao sao persistidos. Falhas preservam o cursor e aplicam backoff progressivo; integracao desabilitada suspende a rotina sem registrar uma nova falha.
+
 ## Falha, retry e snapshot
 
 ```mermaid
@@ -97,6 +107,8 @@ Se apply local falha, cursor FAST não avança. Snapshot incompleto ou inválido
 |---|---|---|
 | `IntegrationRun` | Tipo/operação, estado, início/fim, duração, contagens e detalhes sanitizados | Diferencie `SUCCESS`, `PARTIAL` e `FAILED`; uma tentativa recente não prova snapshot recente. |
 | `IntegrationSyncState.last_started_at` | Tentativa mais recente iniciada | Pode ser falha ou execução ainda em curso. |
+| `failure_count`, `last_error_at`, `last_error` | Falhas consecutivas e diagnostico sanitizado | Indicam backoff e proxima tentativa, inclusive quando o comando falha antes de criar `IntegrationRun`. |
+| `QualityCorrelationCheckpoint` | Cursor, ultima leitura, falha e contagem por fila de Qualidade | Nao confunda leitura sem vinculos com uma TQ correlacionada. |
 | `last_success_at` | Último apply bem-sucedido | Freshness geral do último sucesso local. |
 | `last_full_success_at` | Última reconciliação completa bem-sucedida | Confirma quando ocorreu o FULL mais recente. |
 | `change_cursor` | Posição incremental OTRS FAST | Só avança depois do apply local. |
@@ -138,7 +150,7 @@ Não coloque credenciais nos argumentos de shell compartilhado nem em logs.
 | FULL falhou | Confira `IntegrationRun` e erro sanitizado. Validação/consulta falha preserva o mirror anterior; corrija a origem/schema e refaça FULL controlado. |
 | FAST falha por cursor inexistente | É esperado antes do primeiro FULL; o comando recusa avançar sem cursor. Rode FULL autorizado e depois acompanhe `change_cursor`. |
 | Cursor não avança | FAST só persiste watermark após apply local bem-sucedido. Compare hora de término, `last_success_at` e `change_cursor`; dry-run não deve ser interpretado como apply. |
-| OTRS/CMDB indisponível ou retry frequente | Worker agenda nova tentativa após 2 min, mantendo o mirror existente. Confira credencial mascarada, conectividade, timeout, schema/fila ou resposta Search/Get; não coloque secret em log. |
+| OTRS/CMDB indisponível ou retry frequente | Worker aplica backoff progressivo até 30 min, mantendo mirror e cursor. Confira credencial mascarada, conectividade, timeout, schema/fila ou resposta Search/Get; não coloque secret em log. |
 | Tela mostra snapshot stale | Worker vivo não garante leitura recente. Compare último FULL, último sucesso geral, `IntegrationRun` e lease. A aplicação continua usando o último snapshot local. |
 | Relações Ticket–CI incompletas | Compare quantidade de relações atuais e resolvidas para Link; OTRS pode não ter relação válida ou ConfigItem pode não existir no mirror CMDB. Ver [OTRS](..\06-integracoes-e-dados\otrs.md) e [CMDB](..\06-integracoes-e-dados\cmdb.md). |
 

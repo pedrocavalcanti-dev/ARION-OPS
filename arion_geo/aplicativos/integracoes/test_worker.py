@@ -1,13 +1,17 @@
 from datetime import timedelta
 from io import StringIO
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from django.core.management import CommandError
 from django.db import OperationalError
 from django.test import TestCase
 from django.utils import timezone
 
 from aplicativos.integracoes.management.commands.integration_worker import Command
-from aplicativos.integracoes.models import IntegrationLease, IntegrationSyncState
+from aplicativos.integracoes.clients.factory import otrs_configuration_notice
+from aplicativos.integracoes.models import Integration, IntegrationLease, IntegrationRun, IntegrationSyncState
+from aplicativos.qualidade.models import QualityCorrelationCheckpoint
 from aplicativos.integracoes.services.sync_lock import Lease
 
 
@@ -46,6 +50,9 @@ class IntegrationLeaseTests(TestCase):
 class IntegrationWorkerTests(TestCase):
     def setUp(self):
         self.command = Command(stdout=StringIO(), stderr=StringIO())
+        Integration.objects.create(
+            key=Integration.Key.OTRS, name="OTRS", kind="MySQL", enabled=True,
+        )
 
     def test_due_sync_updates_success_without_overwriting_command_cursor(self):
         cursor = timezone.now() - timedelta(minutes=3)
@@ -72,6 +79,67 @@ class IntegrationWorkerTests(TestCase):
         self.assertTrue(self.command._run_due(old_success, None, timedelta(minutes=30), now))
         self.assertTrue(self.command._run_due(stale_running, None, timedelta(minutes=30), now))
         self.assertTrue(self.command._run_due(None, None, timedelta(minutes=30), now))
+
+    def test_persisted_backoff_overrides_old_successful_full_run(self):
+        now = timezone.now()
+        state = IntegrationSyncState.objects.create(
+            key="otrs", last_error_at=now - timedelta(minutes=1), failure_count=1,
+        )
+        old_success = SimpleNamespace(
+            status=IntegrationRun.Status.SUCCESS,
+            finished_at=now - timedelta(hours=4), started_at=now - timedelta(hours=4),
+        )
+        self.assertFalse(self.command._run_due(
+            old_success, now - timedelta(hours=4), timedelta(minutes=30), now, retry_state=state,
+        ))
+        state.last_error_at = now - timedelta(minutes=3)
+        self.assertTrue(self.command._run_due(
+            old_success, now - timedelta(hours=4), timedelta(minutes=30), now, retry_state=state,
+        ))
+
+    def test_backoff_grows_and_is_capped(self):
+        self.assertEqual(self.command._retry_delay(1), timedelta(minutes=2))
+        self.assertEqual(self.command._retry_delay(3), timedelta(minutes=8))
+        self.assertEqual(self.command._retry_delay(10), timedelta(minutes=30))
+
+    def test_command_error_diagnostic_keeps_only_known_code(self):
+        error = CommandError(
+            "Sincronização OTRS cancelada (OTRSTLSHandshakeError: server_tls_unsupported). "
+            "password=hunter2 mysql://user:hunter2@host/db"
+        )
+        summary = self.command._safe_error_summary(error)
+        self.assertEqual(summary, "OTRSTLSHandshakeError code=server_tls_unsupported")
+        self.assertNotIn("hunter2", summary)
+
+    def test_disabled_otrs_skips_otrs_and_quality_jobs(self):
+        Integration.objects.filter(key=Integration.Key.OTRS).update(enabled=False)
+        now = timezone.now()
+        with patch.object(self.command, "_due") as run_job, patch.object(self.command, "_quality_tq_correlation") as correlate:
+            self.command._schedule_once(now)
+        self.assertFalse(any(call.args[0].startswith("otrs") for call in run_job.call_args_list))
+        correlate.assert_not_called()
+
+    def test_enabled_but_incomplete_otrs_configuration_is_reported_and_skipped(self):
+        integration = Integration.objects.get(key=Integration.Key.OTRS)
+        self.assertEqual(
+            otrs_configuration_notice(integration),
+            "OTRS não configurado ou desabilitado neste ambiente.",
+        )
+        now = timezone.now()
+        with patch.object(self.command, "_due") as run_job, patch.object(self.command, "_quality_tq_correlation") as correlate:
+            self.command._schedule_once(now)
+        self.assertFalse(any(call.args[0].startswith("otrs") for call in run_job.call_args_list))
+        correlate.assert_not_called()
+
+    def test_quality_correlation_does_not_record_runtime_error_when_otrs_disabled(self):
+        Integration.objects.filter(key=Integration.Key.OTRS).update(enabled=False)
+        self.command._quality_tq_correlation(timezone.now())
+        self.assertFalse(QualityCorrelationCheckpoint.objects.exists())
+
+    def test_runtime_error_diagnostic_omits_exception_text(self):
+        summary = self.command._safe_error_summary(RuntimeError("article body must not be logged"))
+        self.assertEqual(summary, "RuntimeError · falha sanitizada")
+        self.assertNotIn("article body", summary)
 
     def test_heartbeat_retries_sqlite_database_locked(self):
         class StopAfterTwoIntervals:
@@ -105,3 +173,20 @@ class IntegrationWorkerTests(TestCase):
         self.assertEqual(state.change_cursor, cursor)
         self.assertIn("RuntimeError", state.last_error)
         self.assertIsNotNone(state.last_error_at)
+
+    def test_worker_schedules_quality_correlation_after_full_otrs_pass(self):
+        now = timezone.now()
+        with patch.object(self.command, "_due") as run_job, patch.object(self.command, "_quality_tq_correlation") as correlate:
+            self.command._schedule_once(now)
+        self.assertTrue(any(call.args[0] == "otrs_full" for call in run_job.call_args_list))
+        correlate.assert_called_once_with(now)
+
+    def test_quality_correlation_checkpoint_uses_backoff_after_failure(self):
+        now = timezone.now()
+        checkpoint = QualityCorrelationCheckpoint(
+            queue_name="NOC - QUALIDADE ATACADO", failure_count=2,
+            last_error_at=now - timedelta(minutes=1),
+        )
+        self.assertFalse(Command._quality_checkpoint_due(checkpoint, 120, now))
+        checkpoint.last_error_at = now - timedelta(minutes=5)
+        self.assertTrue(Command._quality_checkpoint_due(checkpoint, 120, now))

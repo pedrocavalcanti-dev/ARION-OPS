@@ -2,9 +2,9 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.db import models
 
-from aplicativos.integracoes.models import CMDBLinkMirror
+from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket
 
-from .models import QualityContact, QualityMonitoringCycle, QualityOrder, QualityTicket
+from .models import QualityContact, QualityMonitoringCycle, QualityOrder, QualityTicket, QualityTreatment
 from .services.contacts import CONTACT_TYPES, ESCALATION_LEVELS
 from aplicativos.integracoes.services.semantics import link_designation
 
@@ -30,7 +30,7 @@ class QualityOrderCreateForm(forms.Form):
     )
     treatment_deadline = forms.DateField(
         required=False, label="Prazo", input_formats=("%Y-%m-%d",),
-        widget=forms.DateInput(attrs={"type": "date"}),
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
     initial_note = forms.CharField(
         required=False, label="Observação inicial", max_length=4000,
@@ -70,7 +70,7 @@ class QualityOrderDetailForm(forms.Form):
     )
     treatment_deadline = forms.DateField(
         required=False, label="Prazo de tratamento", input_formats=("%Y-%m-%d",),
-        widget=forms.DateInput(attrs={"type": "date"}),
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
     internal_notes = forms.CharField(
         required=False, label="Observação interna", max_length=4000,
@@ -124,6 +124,25 @@ class QualityTicketLinkForm(forms.Form):
         widget=forms.TextInput(attrs={"placeholder": "Número do TQ espelhado no OTRS", "autocomplete": "off"}),
     )
     ticket_type = forms.ChoiceField(label="Tipo de vínculo", choices=QualityTicket.TicketType.choices)
+
+
+class QualityTreatmentCreateForm(forms.Form):
+    reason = forms.CharField(
+        label="Motivo da tratativa", max_length=4000,
+        widget=forms.Textarea(attrs={"rows": 3, "maxlength": 4000}),
+    )
+    description = forms.CharField(
+        label="Observações adicionais", required=False, max_length=4000,
+        widget=forms.Textarea(attrs={"rows": 3, "maxlength": 4000}),
+    )
+    support_ticket = forms.ModelChoiceField(
+        queryset=OTRSTicket.objects.none(),
+        required=False, label="Chamado de suporte relacionado", empty_label="Sem chamado relacionado",
+    )
+
+    def __init__(self, *args, support_tickets=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["support_ticket"].queryset = support_tickets if support_tickets is not None else self.fields["support_ticket"].queryset
 
 
 class QualityActionForm(forms.Form):

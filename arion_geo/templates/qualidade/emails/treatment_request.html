@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f2f5f7;color:#26323d;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#f2f5f7;border-collapse:collapse;">
+    <tr><td align="center" style="padding:24px 10px;">
+      <table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;background-color:#ffffff;border:1px solid #e0e6eb;border-collapse:separate;border-spacing:0;">
+        <tr><td style="padding:22px 26px;background-color:#17232e;border-bottom:4px solid #72ad37;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
+            <td style="vertical-align:middle;color:#ffffff;">
+              {% if arion_logo_url %}<img src="{{ arion_logo_url }}" width="150" alt="ARION OPS" style="display:block;width:150px;height:auto;max-width:100%;border:0;margin:0 0 7px;">{% else %}<strong style="display:block;font-size:21px;letter-spacing:1px;color:#ffffff;">ARION OPS</strong>{% endif %}
+              <span style="font-size:11px;letter-spacing:1.2px;color:#c4d0d9;">QUALIDADE OPERACIONAL</span>
+            </td>
+            <td align="right" style="vertical-align:middle;color:#ffffff;font-size:11px;line-height:1.5;">NOC ATACADO<br><span style="color:#bdc8d1;">GESTÃO DA QUALIDADE</span></td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="padding:24px 26px 18px;">
+          <p style="margin:0 0 13px;padding:12px 14px;border:1px solid #dce8d2;background-color:#f4f8f0;color:#315d1c;font-size:13px;line-height:1.5;font-weight:bold;">ENCAMINHAMENTO SOLICITADO: NOC - QUALIDADE ATACADO</p>
+          <p style="margin:0 0 7px;color:#6c7c89;font-size:10px;font-weight:bold;letter-spacing:1.1px;">SOLICITAÇÃO TÉCNICA</p>
+          <h1 style="margin:0;color:#17232e;font-size:21px;line-height:1.3;font-weight:700;">SOLICITAÇÃO DE TRATATIVA DE QUALIDADE</h1>
+          <p style="margin:12px 0 0;"><span style="display:inline-block;padding:6px 10px;border:1px solid #dce8d2;background-color:#f4f8f0;color:#315d1c;font-size:13px;font-weight:bold;">{{ treatment.code }}</span></p>
+        </td></tr>
+        <tr><td style="padding:0 26px 19px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;border-top:1px solid #e8edf0;border-bottom:1px solid #e8edf0;">
+            <tr><td style="padding:12px 8px 12px 0;vertical-align:middle;">
+              <span style="display:block;margin-bottom:4px;color:#7a8791;font-size:10px;font-weight:bold;letter-spacing:.8px;">CLIENTE / PROJETO</span>
+              {% if client_logo_url %}<img src="{{ client_logo_url }}" width="76" alt="Identificação visual de {{ project }}" style="display:inline-block;max-width:76px;max-height:32px;vertical-align:middle;border:0;margin-right:7px;">{% else %}<span aria-hidden="true" style="display:inline-block;width:21px;height:21px;margin-right:6px;border-radius:50%;background-color:#edf2e8;color:#4d762d;text-align:center;line-height:21px;font-size:12px;font-weight:bold;vertical-align:middle;">{{ project|slice:":1"|upper }}</span>{% endif %}
+              <strong style="color:#26323d;font-size:13px;vertical-align:middle;">{{ client }}{% if project and project != client %} &middot; {{ project }}{% endif %}</strong>
+            </td><td align="right" style="padding:12px 0;vertical-align:middle;color:#5b6873;font-size:12px;line-height:1.5;word-break:break-word;">{{ designation }}</td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 19px;">
+          <h2 style="margin:0 0 9px;color:#24313b;font-size:14px;line-height:1.4;">Identificação da tratativa</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;">
+            <tr><td width="42%" style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Ordem de Qualidade</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;font-weight:bold;">{{ order.code }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Circuito / designação</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;word-break:break-word;">{{ designation }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Operadora</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;">{{ operator }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">ISP / provedor</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;">{{ provider }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Solicitada em</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;">{{ request_date|date:"d/m/Y H:i" }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Responsável pela OQ</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;">{{ owner }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Responsável pela TQ</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;">{{ treatment_owner }}</td></tr>
+            <tr><td style="padding:7px 9px 7px 0;border-bottom:1px solid #edf0f2;color:#71808b;font-size:11px;">Prioridade</td><td style="padding:7px 0;border-bottom:1px solid #edf0f2;color:#26323d;font-size:12px;">{{ priority }}</td></tr>
+            <tr><td style="padding:7px 9px 0 0;color:#71808b;font-size:11px;">Situação conhecida</td><td style="padding:7px 0 0;color:#26323d;font-size:12px;">{{ operational_state }}</td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 19px;">
+          <h2 style="margin:0 0 9px;color:#24313b;font-size:14px;line-height:1.4;">Histórico operacional</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background-color:#f7f9fa;">
+            <tr><td style="padding:12px 13px;color:#374550;font-size:12px;line-height:1.6;">
+              <strong>{{ valid_occurrence_count }}</strong> ocorrências válidas &middot; <strong>{{ recurrence_count }}</strong> reincidências{% if same_cause_count %} &middot; {{ same_cause_count }} com mesma causa confirmada{% endif %}<br>
+              Primeira ocorrência relevante: {% if first_occurrence %}{{ first_occurrence|date:"d/m/Y H:i" }}{% else %}não informada{% endif %}<br>
+              Última ocorrência: {% if latest_occurrence %}{{ latest_occurrence|date:"d/m/Y H:i" }}{% else %}não informada{% endif %}<br>
+              Chamado de suporte relacionado: {% if support_ticket != "Não informado" %}{{ support_ticket }} ({{ support_ticket_state }}){% else %}não informado{% endif %}
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 19px;">
+          <h2 style="margin:0 0 8px;color:#24313b;font-size:14px;line-height:1.4;">Contexto da solicitação</h2>
+          <p style="margin:0;color:#42515c;font-size:12px;line-height:1.65;">{{ reason_context|linebreaksbr }}</p>
+        </td></tr>
+        <tr><td style="padding:0 26px 20px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;border-left:4px solid #df8a37;background-color:#fff8f0;">
+            <tr><td style="padding:15px 16px;">
+              <h2 style="margin:0 0 8px;color:#27343e;font-size:14px;line-height:1.4;">Solicitações à operadora</h2>
+              <ol style="margin:0;padding-left:19px;color:#42515c;font-size:12px;line-height:1.65;">{% for action in requested_actions %}<li style="padding:0 0 4px 2px;">{{ action }}</li>{% endfor %}</ol>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 19px;">
+          <p style="margin:0 0 9px;padding:12px 13px;border:1px solid #e5e9ed;background-color:#f7f9fa;color:#42515c;font-size:12px;line-height:1.6;">{{ quality_purpose }}</p>
+          <p style="margin:0;color:#71808b;font-size:10px;line-height:1.5;">{{ quality_routing_notice }}</p>
+        </td></tr>
+        <tr><td style="padding:0 26px 20px;">
+          <p style="margin:0;padding:12px 0;border-top:1px solid #e8edf0;border-bottom:1px solid #e8edf0;color:#52616c;font-size:11px;line-height:1.6;">{{ quality_followup }}</p>
+        </td></tr>
+        <tr><td style="padding:16px 26px;background-color:#f5f7f8;border-top:1px solid #e6ebee;">
+          <p style="margin:0 0 6px;color:#64727d;font-size:10px;font-weight:bold;letter-spacing:.8px;">CONTROLE AUTOMÁTICO &middot; ARION OPS</p>
+          <p style="margin:0;color:#53616c;font-size:11px;">ID de correlação ARION OPS: <strong style="color:#26323d;">{{ treatment.correlation_id }}</strong></p>
+          <p style="margin:5px 0 0;color:#82909a;font-size:10px;line-height:1.5;">Identificador usado para localizar o artigo no OTRS e vincular o ticket a esta TQ.</p>
+        </td></tr>
+      </table>
+      <p style="margin:12px 0 0;color:#98a3aa;font-size:10px;line-height:1.4;">ARION OPS — Qualidade Operacional &middot; Desenvolvido por Pedro Cavalcanti</p>
+    </td></tr>
+  </table>
+</body>
+</html>

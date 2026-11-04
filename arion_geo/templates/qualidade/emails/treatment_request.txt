@@ -1,0 +1,45 @@
+ARION OPS - QUALIDADE OPERACIONAL
+ENCAMINHAMENTO SOLICITADO: NOC - QUALIDADE ATACADO
+
+{{ quality_purpose }}
+{{ quality_routing_notice }}
+
+SOLICITAÇÃO DE TRATATIVA DE QUALIDADE
+TQ: {{ treatment.code }}
+OQ: {{ order.code }}
+
+IDENTIFICAÇÃO DO CIRCUITO
+Designação: {{ designation }}
+Cliente: {{ client }}
+Projeto/contrato: {{ project }}
+Operadora: {{ operator }}
+ISP/provedor: {{ provider }}
+Solicitada em: {{ request_date|date:"d/m/Y H:i" }}
+Responsável pela OQ: {{ owner }}
+Responsável pela TQ: {{ treatment_owner }}
+Prioridade: {{ priority }}
+Situação conhecida: {{ operational_state }}
+
+HISTÓRICO OPERACIONAL
+Ocorrências válidas: {{ valid_occurrence_count }}
+Reincidências: {{ recurrence_count }}
+Mesma causa confirmada: {{ same_cause_count }}
+Primeira ocorrência relevante: {% if first_occurrence %}{{ first_occurrence|date:"d/m/Y H:i" }}{% else %}não informada{% endif %}
+Última ocorrência: {% if latest_occurrence %}{{ latest_occurrence|date:"d/m/Y H:i" }}{% else %}não informada{% endif %}
+Chamado de suporte relacionado: {% if support_ticket != "Não informado" %}{{ support_ticket }} ({{ support_ticket_state }}){% else %}não informado{% endif %}
+
+CONTEXTO DA SOLICITAÇÃO
+{{ reason_context }}
+
+SOLICITAÇÕES À OPERADORA
+{% for action in requested_actions %}{{ forloop.counter }}. {{ action }}
+{% endfor %}
+
+{{ quality_followup }}
+
+CONTROLE AUTOMÁTICO - ARION OPS
+ID de correlação ARION OPS: {{ treatment.correlation_id }}
+Identificador usado para localizar o artigo no OTRS e vincular o ticket a esta TQ.
+
+ARION OPS - Qualidade Operacional
+Desenvolvido por Pedro Cavalcanti

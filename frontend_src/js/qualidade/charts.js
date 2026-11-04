@@ -1,10 +1,3 @@
-import * as echarts from "echarts/core";
-import { BarChart, LineChart, PieChart } from "echarts/charts";
-import { AriaComponent, GraphicComponent, GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
-import { CanvasRenderer } from "echarts/renderers";
-
-echarts.use([BarChart, LineChart, PieChart, AriaComponent, GraphicComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
-
 const instances = new Map();
 let observer = null;
 let resizeHandler = null;
@@ -158,6 +151,14 @@ export function mountQualityCharts(payload) {
   ];
 
   const render = () => {
+    const echarts = window.echarts;
+    if (!echarts || typeof echarts.init !== "function") {
+      for (const [, element] of specs) {
+        if (element) element.setAttribute("aria-label", "Biblioteca de gráficos indisponível.");
+      }
+      console.error("A distribuição local do ECharts não foi carregada.");
+      return;
+    }
     for (const [key, element, buildOption, data] of specs) {
       if (!element || !data) continue;
       if (element.clientWidth <= 0 || element.clientHeight <= 0) continue;
@@ -179,12 +180,15 @@ export function mountQualityCharts(payload) {
   };
 
   if ("ResizeObserver" in window) observer = new ResizeObserver(entries => entries.forEach(entry => {
-    const chart = echarts.getInstanceByDom(entry.target);
-    if (chart) chart.resize();
+    const chart = window.echarts?.getInstanceByDom(entry.target);
+    if (chart) chart.resize({ width: entry.target.clientWidth, height: entry.target.clientHeight });
     else render();
   }));
   else {
-    resizeHandler = () => instances.forEach(chart => chart.resize());
+    resizeHandler = () => instances.forEach((chart, key) => {
+      const element = specs.find(([specKey]) => specKey === key)?.[1];
+      if (element) chart.resize({ width: element.clientWidth, height: element.clientHeight });
+    });
     window.addEventListener("resize", resizeHandler, { passive: true });
   }
   for (const [, element] of specs) if (element) observer?.observe(element);

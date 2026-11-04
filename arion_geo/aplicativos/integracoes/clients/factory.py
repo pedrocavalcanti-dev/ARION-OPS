@@ -4,6 +4,18 @@ from .otrs import OTRSReadOnlyClient
 from ..services.errors import OTRSCredentialDecryptionError, OTRSCredentialMissingError
 from ..services.secrets import get_secret_protector
 
+OTRS_CONFIGURATION_NOTICE = "OTRS não configurado ou desabilitado neste ambiente."
+
+
+def otrs_configuration_notice(integration):
+    """Return the operator-facing notice when a read-only OTRS job cannot run."""
+    if not integration or not integration.enabled:
+        return OTRS_CONFIGURATION_NOTICE
+    config = normalize_otrs_config(integration.config)
+    if not config["host"] or not config["database"] or not integration.username or not integration.secret_ciphertext:
+        return OTRS_CONFIGURATION_NOTICE
+    return ""
+
 
 def normalize_otrs_config(config):
     """Normalize persisted OTRS config, treating null/missing TLS fields safely."""

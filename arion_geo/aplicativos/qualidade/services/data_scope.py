@@ -10,8 +10,10 @@ class QualityDataScopeService:
     """Adapt the existing CMDB scope to Quality Orders; missing scope fails closed."""
 
     @staticmethod
-    def orders_for(user, queryset=None):
+    def orders_for(user, queryset=None, *, include_archived=False):
         queryset = queryset if queryset is not None else QualityOrder.objects.all()
+        if not include_archived:
+            queryset = queryset.filter(archived_at__isnull=True)
         if user.is_authenticated and user.is_superuser:
             return queryset
         if DataScopeService.is_global(user):

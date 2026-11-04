@@ -22,7 +22,7 @@ ALL_ACCESS_PERMISSIONS = MODULE_PERMISSIONS + ADMIN_PERMISSIONS
 REPORTS_PERMISSIONS = ("view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "finalize_with_pending", "reopen_treatments", "export_treatments", "delete_penaltycompetence", "delete_finalized_penaltycompetence")
 
 ROLE_PERMISSIONS = {
-    GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS,
+GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS + ("delete_qualityorder",),
 GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality", "manage_quality_orders", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
 GROUP_ANALYST: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality"),
 GROUP_AUDITOR: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_audit_log"),
@@ -60,6 +60,7 @@ PERMISSION_LABELS = {
     "view_ari": ("ARI I.A", "Acessar a experiência em modo Preview"),
     "view_quality": ("Qualidade", "Visualizar Qualidade Operacional"),
     "manage_quality_orders": ("Qualidade", "Gerenciar Ordens de Qualidade"),
+    "delete_qualityorder": ("Qualidade", "Arquivar Ordens de Qualidade"),
 }
 
 
@@ -72,7 +73,7 @@ def managed_permissions(using="default"):
     return Permission.objects.using(using).filter(
         models.Q(content_type=content_type, codename__in=ALL_ACCESS_PERMISSIONS)
         | models.Q(content_type=report_content_type, codename__in=REPORTS_PERMISSIONS)
-        | models.Q(content_type=quality_content_type, codename__in=("view_quality", "manage_quality_orders"))
+        | models.Q(content_type=quality_content_type, codename__in=("view_quality", "manage_quality_orders", "delete_qualityorder"))
     )
 
 

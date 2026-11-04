@@ -1,14 +1,16 @@
 """Local links to OTRS treatment tickets and the Quality checklist."""
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.chamados.services import otrs_ticket_url
-from aplicativos.integracoes.models import OTRSTicket, OTRSTicketConfigItem, OTRSStateMapping
+from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket, OTRSTicketConfigItem, OTRSStateMapping
+from aplicativos.integracoes.services.analytics import TicketQueryService
 
-from ..models import QualityAction, QualityAuditEvent, QualityOrder, QualityTicket
+from ..models import QualityAction, QualityAuditEvent, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
 from .data_scope import QualityDataScopeService
+from aplicativos.configuracoes.data_scope import DataScopeService
 
 
 DEFAULT_ACTIONS = (
@@ -20,11 +22,120 @@ DEFAULT_ACTIONS = (
     "Liberar para monitoramento RREIP",
 )
 
+
+def quality_treatment_creation_blocker(order):
+    active = QualityTreatment.objects.filter(
+        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
+    ).order_by("-created_at", "-pk").first()
+    if active:
+        return f"Esta OQ j\u00e1 possui uma tratativa ativa: {active.code}."
+    previous = QualityTreatment.objects.filter(quality_order=order).order_by("-created_at", "-pk").first()
+    if not previous:
+        return ""
+    if previous.status not in {QualityTreatment.Status.COMPLETED, QualityTreatment.Status.RECURRENCE} or not previous.completed_at:
+        return f"A TQ {previous.code} ainda n\u00e3o foi conclu\u00edda formalmente."
+    if not QualityOccurrence.objects.filter(
+        quality_order=order, excluded=False, counts_as_recurrence=True,
+        occurred_at__gte=previous.completed_at,
+    ).exists():
+        return f"A TQ {previous.code} foi conclu\u00edda. Registre uma nova reincid\u00eancia v\u00e1lida antes de abrir outro ciclo."
+    return ""
+
 OPEN_BUSINESS_STATES = {
     OTRSStateMapping.BusinessStatus.OPEN,
     OTRSStateMapping.BusinessStatus.PENDING,
     OTRSStateMapping.BusinessStatus.SCHEDULED,
 }
+
+
+def support_tickets_for_order(user, order):
+    """Return only active, mirrored support tickets for this in-scope OQ circuit."""
+    scoped_links = DataScopeService.filter_queryset(
+        user, CMDBLinkMirror.objects.filter(is_present_in_source=True),
+    )
+    link = scoped_links.filter(source_config_item_id=order.link_id).first() if order.link_id else None
+    if not link:
+        return OTRSTicket.objects.none()
+    relation_ids = OTRSTicketConfigItem.objects.filter(
+        cmdb_link=link, config_item_id=order.ci_snapshot or order.link_id,
+        is_present_in_source=True,
+    ).order_by().values("ticket_id")
+    return TicketQueryService.business_open(user, links=scoped_links).filter(
+        pk__in=relation_ids,
+    ).order_by("-source_created_at", "-external_id")
+
+
+@transaction.atomic
+def create_quality_treatment(*, quality_order, reason, description="", support_ticket=None, actor=None, request=None):
+    order = _lock_visible_order(quality_order, actor)
+    if order.status == QualityOrder.Status.CANCELADA:
+        raise ValidationError("Não é possível gerar TQ para uma OQ cancelada.")
+    existing = QualityTreatment.objects.filter(
+        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
+    ).first()
+    if existing:
+        raise ValidationError(f"Esta Ordem de Qualidade já possui uma tratativa ativa: {existing.code}.")
+
+    creation_blocker = quality_treatment_creation_blocker(order)
+    if creation_blocker:
+        raise ValidationError(creation_blocker)
+
+    reason = " ".join(str(reason or "").split())[:4000]
+    description = " ".join(str(description or "").split())[:4000]
+    if not reason:
+        raise ValidationError("Informe o motivo da tratativa.")
+    if support_ticket is not None:
+        authorized_ticket = support_tickets_for_order(actor, order).filter(pk=support_ticket.pk).first()
+        if not authorized_ticket:
+            raise ValidationError("O chamado selecionado não está ativo ou fora do escopo desta OQ.")
+        support_ticket = authorized_ticket
+
+    try:
+        with transaction.atomic():
+            treatment = QualityTreatment.objects.create(
+                quality_order=order,
+                support_ticket=support_ticket,
+                support_ticket_external_id_snapshot=support_ticket.external_id if support_ticket else None,
+                support_ticket_number=support_ticket.ticket_number if support_ticket else "",
+                support_ticket_state_snapshot=support_ticket.external_state_name if support_ticket else "",
+                support_ticket_opened_at=support_ticket.source_created_at if support_ticket else None,
+                operational_state_snapshot="UNCONFIRMED",
+                reason=reason,
+                description=description,
+                owner=order.owner,
+                created_by=actor,
+                status=QualityTreatment.Status.PENDING_SEND,
+                send_status=QualityTreatment.SendStatus.NOT_SENT,
+            )
+    except IntegrityError:
+        existing = QualityTreatment.objects.filter(
+            quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
+        ).first()
+        if existing:
+            raise ValidationError(f"Esta Ordem de Qualidade já possui uma tratativa ativa: {existing.code}.") from None
+        raise
+
+    if order.status == QualityOrder.Status.CONCLUIDA:
+        order.status = QualityOrder.Status.TRATAMENTO
+        order.completed_at = None
+        order.save(update_fields=("status", "completed_at", "updated_at"))
+    description_text = f"Tratativa {treatment.code} criada para {order.code}."
+    if support_ticket:
+        description_text += f" Chamado de suporte relacionado: {support_ticket.ticket_number}."
+    QualityAuditEvent.objects.create(
+        quality_order=order,
+        event_type=QualityAuditEvent.EventType.TREATMENT_CREATED,
+        actor=actor,
+        description=description_text,
+        metadata={"treatment_code": treatment.code, "support_ticket_number": treatment.support_ticket_number},
+    )
+    AuditService.record(
+        request=request, user=actor, category="QUALITY", action="TREATMENT_CREATED",
+        module="Qualidade", description=description_text, obj=order,
+        metadata={"code": order.code, "treatment_code": treatment.code,
+                  "support_ticket_number": treatment.support_ticket_number},
+    )
+    return treatment
 
 
 @transaction.atomic

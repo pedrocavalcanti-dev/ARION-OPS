@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import ssl
 
+from django.conf import settings
+
 from aplicativos.integracoes.services.errors import (
     IntegrationError,
     IntegrationNotConfigured,
@@ -73,6 +75,7 @@ class OTRSReadOnlyClient:
         self.ssl_ca = str(ssl_ca or os.getenv("ARION_OTRS_SSL_CA") or "").strip()
         self.ssl_verify = True if ssl_verify is None else bool(ssl_verify)
         self.allow_insecure_remote = False if allow_insecure_remote is None else bool(allow_insecure_remote)
+        self.legacy_no_tls_host = str(getattr(settings, "OTRS_LEGACY_NO_TLS_HOST", "") or "").strip().casefold()
         self.connection_factory = connection_factory
         self._active_connection = None
         self.select_queries_count = 0
@@ -180,6 +183,123 @@ class OTRSReadOnlyClient:
                     raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
         return [dict(row) if isinstance(row, dict) else row for row in rows]
 
+    def fetch_quality_articles(self, queue_name, *, after_article_id=0, limit=100):
+        """Read a bounded batch of article bodies only for one exact queue.
+
+        This is intentionally separate from execute_select: article contents are
+        sensitive and are exposed only transiently to the QID parser.
+        """
+        queue_name = str(queue_name or "").strip()
+        if not queue_name:
+            raise OTRSDatabaseError()
+        try:
+            after_article_id = max(0, int(after_article_id))
+            limit = max(1, min(int(limit), 200))
+        except (TypeError, ValueError):
+            raise OTRSDatabaseError() from None
+        columns = self.get_all_columns()
+        schema = {}
+        for row in columns:
+            table = str(self._row_value(row, "TABLE_NAME") or "").casefold()
+            column = str(self._row_value(row, "COLUMN_NAME") or "")
+            if table and column:
+                schema.setdefault(table, set()).add(column.casefold())
+        required = {
+            "queue": {"id", "name"},
+            "ticket": {"id", "tn", "queue_id", "ticket_state_id"},
+            "ticket_state": {"id", "name"},
+            "article": {"id", "ticket_id"},
+            "article_data_mime": {"article_id", "a_body"},
+        }
+        if any(not names.issubset(schema.get(table, set())) for table, names in required.items()):
+            raise OTRSDatabaseError()
+
+        queue_rows = self.execute_select(
+            "SELECT id AS queue_id FROM queue WHERE name = %s LIMIT 2", (queue_name,),
+        )
+        if len(queue_rows) != 1:
+            raise OTRSDatabaseError()
+        queue_id = self._row_value(queue_rows[0], "queue_id")
+        sql = (
+            "SELECT a.id AS article_id, t.id AS ticket_id, t.tn AS ticket_number, "
+            "t.queue_id AS queue_id, q.name AS queue_name, t.ticket_state_id AS state_id, "
+            "ts.name AS state_name, m.a_body AS article_body "
+            "FROM article a INNER JOIN ticket t ON t.id = a.ticket_id "
+            "INNER JOIN queue q ON q.id = t.queue_id "
+            "INNER JOIN ticket_state ts ON ts.id = t.ticket_state_id "
+            "INNER JOIN article_data_mime m ON m.article_id = a.id "
+            "WHERE t.queue_id = %s AND a.id > %s ORDER BY a.id ASC LIMIT %s"
+        )
+        self.select_queries_count += 1
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                try:
+                    cursor.execute(sql, (queue_id, after_article_id, limit))
+                    rows = cursor.fetchall()
+                except Exception as exc:
+                    raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
+        return [dict(row) if isinstance(row, dict) else row for row in rows]
+
+    def find_quality_ticket_article_by_qid(self, ticket_number, correlation_id, *, limit=20):
+        """Bounded read-only reconciliation lookup by ticket number and exact body QID."""
+        ticket_number = str(ticket_number or "").strip()
+        correlation_id = str(correlation_id or "").strip().upper()
+        if (not ticket_number or len(ticket_number) > 80
+                or not re.fullmatch(r"ARION-QID-[0-9A-F]{32}", correlation_id)):
+            raise OTRSDatabaseError()
+        limit = max(1, min(int(limit), 20))
+        sql = (
+            "SELECT a.id AS article_id, a.create_time AS article_time, t.id AS ticket_id, t.tn AS ticket_number, "
+            "t.queue_id AS queue_id, q.name AS queue_name, t.ticket_state_id AS state_id, "
+            "ts.name AS state_name, m.a_body AS article_body "
+            "FROM article a INNER JOIN ticket t ON t.id = a.ticket_id "
+            "INNER JOIN queue q ON q.id = t.queue_id "
+            "INNER JOIN ticket_state ts ON ts.id = t.ticket_state_id "
+            "INNER JOIN article_data_mime m ON m.article_id = a.id "
+            "WHERE t.tn = %s AND m.a_body LIKE %s ORDER BY a.id ASC LIMIT %s"
+        )
+        self.select_queries_count += 1
+        with self._connection() as connection:
+            with connection.cursor() as cursor:
+                try:
+                    cursor.execute(sql, (ticket_number, f"%{correlation_id}%", limit))
+                    rows = cursor.fetchall()
+                except Exception as exc:
+                    raise self._mapped_error(exc, redact_values=(self.password, self.username)) from None
+        return [dict(row) if isinstance(row, dict) else row for row in rows]
+
+    def fetch_quality_ticket_states(self, ticket_ids, *, queue_names, limit=200):
+        """Refresh metadata for already linked tickets, without reading articles."""
+        ids = tuple(dict.fromkeys(int(value) for value in ticket_ids if int(value) > 0))
+        names = tuple(dict.fromkeys(str(value).strip() for value in queue_names if str(value).strip()))
+        limit = max(1, min(int(limit), 200))
+        if not ids or not names:
+            return []
+        columns = self.get_all_columns()
+        schema = {}
+        for row in columns:
+            table = str(self._row_value(row, "TABLE_NAME") or "").casefold()
+            column = str(self._row_value(row, "COLUMN_NAME") or "")
+            if table and column:
+                schema.setdefault(table, set()).add(column.casefold())
+        required = {
+            "queue": {"id", "name"}, "ticket": {"id", "tn", "queue_id", "ticket_state_id"},
+            "ticket_state": {"id", "name"},
+        }
+        if any(not fields.issubset(schema.get(table, set())) for table, fields in required.items()):
+            raise OTRSDatabaseError()
+        id_marks = ",".join(["%s"] * min(len(ids), limit))
+        sql = (
+            "SELECT t.id AS ticket_id, t.tn AS ticket_number, t.queue_id AS queue_id, "
+            "q.name AS queue_name, t.ticket_state_id AS state_id, ts.name AS state_name "
+            "FROM ticket t INNER JOIN queue q ON q.id = t.queue_id "
+            "INNER JOIN ticket_state ts ON ts.id = t.ticket_state_id "
+            f"WHERE t.id IN ({id_marks}) LIMIT %s"
+        )
+        # Query the exact linked IDs across queues. Absence from this bounded
+        # lookup can then be recorded as unavailable; queue changes remain visible.
+        return self.execute_select(sql, (*ids[:limit], limit))
+
     @contextmanager
     def read_only_session(self):
         """Reuse one read-only connection across a sequential study run."""
@@ -257,12 +377,16 @@ class OTRSReadOnlyClient:
     def _build_ssl_context(self):
         if not self.is_loopback_host:
             if not self.use_tls:
-                if not self.allow_insecure_remote:
+                if (
+                    not self.allow_insecure_remote
+                    or not self.legacy_no_tls_host
+                    or self.host.casefold() != self.legacy_no_tls_host
+                ):
                     raise OTRSTLSRequiredError(
                         error_code="tls_policy_required",
                         technical_detail=(
-                            "Política TLS obrigatória para host remoto (use_tls=False); "
-                            "habilite TLS com verificação de certificado ou conecte via túnel local em 127.0.0.1."
+                            "Transporte sem TLS exige opt-in explícito e correspondência ao host legado autorizado; "
+                            "habilite TLS verificado ou utilize o túnel local configurado."
                         ),
                     )
                 logger.warning(

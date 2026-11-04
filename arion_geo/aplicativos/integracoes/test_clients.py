@@ -2,6 +2,7 @@ import json
 import ssl
 from unittest import TestCase
 from unittest.mock import Mock
+from django.test import override_settings
 
 from aplicativos.integracoes.clients.cmdb import CMDBClient
 from aplicativos.integracoes.clients.factory import normalize_otrs_config
@@ -394,15 +395,16 @@ class OTRSReadOnlyClientTests(TestCase):
         with self.assertRaises(OTRSTLSRequiredError):
             remote_tls_unverified_with_legacy_flag._build_ssl_context()
 
-        remote_legacy_opt_in = OTRSReadOnlyClient(
-            host="200.174.198.133",
-            username="secret-user",
-            password="secret-password",
-            use_tls=False,
-            allow_insecure_remote=True,
-        )
-        with self.assertLogs("aplicativos.integracoes.clients.otrs", level="WARNING") as captured_logs:
-            self.assertIsNone(remote_legacy_opt_in._build_ssl_context())
+        with override_settings(OTRS_LEGACY_NO_TLS_HOST="200.174.198.133"):
+            remote_legacy_opt_in = OTRSReadOnlyClient(
+                host="200.174.198.133",
+                username="secret-user",
+                password="secret-password",
+                use_tls=False,
+                allow_insecure_remote=True,
+            )
+            with self.assertLogs("aplicativos.integracoes.clients.otrs", level="WARNING") as captured_logs:
+                self.assertIsNone(remote_legacy_opt_in._build_ssl_context())
         joined_logs = " ".join(captured_logs.output)
         self.assertIn(
             "OTRS remoto usando transporte MySQL sem TLS por configuração explícita de compatibilidade legada.",
@@ -410,6 +412,14 @@ class OTRSReadOnlyClientTests(TestCase):
         )
         self.assertNotIn("secret-user", joined_logs)
         self.assertNotIn("secret-password", joined_logs)
+
+        unauthorized_legacy_host = OTRSReadOnlyClient(
+            host="other.example", username="reader", password="private", use_tls=False,
+            allow_insecure_remote=True,
+        )
+        with override_settings(OTRS_LEGACY_NO_TLS_HOST="200.174.198.133"):
+            with self.assertRaises(OTRSTLSRequiredError):
+                unauthorized_legacy_host._build_ssl_context()
 
         remote_default = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private"

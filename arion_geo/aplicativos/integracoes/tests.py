@@ -10,12 +10,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from aplicativos.auditoria.models import AuditEvent
 from .forms import OTRSConfigurationForm
-from .models import Integration, IntegrationRun, IntegrationSyncState
+from .models import ExternalAPIHealthCheck, ExternalAPIIntegration, Integration, IntegrationRun, IntegrationSyncState
+from .clients.brevo_smtp import SMTPResult
 from .services.errors import (
     OTRSAuthenticationError,
     OTRSCredentialDecryptionError,
@@ -42,6 +44,7 @@ class IntegrationPermissionTests(TestCase):
         self.assertEqual(self.client.post(reverse("configuracoes:integracoes:arion-test"), {
             "engine": "sqlite", "database": "arion.sqlite3",
         }).status_code, 403)
+        self.assertEqual(self.client.post(reverse("configuracoes:integracoes:brevo-routing-test"), {}).status_code, 403)
 
     def test_view_permission_does_not_grant_manage_or_run(self):
         user = get_user_model().objects.create_user(username="integration-viewer", password="safe-password-1")
@@ -67,6 +70,88 @@ class IntegrationConfigurationTests(TestCase):
         self.user = get_user_model().objects.create_superuser(username="integration-admin", email="admin@example.com", password="safe-password-1")
         self.client.force_login(self.user)
         self.protector = TestSecretProtector()
+
+    def test_operational_routing_test_requires_separate_admin_preapproval(self):
+        integration = ExternalAPIIntegration.objects.create(
+            provider=ExternalAPIIntegration.Provider.BREVO, name="Brevo", enabled=True,
+            smtp_secret_ciphertext="protected", config={
+                "send_method": "smtp", "smtp_login": "login", "sender_email": "noc@example.test",
+                "quality_recipient": "quality-queue@example.test",
+                "routing_test_recipient": "quality-queue@example.test",
+            },
+        )
+        test_id = self.client.get(reverse("configuracoes:integracoes:brevo")).context["routing_test_id"]
+        post = {"routing_test_id": test_id, "confirm_routing_test": "yes"}
+        with patch("aplicativos.integracoes.views.decrypt_external_api_smtp_secret", return_value="secret"), patch(
+            "aplicativos.integracoes.clients.brevo_smtp.send_brevo_smtp",
+        ) as mocked_send:
+            self.client.post(reverse("configuracoes:integracoes:brevo-routing-test"), post)
+            mocked_send.assert_not_called()
+            integration.config["routing_operational_test_approved"] = True
+            integration.save(update_fields=("config", "updated_at"))
+            mocked_send.return_value = SMTPResult(True, "accepted", latency_ms=9)
+            response = self.client.post(reverse("configuracoes:integracoes:brevo-routing-test"), post)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(mocked_send.call_count, 1)
+        self.assertEqual(mocked_send.call_args.kwargs["config"]["quality_cc"], "")
+        self.assertFalse(integration.config.get("quality_recipient_validated", False))
+        self.assertEqual(ExternalAPIHealthCheck.objects.filter(integration=integration).count(), 1)
+
+    def test_confirmed_routing_homologation_isolated_and_idempotent(self):
+        integration = ExternalAPIIntegration.objects.create(
+            provider=ExternalAPIIntegration.Provider.BREVO, name="Brevo", enabled=True,
+            smtp_secret_ciphertext="protected", config={
+                "send_method": "smtp", "smtp_login": "login", "sender_name": "ARION OPS",
+                "sender_email": "noc@example.test", "quality_recipient": "operational@example.test",
+                "quality_cc": "cc@example.test", "reply_to": "reply@example.test",
+                "routing_test_recipient": "controlled@example.test",
+            },
+        )
+        page = self.client.get(reverse("configuracoes:integracoes:brevo"))
+        self.assertEqual(page.status_code, 200)
+        test_id = page.context["routing_test_id"]
+        post = {
+            "routing_test_id": test_id,
+            "confirm_routing_test": "yes",
+        }
+        with patch("aplicativos.integracoes.views.decrypt_external_api_smtp_secret", return_value="secret"), patch(
+            "aplicativos.integracoes.clients.brevo_smtp.send_brevo_smtp",
+            return_value=SMTPResult(True, "accepted", latency_ms=12),
+        ) as mocked_send:
+            response = self.client.post(reverse("configuracoes:integracoes:brevo-routing-test"), post)
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(self.client.post(reverse("configuracoes:integracoes:brevo-routing-test"), post).status_code, 302)
+        self.assertEqual(mocked_send.call_count, 1)
+        call_config = mocked_send.call_args.kwargs["config"]
+        self.assertEqual(call_config["quality_recipient"], "controlled@example.test")
+        self.assertEqual(call_config["quality_cc"], "")
+        self.assertEqual(call_config["reply_to"], "")
+        self.assertIn("HOMOLOGA", mocked_send.call_args.kwargs["subject"])
+        self.assertIn(test_id, mocked_send.call_args.kwargs["text_content"])
+        self.assertNotIn("ARION-QID-", mocked_send.call_args.kwargs["text_content"])
+        self.assertEqual(ExternalAPIHealthCheck.objects.filter(integration=integration).count(), 1)
+        check = ExternalAPIHealthCheck.objects.get(integration=integration)
+        self.assertEqual(check.status, ExternalAPIHealthCheck.Status.SUCCESS)
+        self.assertIn(test_id, check.message)
+        self.assertNotIn("controlled@example.test", check.message)
+        self.assertFalse(integration.config.get("quality_recipient_validated", False))
+
+    def test_routing_homologation_requires_confirmation_and_only_uses_test_recipient(self):
+        ExternalAPIIntegration.objects.create(
+            provider=ExternalAPIIntegration.Provider.BREVO, name="Brevo", enabled=True,
+            smtp_secret_ciphertext="protected", config={
+                "send_method": "smtp", "smtp_login": "login", "sender_email": "noc@example.test",
+                "routing_test_recipient": "controlled@example.test",
+            },
+        )
+        test_id = self.client.get(reverse("configuracoes:integracoes:brevo")).context["routing_test_id"]
+        with patch("aplicativos.integracoes.views.decrypt_external_api_smtp_secret", return_value="secret"), patch(
+            "aplicativos.integracoes.clients.brevo_smtp.send_brevo_smtp",
+        ) as mocked_send:
+            response = self.client.post(reverse("configuracoes:integracoes:brevo-routing-test"), {"routing_test_id": test_id})
+        self.assertEqual(response.status_code, 302)
+        mocked_send.assert_not_called()
+        self.assertFalse(ExternalAPIHealthCheck.objects.exists())
 
     @patch("aplicativos.integracoes.services.arion_database.config_path")
     def test_arion_configuration_page_offers_the_mysql_candidate_flow(self, database_config_path):
@@ -122,7 +207,8 @@ class IntegrationConfigurationTests(TestCase):
             password.assert_called_once()
             test_connection.assert_called_once()
 
-    def test_otrs_configuration_form_remote_requires_tls_or_explicit_opt_in(self):
+    @override_settings(OTRS_LEGACY_NO_TLS_HOST="200.174.198.133")
+    def test_otrs_configuration_form_remote_requires_tls_or_explicit_opt_in_for_authorized_host(self):
         # 1. Remote host + use_tls=False + allow_insecure_remote=False -> invalid
         insecure_form = OTRSConfigurationForm(data={
             "host": "200.174.198.133", "port": 3306, "database": "otrs",
@@ -131,6 +217,14 @@ class IntegrationConfigurationTests(TestCase):
         })
         self.assertFalse(insecure_form.is_valid())
         self.assertIn("use_tls", insecure_form.errors)
+
+        unauthorized_host_form = OTRSConfigurationForm(data={
+            "host": "db.other.example", "port": 3306, "database": "otrs",
+            "username": "reader", "password": "p", "timeout": 10,
+            "use_tls": False, "allow_insecure_remote": True,
+        })
+        self.assertFalse(unauthorized_host_form.is_valid())
+        self.assertIn("allow_insecure_remote", unauthorized_host_form.errors)
 
         # 2. Remote host + use_tls=False + allow_insecure_remote=True -> valid
         opt_in_form = OTRSConfigurationForm(data={
@@ -184,6 +278,7 @@ class IntegrationConfigurationTests(TestCase):
         self.assertEqual(client.ssl_ca, "")
 
     @patch("aplicativos.integracoes.clients.factory.get_secret_protector")
+    @override_settings(OTRS_LEGACY_NO_TLS_HOST="200.174.198.133")
     def test_otrs_factory_preserves_tls_policy_with_legacy_null_config_fields(self, get_protector):
         get_protector.return_value = self.protector
         integration = Integration.objects.create(
