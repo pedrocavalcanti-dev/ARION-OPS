@@ -1,8 +1,10 @@
 """Bootstrap configuration for the active and candidate Arion databases."""
 import hashlib
+import ipaddress
 import json
 import os
 import socket
+import ssl
 import sqlite3
 import tempfile
 from datetime import datetime, timezone
@@ -106,6 +108,11 @@ def _write_bootstrap(data, *, path=None):
 
 
 def _secret_for(config, *, protector=None, label="Banco Arion"):
+    if config.get("password_source") == "environment":
+        password = os.environ.get("DATABASE_PASSWORD", "")
+        if not isinstance(password, str) or not password or "\r" in password or "\n" in password:
+            raise ValidationError("Defina DATABASE_PASSWORD no .env local para conectar ao MySQL.")
+        return password
     ciphertext = config.get("password_protected", "")
     if not ciphertext:
         raise ValidationError(f"Credencial do candidato {label} ausente.")
@@ -118,11 +125,17 @@ def _secret_for(config, *, protector=None, label="Banco Arion"):
     return password
 
 
+def _password_is_configured(config):
+    if config.get("password_source") == "environment":
+        return bool(os.environ.get("DATABASE_PASSWORD", ""))
+    return bool(config.get("password_protected"))
+
+
 def active_config(*, path=None, protector=None, decrypt=True):
     bootstrap, exists = read_bootstrap_config(path=path)
     result = dict(bootstrap["active"])
     result["configured"] = exists
-    result["password_configured"] = bool(result.get("password_protected"))
+    result["password_configured"] = _password_is_configured(result)
     if result["engine"] == "mysql" and decrypt:
         result["password"] = _secret_for(result, protector=protector, label="ativa")
     else:
@@ -136,7 +149,7 @@ def candidate_config(*, path=None, protector=None, decrypt=True):
     if candidate is None:
         return None
     result = dict(candidate)
-    result["password_configured"] = bool(result.get("password_protected"))
+    result["password_configured"] = _password_is_configured(result)
     if decrypt:
         result["password"] = _secret_for(result, protector=protector, label="candidata")
     else:
@@ -166,7 +179,14 @@ def local_config(*, path=None, protector=None, decrypt=True):
 def candidate_fingerprint(config):
     public = {key: config.get(key) for key in ("engine", "host", "port", "database", "user", "timeout")}
     protected = config.get("password_protected", "")
-    payload = json.dumps({"config": public, "protected_secret": protected}, sort_keys=True, separators=(",", ":"))
+    environment_secret = ""
+    if config.get("password_source") == "environment":
+        environment_secret = hashlib.sha256(
+            os.environ.get("DATABASE_PASSWORD", "").encode("utf-8")
+        ).hexdigest()
+    payload = json.dumps({"config": public, "protected_secret": protected,
+                          "environment_secret_fingerprint": environment_secret},
+                         sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -194,19 +214,29 @@ def save_candidate_config(data, *, path=None, protector=None):
     if password and (not isinstance(password, str) or "\r" in password or "\n" in password):
         raise ValidationError("A senha MySQL informada está inválida.")
     same_target = _same_target(previous, {"host": host, "port": port, "database": database, "user": user})
-    protected = previous.get("password_protected", "") if same_target and not password else ""
+    password_source = ""
     if password:
         try:
             protected = (protector or get_secret_protector()).protect(password)
         except Exception:
             raise ValidationError("O armazenamento protegido de senhas não está disponível neste Windows.") from None
-    elif protected:
+        password_source = "dpapi"
+    elif os.environ.get("DATABASE_PASSWORD", ""):
+        protected = ""
+        password_source = "environment"
+    elif same_target and previous.get("password_source") == "environment":
+        protected = ""
+        password_source = "environment"
+    elif same_target and previous.get("password_protected"):
+        protected = previous["password_protected"]
+        password_source = previous.get("password_source") or "dpapi"
         # Do not preserve an unreadable blob from another Windows user.
         _secret_for({"password_protected": protected}, protector=protector, label="candidata")
-    if not protected:
-        raise ValidationError("Informe a senha MySQL do candidato.")
+    else:
+        raise ValidationError("Defina DATABASE_PASSWORD no .env local antes de salvar o candidato MySQL.")
     candidate = {"engine": "mysql", "host": host, "port": port, "database": database,
-                 "user": user, "timeout": timeout, "password_protected": protected}
+                 "user": user, "timeout": timeout, "password_protected": protected,
+                 "password_source": password_source}
     old_fingerprint = candidate_fingerprint(previous) if previous else None
     new_fingerprint = candidate_fingerprint(candidate)
     if new_fingerprint != old_fingerprint:
@@ -215,7 +245,8 @@ def save_candidate_config(data, *, path=None, protector=None):
                                   "data_copied": False, "validation": None}
     bootstrap["candidate"] = candidate
     _write_bootstrap(bootstrap, path=path)
-    return {key: value for key, value in candidate.items() if key != "password_protected"} | {"password_configured": True}
+    return {key: value for key, value in candidate.items() if key != "password_protected"} | {
+        "password_configured": _password_is_configured(candidate)}
 
 
 def record_candidate_test(*, path=None):
@@ -318,28 +349,90 @@ def candidate_test_is_current(*, path=None):
                 and state.get("candidate_fingerprint") == candidate_fingerprint(candidate))
 
 
-def _mysql_database_dict(*, name, user="", password="", host="127.0.0.1", port=3306, timeout=10):
+def _is_loopback_mysql_host(host):
+    normalized = str(host or "").strip().strip("[]").casefold()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _verified_mysql_ssl_context(ca_file):
+    ca_path = Path(str(ca_file or "")).expanduser()
+    if not ca_path.is_absolute():
+        ca_path = project_root() / ca_path
+    try:
+        if not ca_path.is_file():
+            raise OSError
+        context = ssl.create_default_context(cafile=str(ca_path.resolve()))
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        return context
+    except Exception:
+        raise ImproperlyConfigured(
+            "O certificado CA do MySQL não existe ou não é válido; configure DB_SSL_CA no .env local."
+        ) from None
+
+
+def _configured_database_ca(environ=None):
+    environment = environ if environ is not None else os.environ
+    return str(environment.get("DB_SSL_CA", "") or "").strip()
+
+
+def _mysql_database_dict(*, name, user="", password="", host="127.0.0.1", port=3306, timeout=10, ssl_ca=""):
     try:
         port, timeout = int(port), int(timeout)
     except (TypeError, ValueError):
         raise ImproperlyConfigured("Porta ou timeout inválido na configuração do Banco Arion.") from None
     if not name or not host or not 1 <= port <= 65535 or not 1 <= timeout <= 60:
         raise ImproperlyConfigured("A configuração MySQL do Banco Arion está incompleta.")
+    options = {"charset": "utf8mb4", "connect_timeout": timeout,
+               "read_timeout": timeout, "write_timeout": timeout}
+    if not _is_loopback_mysql_host(host) and not ssl_ca:
+        raise ImproperlyConfigured(
+            "Conexões MySQL remotas exigem TLS com CA validada; configure DB_SSL_CA no .env local."
+        )
+    if ssl_ca:
+        options["ssl"] = _verified_mysql_ssl_context(ssl_ca)
     return {"ENGINE": "django.db.backends.mysql", "NAME": name, "USER": user, "PASSWORD": password,
-            "HOST": host, "PORT": str(port),
-            "OPTIONS": {"charset": "utf8mb4", "connect_timeout": timeout,
-                        "read_timeout": timeout, "write_timeout": timeout}}
+            "HOST": host, "PORT": str(port), "CONN_MAX_AGE": 0, "CONN_HEALTH_CHECKS": True,
+            "OPTIONS": options}
 
 
-def _from_database_url(value):
+def _from_database_url(value, *, environ=None):
+    environment = environ if environ is not None else os.environ
     parsed = urlsplit(value)
     scheme = parsed.scheme.casefold()
     if scheme in {"mysql", "mysql+pymysql"}:
-        query = parse_qs(parsed.query)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        url_password = unquote(parsed.password or "")
+        environment_password = environment.get("DATABASE_PASSWORD", "")
+        if url_password and environment_password:
+            raise ImproperlyConfigured(
+                "Defina a senha do MySQL somente em DATABASE_PASSWORD ou na URL, não nos dois."
+            )
+        password = url_password or environment_password
+        ssl_ca = ((query.get("ssl_ca") or [""])[0].strip()
+                  or _configured_database_ca(environment))
+        ssl_mode = (query.get("ssl_mode") or [""])[0].strip().casefold().replace("-", "_")
+        if ssl_mode and ssl_mode != "verify_identity":
+            raise ImproperlyConfigured(
+                "MySQL remoto exige ssl_mode=VERIFY_IDENTITY para validar CA e nome do servidor."
+            )
+        if ssl_mode == "verify_identity" and not ssl_ca:
+            raise ImproperlyConfigured(
+                "ssl_mode=VERIFY_IDENTITY exige o caminho do certificado em ssl_ca."
+            )
+        host = parsed.hostname or ""
+        if not _is_loopback_mysql_host(host) and not password:
+            raise ImproperlyConfigured(
+                "DATABASE_PASSWORD está ausente para a conexão MySQL remota configurada."
+            )
         return _mysql_database_dict(name=unquote(parsed.path.lstrip("/")), user=unquote(parsed.username or ""),
-                                    password=unquote(parsed.password or ""), host=parsed.hostname or "",
-                                    port=parsed.port or 3306,
-                                    timeout=(query.get("connect_timeout") or [10])[0])
+                                    password=password, host=host, port=parsed.port or 3306,
+                                    timeout=(query.get("connect_timeout") or [10])[0], ssl_ca=ssl_ca)
     if scheme == "sqlite":
         raw_path = unquote(parsed.path)
         if parsed.netloc and parsed.netloc != "localhost":
@@ -357,11 +450,12 @@ def django_database_settings(*, base_dir, environ=None, path=None, protector=Non
     environment = environ if environ is not None else os.environ
     explicit_url = environment.get("DATABASE_URL", "").strip()
     if explicit_url:
-        return _from_database_url(explicit_url)
+        return _from_database_url(explicit_url, environ=environment)
     active = active_config(path=path, protector=protector)
     if active["engine"] == "mysql":
         return _mysql_database_dict(name=active["database"], user=active["user"], password=active["password"],
-                                    host=active["host"], port=active["port"], timeout=active["timeout"])
+                                    host=active["host"], port=active["port"], timeout=active["timeout"],
+                                    ssl_ca=_configured_database_ca(environment))
     database = Path(active["database"]).expanduser()
     if not database.is_absolute() and str(database) != ":memory:":
         database = Path(base_dir) / database
@@ -374,7 +468,8 @@ def candidate_database_settings(*, path=None, protector=None):
         raise ValidationError("Nenhum MySQL candidato foi salvo.")
     return _mysql_database_dict(name=candidate["database"], user=candidate["user"],
                                 password=candidate["password"], host=candidate["host"],
-                                port=candidate["port"], timeout=candidate["timeout"])
+                                port=candidate["port"], timeout=candidate["timeout"],
+                                ssl_ca=_configured_database_ca())
 
 
 def active_database_summary(database_settings):
@@ -410,23 +505,35 @@ def test_mysql_connection(config, password, *, connection_factory=None):
         if connection_factory is None:
             import pymysql
             connection_factory = pymysql.connect
-        connection = connection_factory(host=str(config["host"]).strip(), port=int(config.get("port", 3306)),
-                                       user=str(config["user"]).strip(), password=password,
-                                       database=str(config["database"]).strip(),
-                                       connect_timeout=int(config.get("timeout", 10)),
-                                       read_timeout=int(config.get("timeout", 10)),
-                                       write_timeout=int(config.get("timeout", 10)), charset="utf8mb4")
+        database_settings = _mysql_database_dict(
+            name=str(config["database"]).strip(), user=str(config["user"]).strip(), password=password,
+            host=str(config["host"]).strip(), port=int(config.get("port", 3306)),
+            timeout=int(config.get("timeout", 10)),
+            ssl_ca=config.get("ssl_ca") or _configured_database_ca(),
+        )
+        connection = connection_factory(
+            host=database_settings["HOST"], port=int(database_settings["PORT"]),
+            user=database_settings["USER"], password=database_settings["PASSWORD"],
+            database=database_settings["NAME"], **database_settings["OPTIONS"],
+        )
         try:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT DATABASE(), VERSION(), NOW()")
                 database, version, _server_time = cursor.fetchone()
+                cursor.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+                _cipher_name, cipher = cursor.fetchone()
         finally:
             connection.close()
+        tls_verified = bool(database_settings["OPTIONS"].get("ssl"))
+        if tls_verified and not cipher:
+            raise ValidationError("O servidor MySQL não confirmou uma sessão TLS ativa.")
         if "mariadb" in str(version).casefold():
             raise ValidationError("O servidor respondeu como MariaDB; o Banco Arion oferece suporte oficial a MySQL e SQLite.")
-        return {"database": database, "version": str(version)}
+        return {"database": database, "version": str(version), "tls_verified": tls_verified}
     except ValidationError:
         raise
+    except ImproperlyConfigured as exc:
+        raise ValidationError(str(exc)) from None
     except Exception as exc:
         code = exc.args[0] if getattr(exc, "args", None) else None
         if code == 1045:
@@ -441,6 +548,8 @@ def test_mysql_connection(config, password, *, connection_factory=None):
             message = "A conexão com o host MySQL foi recusada."
         elif code in {2002, 2003, 2005}:
             message = "Não foi possível alcançar o host MySQL informado."
+        elif code == 2026:
+            message = "Falha na validação TLS do MySQL. Confira a CA oficial e o hostname configurado."
         else:
             message = "Falha inesperada ao testar a conexão MySQL."
         raise ValidationError(message) from None

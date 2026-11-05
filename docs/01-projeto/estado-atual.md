@@ -1,8 +1,8 @@
 # Estado atual do ARION OPS
 
-Revisão estrutural em 02/11/2026. A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
+Revisão estrutural em 05/11/2026 (Atualização incremental 1.3.1). A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
 
-Versão interna registrada em `docs/08-releases/releases.json`: **1.3.0**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
+Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
 
 ## Matriz de módulos (IMPLEMENTADO)
 
@@ -13,7 +13,7 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.0**. A dis
 | Cockpit | IMPLEMENTADO | Espelhos OTRS/CMDB; filas de Suporte e Cancelamentos | `SavedAnalyticsView` local; exportação de leitura | Contextos Suporte, Cancelamentos e Geral; classificação por etapa e Data Scope no backend. |
 | Mapa | IMPLEMENTADO | Espelhos e relações Ticket–ConfigItem | Sem edição da fonte | Agrega por UF; não geocodifica. |
 | Rankings | IMPLEMENTADO | Snapshot atual CMDB/Base Links + chamados válidos do espelho OTRS no período | Exportação de leitura | Exposição por links ativos e incidência proporcional; Índice ARION é operacional, não SLA nem prova de causalidade. |
-| Qualidade Operacional | IMPLEMENTADO (Fases 1–4 + envio controlado de TQ) | OQs, checklist, contatos, ciclos, TQs locais e espelhos CMDB/OTRS | Registros locais auditados; envio Brevo somente por autorização e confirmação individual; sem escrita OTRS | Inclui template institucional HTML/texto, pré-visualização e correlação por ID persistente no corpo. |
+| Qualidade Operacional | IMPLEMENTADO (Fases 1–4 + envio controlado de TQ) | OQs, checklist, contatos, ciclos, TQs locais e espelhos CMDB/OTRS | Registros locais auditados; envio Brevo somente por autorização e confirmação individual; sem escrita OTRS | Inclui alinhamento visual refinado na aba Tratativas, botões padronizados, resumo expansível, template institucional HTML/texto, pré-visualização, correlação por ID persistente no corpo (QID) e migrations 0014/0015 validadas. |
 | Base | IMPLEMENTADO | `CMDBLinkMirror`, `CMDBOperatorMirror` | Consulta/exportação | Importador XLSX legado não é fluxo normal. |
 | Central de Relatórios | IMPLEMENTADO | Original Claro e espelhos locais OTRS/CMDB em enriquecimento explícito | Tratativa, pausas, overrides, decisão e auditoria no ARION OPS | Cálculo automático é baseline; decisão final é humana. |
 | ARI I.A | IMPLEMENTADO (Preview local) | Models locais de conversas, anexos e artefatos | Dados locais de conversa/anexo | Opera em modo Preview local; integração LLM externa permanece PLANEJADA. |

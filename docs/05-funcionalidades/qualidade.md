@@ -181,11 +181,51 @@ A pre-visualizacao funciona sem credencial Brevo e nao envia mensagem. O metodo 
 O envio exige integracao habilitada, credencial do metodo protegida, remetente/destinatario configurados, endereco da fila Qualidade validado no OTRS, autorizacao administrativa e confirmacao individual por POST. Antes do primeiro envio controlado deve ser usada uma caixa de testes autorizada. A criacao da TQ nunca dispara e-mail automaticamente. Tentativas simultaneas sao bloqueadas; cada tentativa registra metodo e UUID local. SMTP nao inventa `messageId`. Falhas confirmadas permitem nova tentativa explicita, enquanto resultado incerto fica bloqueado para reconciliacao.
 
 A aceitacao do servidor Brevo nao confirma a criacao do ticket OTRS. A correlacao futura usa o QID completo encontrado no corpo do artigo original do ticket na fila de Qualidade. O ARION nao escreve no OTRS.
-## Envio Brevo e correla??o autom?tica
+## Envio Brevo e correlação automática
 
-A TQ possui pr?via HTML/texto e confirma??o individual por POST. O m?todo SMTP Relay ? o padr?o quando n?o h? prefer?ncia salva; API REST permanece dispon?vel. To, Cc e Reply-To s?o campos distintos e edit?veis. Cc ? enviado como destinat?rio de c?pia por SMTP e pela API REST; o roteamento pode criar outro ticket e ainda precisa de confirma??o operacional. O envio continua bloqueado sem autoriza??o, credencial recuper?vel, remetente/destinat?rio v?lidos e confirma??o administrativa do endere?o de entrada da fila.
+A TQ possui prévia HTML/texto e confirmação individual por POST. O método SMTP Relay é o padrão quando não há preferência salva; API REST permanece disponível. To, Cc e Reply-To são campos distintos e editáveis. Cc é enviado como destinatário de cópia por SMTP e pela API REST; o roteamento pode criar outro ticket e ainda precisa de confirmação operacional. O envio continua bloqueado sem autorização, credencial recuperável, remetente/destinatário válidos e confirmação administrativa do endereço de entrada da fila.
 
-O worker dedicado agenda leitura read-only de artigos por lote e cursor incremental, com sobreposi??o para atualiza??es tardias, lease OTRS compartilhado e retry com backoff. Cad?ncia, lote e filas aceitam configura??es `ARION_QUALITY_OTRS_CORRELATION_INTERVAL_SECONDS`, `ARION_QUALITY_OTRS_CORRELATION_BATCH_SIZE` e `ARION_QUALITY_OTRS_QUEUE_NAMES`. Correlaciona somente o QID completo no corpo, valida a fila pelo nome exato configurado e mant?m o corpo do artigo apenas em mem?ria. O cursor e a falha sanitizada s?o locais. A configura??o DEV atual n?o informa o schema/banco OTRS necess?rio; por isso a rotina est? implementada, mas a descoberta da fila/schema e o v?nculo autom?tico real aguardam configura??o e valida??o no ambiente conectado. N?o h? escrita no OTRS.
+O worker dedicado agenda leitura read-only de artigos por lote e cursor incremental, com sobreposição para atualizações tardias, lease OTRS compartilhado e retry com backoff. Cadência, lote e filas aceitam configurações `ARION_QUALITY_OTRS_CORRELATION_INTERVAL_SECONDS`, `ARION_QUALITY_OTRS_CORRELATION_BATCH_SIZE` e `ARION_QUALITY_OTRS_QUEUE_NAMES`. Correlaciona somente o QID completo no corpo, valida a fila pelo nome exato configurado e mantém o corpo do artigo apenas em memória. O cursor e a falha sanitizada são locais. A configuração DEV atual não informa o schema/banco OTRS necessário; por isso a rotina está implementada, mas a descoberta da fila/schema e o vínculo automático real aguardam configuração e validação no ambiente conectado. Não há escrita no OTRS.
+
+## Fluxo Operacional: OQ → TQ → OTRS → RREIP
+
+O ciclo de vida da tratativa de qualidade segue etapas rigorosamente sequenciadas e auditadas:
+
+1. **OQ (Ordem de Qualidade):** Identificada a reincidência de falhas em um circuito monitorado (episódio de 30 dias na CMDB/OTRS), a Qualidade formaliza a OQ. Cada OQ mantém histórico unificado, ocorrências espelhadas e checklist gerencial.
+2. **TQ (Tratativa de Qualidade):** Dentro da aba Tratativas, o operador gera uma TQ local (`TQ-AAAA-NNNNNN`), que recebe um identificador de correlação imutável (`ARION-QID-...`). O chamado de suporte ativo pode ser associado.
+3. **Envio via Brevo SMTP:** A solicitação é pré-visualizada (HTML/texto) e enviada por SMTP com STARTTLS para a caixa de entrada da fila de Qualidade do OTRS. Nenhum envio ocorre automaticamente sem confirmação expressa do operador.
+4. **OTRS (Correlação e Acompanhamento):** Ao receber o e-mail, o OTRS gera o ticket correspondente. O worker do ARION OPS correlaciona o ticket através do QID contido no corpo do artigo inicial, vinculando o número oficial (`quality_ticket_number`) e a URL do OTRS no ARION OPS.
+5. **Tratativa e Checklist:** O operador acompanha a resolução no OTRS, atualiza o resumo gerencial (resumo, situação, próxima ação) via formulário retrátil e avança os itens do Checklist da Qualidade.
+6. **Início do Monitoramento RREIP:** Concluída a ação técnica no OTRS, o operador valida que o circuito está operacional, insere o resumo das ações verificadas no OTRS (`otrs_actions_summary`) e inicia o ciclo RREIP de 30 dias.
+7. **Desfecho do Ciclo:** 
+   - **Sucesso:** Decorridos os 30 dias sem nova ocorrência, confirma-se a estabilidade e a TQ é concluída formalmente.
+   - **Reincidência:** Se houver nova falha válida durante a janela, registra-se a reincidência e a OQ retorna para tratamento com histórico preservado.
+
+## Interface da Aba Tratativas (Versão 1.3.1)
+
+A aba **Tratativas** da Ordem de Qualidade foi refinada para máxima clareza e alinhamento:
+- **Alinhamento dos Cards:** O card da **Tratativa Atual** e o card do **Checklist da Qualidade** iniciam rigorosamente na mesma altura do grid, sem cabeçalhos repetidos e com espaçamentos consistentes.
+- **Ações e Botões Padronizados:** Botões "Abrir no OTRS", "Atualizar resumo", "Salvar atualização", "Iniciar monitoramento RREIP", "Pré-visualizar solicitação" e "Enviar solicitação" utilizam altura mínima de 36px, ícones SVG dedicados, estados visuais nítidos (hover, focus-visible e disabled) e estilo corporativo.
+- **Formulário Retrátil:** O formulário de atualização do resumo gerencial permanece recolhido inicialmente em elemento `<details>`, abrindo sob clique de "Atualizar resumo" com campos bem distribuídos e ação explícita de gravação.
+
+## Procedimento de Banco de Dados, Migrations e Atualização do Servidor
+
+### SQLite em DEV vs MySQL em Produção
+- O ambiente de desenvolvimento (DEV) utiliza exclusivamente **SQLite** (`arion_geo/db.sqlite3`). A migração de DEV para provedores externos foi descartada em favor da estabilidade e rapidez local.
+- O ambiente de produção utiliza **MySQL 8.4**.
+
+### Histórico de Migrations 0014 e 0015 (Qualidade)
+- **`0014_qualitymonitoringcycle_active_order_key_and_more.py`**: Adiciona índices e colunas estruturais base.
+- **`0015_qualitymonitoringcycle_otrs_actions_summary_and_more.py`**: Adiciona `otrs_actions_summary` no `QualityMonitoringCycle`, bem como reconcilia `active_order_key`, `support_ticket_id`, `support_ticket_number` e `correlation_id`.
+- Ambas foram aplicadas no SQLite DEV e são 100% compatíveis com a sintaxe DDL do MySQL 8.4.
+
+### Procedimento de Atualização em Produção
+1. Realizar backup prévio do banco MySQL de produção (`mysqldump`).
+2. Atualizar o código no servidor a partir do commit da versão 1.3.1.
+3. Executar verificação prévia com `python arion_geo/gerenciar.py showmigrations`.
+4. Aplicar as migrações com `python arion_geo/gerenciar.py migrate qualidade`.
+5. Validar integridade e ausência de pendências com `python arion_geo/gerenciar.py check`.
+6. Reiniciar os serviços Web e Worker.
 
 ## Arquivamento logico de OQ
 
@@ -203,6 +243,9 @@ OQs arquivadas saem das consultas operacionais, indicadores e rankings. O arquiv
 - **Testar roteamento de e-mail** e uma acao administrativa separada. Configure primeiro uma caixa controlada no campo de destinatario de homologacao. Cada envio exige a caixa de confirmacao da pagina, recebe `ARION-ROUTE-<32 hex>`, nao inclui Cc/Reply-To nem QID de TQ, e nao altera a validacao da fila ou qualquer TQ. Para apontar a homologacao ao destinatario operacional, marque antes a autorizacao administrativa especifica e confirme cada envio individualmente. O resultado aceito pelo relay precisa ser verificado manualmente na caixa e no OTRS.
 - A primeira verificacao operacional deve ser To isolado. Cc permanece fora do teste para evitar ticket duplicado; valide Cc em procedimento separado somente depois de confirmar o comportamento do To e aprovar explicitamente a mensagem de homologacao.
 - A correlacao le artigos incrementalmente, procura o QID completo no corpo simples/HTML, exige fila exata e registra checkpoints. Nao correlaciona por assunto, circuito ou sequencia. Em 04/11/2026 a integracao OTRS do banco DEV nao esta configurada; portanto, o schema real e a correlacao ponta a ponta continuam sem homologacao.
+
+- OTRS permanece a fonte oficial da tratativa tecnica; o ARION OPS guarda apenas resumo gerencial, situacao, proxima acao e atualizacoes curtas em auditoria.
+- Para iniciar o RREIP, o operador autorizado confirma que revisou as acoes no ticket OTRS, informa um resumo curto e declara o circuito apto. Nao ha cadastro tecnico paralelo. O sucesso do RREIP exige avaliacao de estabilidade e, depois, uma acao explicita para concluir a TQ.
 
 ## Checklist antes da publicacao de Qualidade
 

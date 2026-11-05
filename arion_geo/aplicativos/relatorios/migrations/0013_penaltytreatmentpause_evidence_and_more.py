@@ -53,8 +53,10 @@ def _snapshot_datetime(value):
 
 
 def preserve_automatic_and_effective_values(apps, schema_editor):
+    database = schema_editor.connection.alias
     Treatment = apps.get_model("relatorios", "PenaltyTreatmentRow")
-    for row in Treatment.objects.select_related("source_row__competence", "ticket").prefetch_related("overrides").iterator(chunk_size=500):
+    rows = Treatment.objects.using(database).select_related("source_row__competence", "ticket").prefetch_related("overrides")
+    for row in rows.iterator(chunk_size=500):
         fields = []
         if row.isp and row.isp.isdecimal() and (row.field_origins or {}).get("isp") == "CMDB":
             row.arion_values = dict(row.arion_values or {})
@@ -115,7 +117,7 @@ def preserve_automatic_and_effective_values(apps, schema_editor):
         calculated_parts = (row.inter_calculated, row.unavailability_calculated, penalty_calculated)
         row.total_calculated_arion = _money(sum(calculated_parts, Decimal("0"))) if all(value is not None for value in calculated_parts) else None
         fields.append("total_calculated_arion")
-        row.save(update_fields=tuple(dict.fromkeys(fields)))
+        row.save(using=database, update_fields=tuple(dict.fromkeys(fields)))
 
 
 class Migration(migrations.Migration):

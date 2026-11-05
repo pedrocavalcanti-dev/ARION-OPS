@@ -254,6 +254,25 @@ def link_quality_ticket_from_article(*, ticket, article_body, allowed_queue_name
     except IntegrityError:
         return {"status": "TICKET_TREATMENT_CONFLICT", "treatment": treatment}
 
+    order = QualityOrder.objects.select_for_update().get(pk=treatment.quality_order_id)
+    if order.status in {QualityOrder.Status.NOVA, QualityOrder.Status.TRIAGEM}:
+        previous_order_status = order.status
+        order.status = QualityOrder.Status.TRATAMENTO
+        order.completed_at = None
+        order.save(update_fields=("status", "completed_at", "updated_at"))
+        previous_label = dict(QualityOrder.Status.choices).get(previous_order_status, previous_order_status)
+        phase_description = f"Fase da OQ alterada de {previous_label} para Tratamento após vincular a TQ {treatment.code}."
+        QualityAuditEvent.objects.create(
+            quality_order=order, event_type=QualityAuditEvent.EventType.STATUS_CHANGED, actor=actor,
+            description=phase_description,
+            metadata={"previous_status": previous_order_status, "status": order.status, "treatment_code": treatment.code},
+        )
+        AuditService.record(
+            request=request, user=actor, category="QUALITY", action="STATUS_CHANGED", module="Qualidade",
+            description=phase_description, obj=order,
+            metadata={"code": order.code, "previous_status": previous_order_status, "status": order.status, "treatment_code": treatment.code},
+        )
+
     description = f"Ticket de Qualidade {ticket.ticket_number} vinculado à TQ {treatment.code}."
     QualityAuditEvent.objects.create(
         quality_order=treatment.quality_order,

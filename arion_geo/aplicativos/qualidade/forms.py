@@ -58,7 +58,6 @@ class QualityOrderPriorityForm(forms.Form):
 
 
 class QualityOrderDetailForm(forms.Form):
-    status = forms.ChoiceField(label="Status", choices=QualityOrder.Status.choices)
     recurrence_level = forms.ChoiceField(
         label="Nível", required=False,
         choices=(("", "A classificar"), *QualityOrder.RecurrenceLevel.choices),
@@ -153,9 +152,13 @@ class QualityActionForm(forms.Form):
 
 
 class QualityMonitoringStartForm(forms.Form):
-    quality_ticket = forms.ModelChoiceField(
-        queryset=QualityTicket.objects.none(), required=False, label="TQ relacionado",
-        empty_label="Sem TQ de tratamento vinculado",
+    otrs_actions_summary = forms.CharField(
+        label="Resumo das ações verificadas no OTRS", max_length=1200,
+        widget=forms.Textarea(attrs={"rows": 3, "maxlength": 1200}),
+    )
+    actions_analyzed = forms.BooleanField(
+        required=True,
+        label="Confirmei as ações no OTRS e o circuito está apto ao monitoramento",
     )
     financial_regularization_confirmed = forms.BooleanField(
         required=False, label="Pagamento ou regularização definitiva confirmado",
@@ -164,14 +167,6 @@ class QualityMonitoringStartForm(forms.Form):
         required=False, max_length=2000, label="Evidência da regularização",
         widget=forms.Textarea(attrs={"rows": 3, "maxlength": 2000, "placeholder": "Referência ou confirmação registrada pela Qualidade"}),
     )
-
-    def __init__(self, *args, order=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        if order is not None:
-            self.fields["quality_ticket"].queryset = QualityTicket.objects.filter(
-                quality_order=order, ticket_type=QualityTicket.TicketType.TREATMENT,
-            ).order_by("-created_at", "-pk")
-
 
 class QualityMonitoringFinishForm(forms.Form):
     RESULT_CHOICES = (
@@ -184,12 +179,60 @@ class QualityMonitoringFinishForm(forms.Form):
         required=False, label="Ticket da reincidência", max_length=80,
         widget=forms.TextInput(attrs={"placeholder": "Número do ticket válido espelhado"}),
     )
+    final_analysis = forms.CharField(required=False, max_length=1200, label="Resultado final", widget=forms.Textarea(attrs={"rows": 3, "maxlength": 1200}))
+    stability_validated = forms.BooleanField(required=False, label="Estabilidade validada pela Qualidade")
+    occurrence_review = forms.CharField(required=False, max_length=800, label="Avaliação das ocorrências", widget=forms.Textarea(attrs={"rows": 2, "maxlength": 800}))
+    recurrence_description = forms.CharField(required=False, max_length=1200, label="Motivo e evidência da reincidência", widget=forms.Textarea(attrs={"rows": 3, "maxlength": 1200}))
+    same_root_cause_confirmed = forms.BooleanField(required=False, label="Confirmo que a ocorrência representa a mesma causa raiz tratada")
 
     def clean(self):
         cleaned = super().clean()
         if cleaned.get("result") == QualityMonitoringCycle.Result.RECURRENCE and not cleaned.get("trigger_ticket_identifier"):
             self.add_error("trigger_ticket_identifier", "Informe o ticket válido que causou a reincidência.")
+        if cleaned.get("result") == QualityMonitoringCycle.Result.SUCCESS:
+            if not cleaned.get("final_analysis"):
+                self.add_error("final_analysis", "Informe o resultado da análise.")
+            if not cleaned.get("stability_validated"):
+                self.add_error("stability_validated", "Confirme a estabilidade do circuito.")
+            if not cleaned.get("occurrence_review"):
+                self.add_error("occurrence_review", "Avalie as ocorrências do período.")
+        if cleaned.get("result") == QualityMonitoringCycle.Result.RECURRENCE:
+            if not cleaned.get("recurrence_description"):
+                self.add_error("recurrence_description", "Descreva a reincidência e sua evidência.")
+            if not cleaned.get("same_root_cause_confirmed"):
+                self.add_error("same_root_cause_confirmed", "Confirme a relação com a causa raiz tratada.")
         return cleaned
+
+
+class QualityTreatmentSummaryForm(forms.Form):
+    management_summary = forms.CharField(
+        required=False, max_length=1600, label="Resumo da tratativa",
+        widget=forms.Textarea(attrs={"rows": 3, "maxlength": 1600}),
+    )
+    management_situation = forms.ChoiceField(
+        label="Situação", choices=QualityTreatment.ManagementSituation.choices,
+    )
+    next_action = forms.CharField(
+        required=False, max_length=500, label="Próxima ação e prazo",
+        widget=forms.TextInput(attrs={"maxlength": 500}),
+    )
+    next_action_due = forms.DateField(
+        required=False, label="Data da próxima ação", input_formats=("%Y-%m-%d",),
+        widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
+    )
+    update_note = forms.CharField(
+        required=False, max_length=800, label="Atualização curta",
+        widget=forms.Textarea(attrs={"rows": 2, "maxlength": 800}),
+    )
+
+
+class QualityTreatmentCompleteForm(forms.Form):
+    confirmed = forms.BooleanField(required=True, label="Confirmo a conclusão da TQ após a avaliação do RREIP")
+    observations = forms.CharField(label="Observação final", required=False, max_length=800, widget=forms.Textarea(attrs={"rows": 2, "maxlength": 800}))
+
+
+class QualityTreatmentCancelForm(forms.Form):
+    reason = forms.CharField(label="Justificativa do cancelamento", max_length=2000, widget=forms.Textarea(attrs={"rows": 3, "maxlength": 2000}))
 
 
 class QualityContactForm(forms.ModelForm):

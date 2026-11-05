@@ -31,8 +31,9 @@
     {% csrf_token %}
     {% if database_form.non_field_errors %}<div class="integration-form-errors">{{ database_form.non_field_errors }}</div>{% endif %}
     {% for field in database_form %}
-      <div class="integration-field"><label for="{{ field.id_for_label }}">{{ field.label }}</label><div class="integration-control">{{ field }}{{ field.errors }}{% if field.name == "password" %}<small>{% if pending_database.password_configured %}Senha protegida com DPAPI. Vazio mant&eacute;m o segredo armazenado.{% else %}Ser&aacute; protegida com DPAPI e n&atilde;o ser&aacute; exibida novamente.{% endif %}</small>{% endif %}</div></div>
+      <div class="integration-field"><label for="{{ field.id_for_label }}">{{ field.label }}</label><div class="integration-control">{{ field }}{{ field.errors }}</div></div>
     {% endfor %}
+    <p class="integration-note">A senha do MySQL &eacute; lida de <code>DATABASE_PASSWORD</code> no <code>.env</code> local e nunca &eacute; exibida nesta p&aacute;gina.</p>
     <div class="integration-form-actions">
       <button class="integration-button" type="submit" formaction="{% url 'configuracoes:integracoes:arion-test' %}">Testar conex&atilde;o</button>
       <button class="settings-button settings-button--primary" type="submit">Salvar candidato</button>

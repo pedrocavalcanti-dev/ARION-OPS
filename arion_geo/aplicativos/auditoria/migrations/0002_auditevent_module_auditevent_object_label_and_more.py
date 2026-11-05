@@ -5,7 +5,8 @@ from django.db import migrations, models
 
 def populate_audit_context(apps, schema_editor):
     AuditEvent = apps.get_model("auditoria", "AuditEvent")
-    for event in AuditEvent.objects.all().iterator():
+    database = schema_editor.connection.alias
+    for event in AuditEvent.objects.using(database).all().iterator():
         event.module = event.category
         if event.action == "LOGIN_FAILED":
             event.result = "FAILED"
@@ -13,7 +14,7 @@ def populate_audit_context(apps, schema_editor):
             event.result = "BLOCKED"
         elif event.action:
             event.result = "SUCCESS"
-        event.save(update_fields=("module", "result"))
+        event.save(using=database, update_fields=("module", "result"))
 
 
 class Migration(migrations.Migration):

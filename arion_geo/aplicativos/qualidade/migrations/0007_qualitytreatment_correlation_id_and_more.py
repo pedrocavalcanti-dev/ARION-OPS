@@ -6,10 +6,11 @@ import uuid
 
 
 def fill_tq_correlation_ids(apps, schema_editor):
+    database = schema_editor.connection.alias
     treatment = apps.get_model("qualidade", "QualityTreatment")
-    for item in treatment.objects.filter(correlation_id__isnull=True).iterator():
+    for item in treatment.objects.using(database).filter(correlation_id__isnull=True).iterator():
         item.correlation_id = f"ARION-QID-{uuid.uuid4().hex.upper()}"
-        item.save(update_fields=("correlation_id",))
+        item.save(using=database, update_fields=("correlation_id",))
 
 
 class Migration(migrations.Migration):

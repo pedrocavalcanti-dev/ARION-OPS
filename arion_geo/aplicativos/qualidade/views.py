@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 import logging
 
 from django.contrib import messages
@@ -35,8 +35,11 @@ from .forms import (
     QualityOrderPriorityForm,
     QualityTicketLinkForm,
     QualityTreatmentCreateForm,
+    QualityTreatmentSummaryForm,
+    QualityTreatmentCompleteForm,
+    QualityTreatmentCancelForm,
 )
-from .models import QualityAction, QualityContact, QualityMonitoringCycle, QualityOrder, QualityTicket, QualityTreatment
+from .models import QualityAction, QualityAuditEvent, QualityContact, QualityMonitoringCycle, QualityOrder, QualityTicket, QualityTreatment
 from .services.dashboard import get_dashboard_data
 from .services.constants import QUALITY_PRIORITY_DEFAULT_PERIOD, QUALITY_RREIP_DAYS
 from .services.data_scope import QualityDataScopeService
@@ -70,6 +73,9 @@ from .services.treatments import (
     link_quality_ticket,
     support_tickets_for_order,
     toggle_quality_action,
+    update_quality_treatment_summary,
+    complete_quality_treatment,
+    cancel_quality_treatment,
 )
 from .services.tq_delivery import claim_quality_treatment_send, record_tq_send_accepted, record_tq_send_failure
 from .services.tq_email import brevo_send_readiness, build_treatment_email, treatment_send_block_message
@@ -433,7 +439,6 @@ def order_detail(request, codigo):
         "rreip_days": QUALITY_RREIP_DAYS,
         "page_query": _query_without(request, "page"),
         "detail_form": QualityOrderDetailForm(initial={
-            "status": order.status,
             "recurrence_level": order.recurrence_level,
             "priority": order.priority,
             "owner": order.owner_id,
@@ -448,6 +453,7 @@ def order_detail(request, codigo):
     active_local_treatment = QualityTreatment.objects.filter(
         quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
     ).select_related("support_ticket", "created_by", "owner").first()
+    latest_order_treatment = order.treatments.order_by("-created_at", "-pk").first()
     if active_local_treatment and active_local_treatment.quality_ticket_external_id:
         active_local_treatment.otrs_url = otrs_ticket_url(active_local_treatment.quality_ticket_external_id)
     support_tickets = support_tickets_for_order(request.user, order)
@@ -456,6 +462,7 @@ def order_detail(request, codigo):
         support_ticket.otrs_url = otrs_ticket_url(support_ticket.external_id)
     context.update({
         "local_treatment": active_local_treatment,
+        "latest_order_treatment": latest_order_treatment,
         "treatment_creation_blocker": quality_treatment_creation_blocker(order),
         "treatment_history_local": order.treatments.select_related(
             "created_by", "owner", "support_ticket",
@@ -469,7 +476,26 @@ def order_detail(request, codigo):
             support_tickets=support_tickets,
             initial={"reason": order.current_reason or context.get("current_reason") or "Reincidência confirmada; investigar causa raiz e definir ações corretivas e preventivas."},
         ),
+        "treatment_summary_form": QualityTreatmentSummaryForm(initial={
+            "management_summary": (active_local_treatment.management_summary or active_local_treatment.description or active_local_treatment.reason) if active_local_treatment else "",
+            "management_situation": active_local_treatment.management_situation if active_local_treatment else QualityTreatment.ManagementSituation.WAITING_RESPONSE,
+            "next_action": active_local_treatment.next_action if active_local_treatment else "",
+            "next_action_due": active_local_treatment.next_action_due if active_local_treatment else None,
+        }),
+        "treatment_complete_form": QualityTreatmentCompleteForm(),
+        "treatment_cancel_form": QualityTreatmentCancelForm(),
     })
+    context["treatment_updates"] = [
+        event for event in order.audit_events.select_related("actor").filter(
+            event_type=QualityAuditEvent.EventType.NOTES_CHANGED,
+        ).order_by("-created_at", "-pk")[:50]
+        if active_local_treatment and (event.metadata or {}).get("treatment_code") == active_local_treatment.code
+    ][:5]
+    context["treatment_can_start_monitoring"] = bool(
+        active_local_treatment
+        and active_local_treatment.status == QualityTreatment.Status.IN_PROGRESS
+        and active_local_treatment.quality_ticket_external_id
+    )
     brevo_integration = ExternalAPIIntegration.objects.filter(
         provider=ExternalAPIIntegration.Provider.BREVO,
     ).first()
@@ -498,7 +524,7 @@ def order_detail(request, codigo):
         financial=is_financial_reason(order.current_reason or context["current_reason"]),
     )
     cycles = list(order.monitoring_cycles.select_related(
-        "quality_ticket", "quality_ticket__otrs_ticket", "trigger_occurrence", "trigger_occurrence__otrs_ticket",
+        "quality_ticket", "quality_ticket__otrs_ticket", "quality_treatment", "trigger_occurrence", "trigger_occurrence__otrs_ticket",
     ).order_by("-cycle_number"))
     today = timezone.localdate()
     for cycle in cycles:
@@ -511,15 +537,34 @@ def order_detail(request, codigo):
         cycle.failed_after_days = max(((cycle.ended_at or cycle.expected_end_at).date() - cycle.started_at.date()).days, 0)
         cycle.trigger_ticket_number = cycle.trigger_occurrence.ticket_number if cycle.trigger_occurrence_id else ""
         cycle.otrs_url = otrs_ticket_url(cycle.trigger_occurrence.ticket_external_id_snapshot) if cycle.trigger_occurrence_id and cycle.trigger_occurrence.ticket_external_id_snapshot else ""
+        cycle.treatment_code = cycle.quality_treatment.code if cycle.quality_treatment_id else ""
+        cycle.quality_ticket_number = cycle.quality_treatment.quality_ticket_number if cycle.quality_treatment_id else ""
+        cycle.occurrences_in_window = order.occurrences.filter(
+            excluded=False, occurred_at__gt=cycle.started_at,
+            occurred_at__lte=min(cycle.expected_end_at, timezone.now()),
+        ).count()
         cycle.is_ending = cycle.result == QualityMonitoringCycle.Result.IN_PROGRESS and 0 <= (cycle.expected_end_at.date() - today).days <= 3
         cycle.is_overdue = cycle.result == QualityMonitoringCycle.Result.IN_PROGRESS and cycle.expected_end_at.date() < today
     context["monitoring_cycles"] = cycles
     context["active_cycle"] = next(
         (cycle for cycle in cycles if cycle.result == QualityMonitoringCycle.Result.IN_PROGRESS), None,
     )
-    context["monitoring_start_form"] = QualityMonitoringStartForm(order=order)
+    context["latest_successful_cycle"] = next((cycle for cycle in cycles if (
+        cycle.result == QualityMonitoringCycle.Result.SUCCESS
+        and latest_order_treatment
+        and cycle.quality_treatment_id == latest_order_treatment.pk
+    )), None)
+    context["can_complete_treatment"] = bool(
+        active_local_treatment
+        and active_local_treatment.status == QualityTreatment.Status.MONITORING
+        and context["latest_successful_cycle"]
+        and context["latest_successful_cycle"].stability_validated
+    )
+    context["monitoring_start_form"] = QualityMonitoringStartForm()
     context["monitoring_finish_form"] = QualityMonitoringFinishForm()
     context["has_financial_reason"] = is_financial_reason(order.current_reason or context["current_reason"])
+    context["monitoring_start_preview_end"] = timezone.localtime(timezone.now() + timedelta(days=QUALITY_RREIP_DAYS))
+    context["monitoring_start_preview_date"] = timezone.localtime(timezone.now())
     context["monitoring_tickets"] = get_monitoring_tickets(order)
     if context["active_tab"] == "historico":
         context.update(get_order_history(
@@ -1048,6 +1093,65 @@ def quality_action_add(request, codigo):
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 @permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
 @require_POST
+def quality_treatment_summary_update(request, codigo, treatment_id):
+    order, treatment = _scoped_treatment(request, codigo, treatment_id)
+    form = QualityTreatmentSummaryForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Revise o resumo gerencial informado.")
+        return redirect(_safe_quality_return(request))
+    try:
+        _treatment, changed = update_quality_treatment_summary(
+            treatment=treatment, actor=request.user, request=request, **form.cleaned_data,
+        )
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    else:
+        messages.success(request, "Resumo da tratativa atualizado." if changed else "Nenhuma alteração informada.")
+    return redirect(_safe_quality_return(request))
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
+@require_POST
+def quality_treatment_complete(request, codigo, treatment_id):
+    order, treatment = _scoped_treatment(request, codigo, treatment_id)
+    form = QualityTreatmentCompleteForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Confirme a conclusão da TQ após a avaliação do RREIP.")
+        return redirect(_safe_quality_return(request))
+    try:
+        complete_quality_treatment(treatment=treatment, actor=request.user, request=request, **form.cleaned_data)
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    else:
+        messages.success(request, f"{treatment.code} concluída no ARION OPS. O ticket OTRS não foi alterado.")
+    return redirect(_safe_quality_return(request))
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
+@require_POST
+def quality_treatment_cancel(request, codigo, treatment_id):
+    order, treatment = _scoped_treatment(request, codigo, treatment_id)
+    form = QualityTreatmentCancelForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Informe a justificativa para o cancelamento administrativo.")
+        return redirect(_safe_quality_return(request))
+    try:
+        cancel_quality_treatment(treatment=treatment, actor=request.user, request=request, **form.cleaned_data)
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    else:
+        messages.success(request, f"{treatment.code} cancelada localmente; nenhum ticket OTRS foi alterado.")
+    return redirect(_safe_quality_return(request))
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+@permission_required(MANAGE_QUALITY_PERMISSION, raise_exception=True)
+@require_POST
 def quality_action_toggle(request, codigo, action_id):
     is_async = request.headers.get("x-requested-with") == "XMLHttpRequest"
     completed_value = request.POST.get("completed")
@@ -1109,7 +1213,7 @@ def quality_action_toggle(request, codigo, action_id):
 @require_POST
 def monitoring_cycle_start(request, codigo):
     order = get_object_or_404(QualityDataScopeService.orders_for(request.user), code=codigo)
-    form = QualityMonitoringStartForm(request.POST, order=order)
+    form = QualityMonitoringStartForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Revise os dados do início do ciclo RREIP.")
         return redirect(_safe_quality_return(request))
@@ -1142,7 +1246,8 @@ def monitoring_cycle_finish(request, codigo, cycle_id):
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
     else:
-        messages.success(request, "Resultado do ciclo registrado localmente.")
+        result = form.cleaned_data.get("result")
+        messages.success(request, "Monitoramento validado. Conclua a TQ na aba Tratativas." if result == QualityMonitoringCycle.Result.SUCCESS else "Resultado do ciclo registrado localmente.")
     return redirect(_safe_quality_return(request))
 
 

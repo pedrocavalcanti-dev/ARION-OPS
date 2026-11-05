@@ -204,6 +204,25 @@ def _model_specs():
         (apps.get_model("configuracoes", "UserPreference"), ("user_id",), ("user_id",)),
         (apps.get_model("painel", "SavedAnalyticsView"), ("user_id", "name"), ("user_id",)),
         (apps.get_model("integracoes", "Integration"), ("key",), ()),
+        (apps.get_model("integracoes", "IntegrationRun"), ("id",), ()),
+        (apps.get_model("integracoes", "IntegrationSyncState"), ("key",), ()),
+        (apps.get_model("integracoes", "ExternalAPIIntegration"), ("provider",), ()),
+        (apps.get_model("integracoes", "ExternalAPIHealthCheck"), ("id",), ()),
+        (apps.get_model("integracoes", "OTRSStateMapping"), ("external_state_id",), ()),
+        (apps.get_model("integracoes", "CMDBOperatorMirror"), ("source_config_item_id",), ()),
+        (apps.get_model("integracoes", "CMDBLinkMirror"), ("source_config_item_id",), ()),
+        (apps.get_model("integracoes", "OTRSTicket"), ("external_id",), ()),
+        (apps.get_model("qualidade", "QualityOrder"), ("code",), ()),
+        (apps.get_model("qualidade", "QualityTreatmentSequence"), ("key",), ()),
+        (apps.get_model("qualidade", "QualityTreatmentIdentity"), ("code",), ()),
+        (apps.get_model("qualidade", "QualityOccurrence"), ("id",), ()),
+        (apps.get_model("qualidade", "QualityTicket"), ("id",), ()),
+        (apps.get_model("qualidade", "QualityTreatment"), ("code",), ()),
+        (apps.get_model("qualidade", "QualityCorrelationCheckpoint"), ("queue_name",), ()),
+        (apps.get_model("qualidade", "QualityMonitoringCycle"), ("quality_order_id", "cycle_number"), ()),
+        (apps.get_model("qualidade", "QualityContact"), ("id",), ()),
+        (apps.get_model("qualidade", "QualityAction"), ("id",), ()),
+        (apps.get_model("qualidade", "QualityAuditEvent"), (), ()),
         (apps.get_model("auditoria", "AuditEvent"), (), ("user_id",)),
     ]
 
@@ -217,7 +236,11 @@ def _map_fk_values(model, row, id_maps):
         value = mapped.get(attname)
         if value is None:
             continue
-        related_map = id_maps.get(field.remote_field.model._meta.label_lower)
+        related_label = field.remote_field.model._meta.label_lower
+        if field.target_field.primary_key:
+            related_map = id_maps.get(related_label)
+        else:
+            related_map = id_maps.get(f"{related_label}:{field.target_field.attname}")
         if related_map is not None:
             mapped[attname] = related_map.get(value, value)
     return mapped
@@ -227,32 +250,79 @@ def _natural_key(model, row, key_fields):
     return tuple(row.get(field) for field in key_fields)
 
 
+def _field_for_key(model, name):
+    return next(field for field in model._meta.concrete_fields
+                if field.name == name or field.attname == name)
+
+
 def _find_target(model, target_alias, key_fields, row):
     if not key_fields:
         return None
     lookup = {field: row[field] for field in key_fields}
+    if any(value is None for value in lookup.values()):
+        return None
     return model.objects.using(target_alias).filter(**lookup).first()
 
 
 def _audit_fingerprint(model, row):
-    excluded = {model._meta.pk.attname, "timestamp"}
+    excluded = {model._meta.pk.attname}
+    if model._meta.label_lower == "auditoria.auditevent":
+        excluded.add("timestamp")
     values = [(field.attname, row.get(field.attname)) for field in model._meta.concrete_fields
               if field.attname not in excluded]
     return json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _copy_integration_secret(model, row, protector):
-    if model._meta.label_lower != "integracoes.integration" or not row.get("secret_ciphertext"):
+    label = model._meta.label_lower
+    if label == "integracoes.integration":
+        secret_fields = ("secret_ciphertext",)
+    elif label == "integracoes.externalapiintegration":
+        secret_fields = ("secret_ciphertext", "smtp_secret_ciphertext")
+    else:
         return row
     try:
-        plaintext = protector.unprotect(row["secret_ciphertext"])
-        if not isinstance(plaintext, str) or not plaintext:
-            raise ValueError
-        row["secret_ciphertext"] = protector.protect(plaintext)
-        del plaintext
+        for field_name in secret_fields:
+            ciphertext = row.get(field_name)
+            if not ciphertext:
+                continue
+            plaintext = protector.unprotect(ciphertext)
+            if not isinstance(plaintext, str) or not plaintext:
+                raise ValueError
+            row[field_name] = protector.protect(plaintext)
+            del plaintext
     except Exception:
         raise ValidationError("Uma credencial de integração não pode ser reaberta com DPAPI nesta conta Windows. Reconfigure-a antes da migração.") from None
     return row
+
+
+def _source_rows_for_copy(model, source_alias):
+    label = model._meta.label_lower
+    quality_order = apps.get_model("qualidade", "QualityOrder")
+    cmdb_link = apps.get_model("integracoes", "CMDBLinkMirror")
+    if label == "integracoes.cmdblinkmirror":
+        linked_ids = quality_order.objects.using(source_alias).exclude(link_id__isnull=True).values_list("link_id", flat=True)
+        return model.objects.using(source_alias).filter(source_config_item_id__in=linked_ids)
+    if label == "integracoes.cmdboperatormirror":
+        linked_ids = quality_order.objects.using(source_alias).exclude(link_id__isnull=True).values_list("link_id", flat=True)
+        operator_ids = cmdb_link.objects.using(source_alias).filter(
+            source_config_item_id__in=linked_ids,
+        ).exclude(operator_id__isnull=True).values_list("operator_id", flat=True)
+        return model.objects.using(source_alias).filter(pk__in=operator_ids)
+    if label == "integracoes.otrsticket":
+        external_ids = set()
+        for model_label, field_name in (
+            ("qualidade.QualityOccurrence", "otrs_ticket_id"),
+            ("qualidade.QualityTicket", "otrs_ticket_id"),
+            ("qualidade.QualityTreatment", "support_ticket_id"),
+        ):
+            related_model = apps.get_model(model_label)
+            external_ids.update(
+                related_model.objects.using(source_alias).exclude(**{f"{field_name}__isnull": True})
+                .values_list(field_name, flat=True)
+            )
+        return model.objects.using(source_alias).filter(external_id__in=external_ids)
+    return model.objects.using(source_alias).all()
 
 
 def _copy_models(source_alias, target_alias):
@@ -261,22 +331,34 @@ def _copy_models(source_alias, target_alias):
     source_counts = {}
     copied_counts = {}
     permission_report = None
+    audit_labels = {"auditoria.auditevent", "qualidade.qualityauditevent"}
+    preserve_auto_pk_labels = {
+        "integracoes.integrationrun", "integracoes.externalapihealthcheck",
+        "qualidade.qualityoccurrence", "qualidade.qualityticket",
+        "qualidade.qualitycontact", "qualidade.qualityaction",
+    }
     with transaction.atomic(using=target_alias):
         _clear_candidate_mirrors_and_runtime_state(target_alias)
         for model, key_fields, _fk_fields in _model_specs():
             label = model._meta.label_lower
-            rows = list(model.objects.using(source_alias).order_by(model._meta.pk.name).values())
+            rows = list(_source_rows_for_copy(model, source_alias).order_by(model._meta.pk.name).values())
             source_counts[label] = len(rows)
             id_map = {}
+            field_maps = {field_name: {} for field_name in key_fields}
             audit_candidates = {}
             audit_fingerprints = set()
-            if label == "auditoria.auditevent":
+            if label in audit_labels:
                 for target_row in model.objects.using(target_alias).order_by(model._meta.pk.name).values():
                     fingerprint = _audit_fingerprint(model, target_row)
                     audit_candidates.setdefault(fingerprint, []).append(target_row[model._meta.pk.attname])
             for original in rows:
                 row = _map_fk_values(model, original, id_maps)
                 source_pk = original[model._meta.pk.attname]
+                if label in {"qualidade.qualitytreatment", "qualidade.qualitymonitoringcycle"}:
+                    active_order_key = row.get("active_order_key")
+                    if active_order_key is not None:
+                        row["active_order_key"] = id_maps.get("qualidade.qualityorder", {}).get(
+                            active_order_key, active_order_key)
                 _copy_integration_secret(model, row, protector)
                 existing = _find_target(model, target_alias, key_fields, row)
                 if model is apps.get_model("integracoes", "Integration"):
@@ -284,12 +366,20 @@ def _copy_models(source_alias, target_alias):
                             ("last_test_at", None), ("last_success_at", None), ("last_read_at", None),
                             ("last_error_at", None), ("last_latency_ms", None), ("accessible_databases", [])):
                         row[field_name] = reset_value
-                if label == "auditoria.auditevent":
+                if label == "qualidade.qualitytreatmentsequence" and existing is not None:
+                    row["last_value"] = max(existing.last_value, row["last_value"])
+                if label in audit_labels:
                     fingerprint = _audit_fingerprint(model, row)
                     audit_fingerprints.add(fingerprint)
                     candidate_ids = audit_candidates.get(fingerprint, [])
                     existing = (model.objects.using(target_alias).filter(pk=candidate_ids.pop(0)).first()
                                 if candidate_ids else None)
+                if label == "qualidade.qualitytreatment" and existing is not None:
+                    if existing.correlation_id != row["correlation_id"]:
+                        raise ValidationError("Um código TQ existente está associado a outro QID no banco candidato.")
+                if label == "qualidade.qualitytreatmentidentity" and existing is not None:
+                    if existing.correlation_id != row["correlation_id"]:
+                        raise ValidationError("Um identificador TQ existente está associado a outro QID no banco candidato.")
                 if existing is not None:
                     if model is get_user_model() and existing.password != row["password"]:
                         raise ValidationError("Já existe um usuário com o mesmo nome no candidato e o hash de senha diverge. Resolva o conflito antes de copiar.")
@@ -299,18 +389,32 @@ def _copy_models(source_alias, target_alias):
                         attname = field.attname
                         if attname in row:
                             setattr(existing, attname, row[attname])
-                    existing.save(using=target_alias)
+                    existing.save_base(raw=True, using=target_alias)
+                    target = existing
                     target_pk = existing.pk
                 else:
-                    data = {field.attname: row[field.attname] for field in model._meta.concrete_fields
-                            if field.attname in row and not field.primary_key}
-                    created = model.objects.using(target_alias).create(**data)
+                    data = {}
+                    for field in model._meta.concrete_fields:
+                        if field.attname not in row:
+                            continue
+                        if (field.primary_key and field.get_internal_type() in {"AutoField", "BigAutoField"}
+                                and label not in preserve_auto_pk_labels):
+                            continue
+                        data[field.attname] = row[field.attname]
+                    created = model(**data)
+                    created.save_base(raw=True, using=target_alias, force_insert=True)
+                    target = created
                     target_pk = created.pk
                 if label == "auditoria.auditevent":
                     # auto_now_add overwrites the imported timestamp in save/create.
                     model.objects.using(target_alias).filter(pk=target_pk).update(timestamp=row["timestamp"])
                 id_map[source_pk] = target_pk
-            if label == "auditoria.auditevent":
+                for field_name, field_map in field_maps.items():
+                    source_value = original.get(field_name)
+                    target_field = _field_for_key(model, field_name)
+                    target_value = getattr(target, target_field.attname)
+                    field_map[source_value] = target_value
+            if label in audit_labels:
                 # Remove only excess target rows matching source event payloads; preserve
                 # candidate-only audit entries whose fingerprints are not in the source.
                 duplicates = [pk for fingerprint in audit_fingerprints
@@ -318,6 +422,9 @@ def _copy_models(source_alias, target_alias):
                 if duplicates:
                     model.objects.using(target_alias).filter(pk__in=duplicates).delete()
             id_maps[label] = id_map
+            for field_name, field_map in field_maps.items():
+                model_field = _field_for_key(model, field_name)
+                id_maps[f"{label}:{model_field.attname}"] = field_map
             copied_counts[label] = len(rows)
         permission_report = _copy_permissions_and_memberships(source_alias, target_alias, id_maps)
     return {"source_counts": source_counts, "copied_counts": copied_counts,
@@ -600,7 +707,7 @@ def _model_count_report(source_alias, target_alias):
     report = {}
     for model, _keys, _fks in _model_specs():
         label = model._meta.label_lower
-        report[label] = {"source": model.objects.using(source_alias).count(),
+        report[label] = {"source": _source_rows_for_copy(model, source_alias).count(),
                          "target": model.objects.using(target_alias).count()}
     report["relationships"] = {"source": _relationship_counts(source_alias),
                                "target": _relationship_counts(target_alias)}
@@ -662,6 +769,7 @@ def _permission_assignments_match(source_alias, target_alias):
 
 def _integration_secrets_open(alias):
     Integration = apps.get_model("integracoes", "Integration")
+    ExternalAPIIntegration = apps.get_model("integracoes", "ExternalAPIIntegration")
     protector = get_secret_protector()
     try:
         for ciphertext in Integration.objects.using(alias).exclude(secret_ciphertext="").values_list("secret_ciphertext", flat=True):
@@ -669,9 +777,38 @@ def _integration_secrets_open(alias):
             if not isinstance(value, str) or not value:
                 return False
             del value
+        for field_name in ("secret_ciphertext", "smtp_secret_ciphertext"):
+            ciphertexts = ExternalAPIIntegration.objects.using(alias).exclude(
+                **{f"{field_name}__in": ["", None]}
+            ).values_list(field_name, flat=True)
+            for ciphertext in ciphertexts:
+                value = protector.unprotect(ciphertext)
+                if not isinstance(value, str) or not value:
+                    return False
+                del value
     except Exception:
         return False
     return True
+
+
+def _quality_identifiers_match(source_alias, target_alias):
+    QualityOrder = apps.get_model("qualidade", "QualityOrder")
+    QualityTreatment = apps.get_model("qualidade", "QualityTreatment")
+    QualityTreatmentIdentity = apps.get_model("qualidade", "QualityTreatmentIdentity")
+    QualityTreatmentSequence = apps.get_model("qualidade", "QualityTreatmentSequence")
+    source_orders = set(QualityOrder.objects.using(source_alias).exclude(code__isnull=True).values_list("code", flat=True))
+    target_orders = set(QualityOrder.objects.using(target_alias).exclude(code__isnull=True).values_list("code", flat=True))
+    source_treatments = set(QualityTreatment.objects.using(source_alias).values_list("code", "correlation_id"))
+    target_treatments = set(QualityTreatment.objects.using(target_alias).values_list("code", "correlation_id"))
+    source_ledger = set(QualityTreatmentIdentity.objects.using(source_alias).values_list(
+        "sequence_number", "code", "correlation_id"))
+    target_ledger = set(QualityTreatmentIdentity.objects.using(target_alias).values_list(
+        "sequence_number", "code", "correlation_id"))
+    source_sequences = dict(QualityTreatmentSequence.objects.using(source_alias).values_list("key", "last_value"))
+    target_sequences = dict(QualityTreatmentSequence.objects.using(target_alias).values_list("key", "last_value"))
+    return (source_orders <= target_orders and source_treatments <= target_treatments
+            and source_ledger <= target_ledger
+            and all(target_sequences.get(key, -1) >= value for key, value in source_sequences.items()))
 
 
 def _required_privilege_report(alias):
@@ -716,6 +853,20 @@ def validate_candidate_migration(*, source_alias="default"):
                   "preferences": counts["configuracoes.userpreference"]["target"] >= counts["configuracoes.userpreference"]["source"],
                   "audit": counts["auditoria.auditevent"]["target"] >= counts["auditoria.auditevent"]["source"],
                   "integrations": counts["integracoes.integration"]["target"] >= counts["integracoes.integration"]["source"],
+                  "external_apis": counts["integracoes.externalapiintegration"]["target"] >= counts["integracoes.externalapiintegration"]["source"],
+                  "quality_records": all(
+                      values["target"] >= values["source"]
+                      for label, values in counts.items() if label.startswith("qualidade.")
+                  ),
+                  "quality_identifiers": _quality_identifiers_match(source_alias, target_alias),
+                  "quality_linked_mirrors": all(
+                      counts[label]["target"] >= counts[label]["source"]
+                      for label in ("integracoes.cmdblinkmirror", "integracoes.otrsticket")
+                  ),
+                  "worker_checkpoints": all(
+                      counts[label]["target"] >= counts[label]["source"]
+                      for label in ("integracoes.integrationsyncstate", "qualidade.qualitycorrelationcheckpoint")
+                  ),
                   "relationships": all(counts["relationships"]["target"].get(key, 0) >= count
                                         for key, count in counts["relationships"]["source"].items()),
                   "permissions": _permissions_match(source_alias, target_alias),

@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db import models, transaction
+from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils import timezone
 import uuid
 
@@ -229,6 +229,7 @@ class QualityTreatment(models.Model):
         COMPLETED = "COMPLETED", "Concluída"
         RECURRENCE = "RECURRENCE", "Reincidiu"
         SEND_FAILED = "SEND_FAILED", "Falha no envio"
+        CANCELED = "CANCELED", "Cancelada"
 
     class SendStatus(models.TextChoices):
         NOT_SENT = "NOT_SENT", "Ainda não enviado"
@@ -236,6 +237,12 @@ class QualityTreatment(models.Model):
         SENT = "SENT", "Aceito pelo Brevo"
         FAILED = "FAILED", "Falha no envio"
         UNCERTAIN = "UNCERTAIN", "Resultado incerto"
+
+    class ManagementSituation(models.TextChoices):
+        WAITING_RESPONSE = "WAITING_RESPONSE", "Aguardando retorno"
+        ANALYSIS = "ANALYSIS", "Em análise"
+        ACTIONS_IN_PROGRESS = "ACTIONS_IN_PROGRESS", "Ações em execução"
+        READY_MONITORING = "READY_MONITORING", "Pronta para monitoramento"
 
     code = models.CharField("código TQ", max_length=24, unique=True, null=True, blank=True)
     correlation_id = models.CharField(
@@ -253,6 +260,13 @@ class QualityTreatment(models.Model):
     operational_state_snapshot = models.CharField(max_length=40, default="UNCONFIRMED")
     reason = models.TextField()
     description = models.TextField(blank=True)
+    management_summary = models.TextField(blank=True)
+    management_situation = models.CharField(
+        max_length=24, choices=ManagementSituation.choices,
+        default=ManagementSituation.WAITING_RESPONSE,
+    )
+    next_action = models.CharField(max_length=500, blank=True)
+    next_action_due = models.DateField(null=True, blank=True)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="quality_treatments")
     deadline = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING_SEND, db_index=True)
@@ -292,12 +306,15 @@ class QualityTreatment(models.Model):
         return self.status in self.ACTIVE_STATUSES
 
     def save(self, *args, **kwargs):
+        using = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
+        kwargs["using"] = using
         if self.pk:
-            previous_correlation_id = type(self).objects.filter(pk=self.pk).values_list("correlation_id", flat=True).first()
+            previous_correlation_id = type(self).objects.using(using).filter(pk=self.pk).values_list(
+                "correlation_id", flat=True).first()
             if previous_correlation_id and self.correlation_id != previous_correlation_id:
                 self.correlation_id = previous_correlation_id
         if self.pk:
-            previous = type(self).objects.filter(pk=self.pk).values("code").first()
+            previous = type(self).objects.using(using).filter(pk=self.pk).values("code").first()
             if previous and previous["code"] and self.code != previous["code"]:
                 self.code = previous["code"]
             self.active_order_key = self.quality_order_id if self.status in self.ACTIVE_STATUSES else None
@@ -306,17 +323,17 @@ class QualityTreatment(models.Model):
 
         # Keep identifiers in a durable ledger so deleting a local TQ can never
         # make its global sequence number or QID available to a later TQ.
-        with transaction.atomic():
-            sequence = QualityTreatmentSequence.objects.select_for_update().get(key="tq")
+        with transaction.atomic(using=using):
+            sequence = QualityTreatmentSequence.objects.using(using).select_for_update().get(key="tq")
             sequence.last_value += 1
-            sequence.save(update_fields=("last_value",))
+            sequence.save(update_fields=("last_value",), using=using)
             year = timezone.localtime(self.created_at).year
             self.code = f"TQ-{year}-{sequence.last_value:06d}"
-            while QualityTreatmentIdentity.objects.filter(correlation_id=self.correlation_id).exists():
+            while QualityTreatmentIdentity.objects.using(using).filter(correlation_id=self.correlation_id).exists():
                 self.correlation_id = generate_quality_tq_correlation_id()
             self.active_order_key = self.quality_order_id if self.status in self.ACTIVE_STATUSES else None
             super().save(*args, **kwargs)
-            QualityTreatmentIdentity.objects.create(
+            QualityTreatmentIdentity.objects.using(using).create(
                 sequence_number=sequence.last_value,
                 code=self.code,
                 correlation_id=self.correlation_id,
@@ -371,15 +388,22 @@ class QualityMonitoringCycle(models.Model):
         CANCELED = "CANCELADO", "Cancelado"
 
     quality_order = models.ForeignKey(QualityOrder, on_delete=models.CASCADE, related_name="monitoring_cycles")
+    active_order_key = models.PositiveBigIntegerField(null=True, blank=True, unique=True, editable=False)
+    quality_treatment = models.ForeignKey(QualityTreatment, null=True, blank=True, on_delete=models.PROTECT, related_name="monitoring_cycles")
     quality_ticket = models.ForeignKey(QualityTicket, null=True, blank=True, on_delete=models.SET_NULL, related_name="monitoring_cycles")
     cycle_number = models.PositiveSmallIntegerField()
     started_at = models.DateTimeField(default=timezone.now)
     expected_end_at = models.DateTimeField(db_index=True)
+    otrs_actions_summary = models.TextField(blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     result = models.CharField(max_length=16, choices=Result.choices, default=Result.IN_PROGRESS, db_index=True)
     trigger_occurrence = models.ForeignKey(QualityOccurrence, null=True, blank=True, on_delete=models.SET_NULL, related_name="triggered_monitoring_cycles")
     financial_regularization_confirmed = models.BooleanField(default=False)
     financial_evidence = models.TextField(blank=True)
+    final_analysis = models.TextField(blank=True)
+    stability_validated = models.BooleanField(default=False)
+    occurrence_review = models.TextField(blank=True)
+    validated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="validated_quality_monitoring_cycles")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -461,6 +485,8 @@ class QualityAuditEvent(models.Model):
         QUALITY_TICKET_LINKED = "QUALITY_TICKET_LINKED", "Ticket de Qualidade vinculado"
         TREATMENT_CREATED = "TREATMENT_CREATED", "TQ criada"
         TREATMENT_TICKET_LINKED = "TREATMENT_TICKET_LINKED", "Ticket OTRS vinculado à TQ"
+        TREATMENT_COMPLETED = "TREATMENT_COMPLETED", "TQ concluída"
+        TREATMENT_CANCELED = "TREATMENT_CANCELED", "TQ cancelada"
         MONITORING_STARTED = "MONITORING_STARTED", "Monitoramento iniciado"
         MONITORING_FAILED = "MONITORING_FAILED", "Monitoramento reincidiu"
         MONITORING_SUCCEEDED = "MONITORING_SUCCEEDED", "Monitoramento concluído com sucesso"

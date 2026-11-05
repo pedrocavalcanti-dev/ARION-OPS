@@ -399,7 +399,7 @@ def arion_test_connection(request):
     try:
         save_candidate_config(values)
         candidate = candidate_config(decrypt=False)
-        password = password_for_connection_test({**candidate, "password": values["password"]})
+        password = password_for_connection_test(candidate)
         result = test_mysql_connection(candidate, password)
         record_candidate_test()
         messages.success(request, f"Conexao do candidato OK - MySQL {result['version'].split('.', 1)[0]}.x - Banco: {result['database']}.")

@@ -33,7 +33,7 @@ from .services.tq_delivery import claim_quality_treatment_send, record_tq_send_a
 from .services.tq_email import build_treatment_email
 from .services.tq_correlation import build_quality_treatment_email_payload, extract_correlation_ids, link_quality_ticket_from_article
 from .services.tq_otrs_correlation import reconcile_quality_articles, refresh_linked_quality_ticket_states
-from .services.treatments import create_quality_treatment, link_quality_ticket, toggle_quality_action
+from .services.treatments import complete_quality_treatment, create_quality_treatment, link_quality_ticket, toggle_quality_action
 
 
 User = get_user_model()
@@ -87,6 +87,19 @@ class QualityModuleTestCase(TestCase):
             relation_state="Valid",
         )
         return ticket
+
+    def prepare_treatment_for_rreip(self, user, link, order, *, ticket_id):
+        treatment = create_quality_treatment(quality_order=order, reason="Tratativa homologada", actor=user)
+        ticket = self.create_ticket(link=link, external_id=ticket_id)
+        treatment.status = QualityTreatment.Status.IN_PROGRESS
+        treatment.send_status = QualityTreatment.SendStatus.SENT
+        treatment.quality_ticket_external_id = ticket.external_id
+        treatment.quality_ticket_number = ticket.ticket_number
+        treatment.quality_ticket_queue_snapshot = ticket.queue_name
+        treatment.management_summary = "Ações corretivas registradas e acompanhadas no OTRS."
+        treatment.management_situation = QualityTreatment.ManagementSituation.READY_MONITORING
+        treatment.save(update_fields=("status", "send_status", "quality_ticket_external_id", "quality_ticket_number", "quality_ticket_queue_snapshot", "management_summary", "management_situation", "active_order_key", "updated_at"))
+        return treatment, ticket
 
 
 class QualityTreatmentCreationTests(QualityModuleTestCase):
@@ -377,6 +390,42 @@ class QualityTreatmentCreationTests(QualityModuleTestCase):
                     'noc@example.com'}])
                 return None
 
+    def test_smtp_message_build_uses_utf8_without_opening_connection(self):
+        from django.core.mail import EmailMultiAlternatives
+        from aplicativos.integracoes.clients.brevo_smtp import send_brevo_smtp
+
+        captured = {}
+        def capture_message(message, fail_silently=False):
+            captured["message"] = message.message()
+            return 1
+
+        config = {
+            "sender_name": "ARION OPS", "sender_email": "noc@example.com",
+            "quality_recipient": "quality@example.com", "quality_cc": "noc@example.com",
+            "reply_to": "reply@example.com",
+        }
+        with patch("aplicativos.integracoes.clients.brevo_smtp.get_connection", return_value=object()) as connection:
+            with patch.object(EmailMultiAlternatives, "send", autospec=True, side_effect=capture_message):
+                result = send_brevo_smtp(
+                    username="login", password="secret-never-used", config=config,
+                    subject="Solicita\u00e7\u00e3o de tratativa | TQ-2026-000099",
+                    text_content="Identifica\u00e7\u00e3o do circuito: VIVO.PI. \u00c1rvore de correla\u00e7\u00e3o ARION-QID-0123456789ABCDEF0123456789ABCDEF",
+                    html_content="<p>Identifica\u00e7\u00e3o UTF-8</p><strong>ARION-QID-0123456789ABCDEF0123456789ABCDEF</strong>",
+                )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.stage, "smtp_send")
+        connection.assert_called_once()
+        mime = captured["message"]
+        self.assertEqual(mime["To"], "quality@example.com")
+        self.assertEqual(mime["Cc"], "noc@example.com")
+        self.assertEqual(mime["Reply-To"], "reply@example.com")
+        plain = mime.get_payload(0).get_payload(decode=True).decode("utf-8")
+        html = mime.get_payload(1).get_payload(decode=True).decode("utf-8")
+        self.assertIn("Identifica\u00e7\u00e3o do circuito", plain)
+        self.assertIn("ARION-QID-0123456789ABCDEF0123456789ABCDEF", plain)
+        self.assertIn("Identifica\u00e7\u00e3o UTF-8", html)
+        self.assertIn("ARION-QID-0123456789ABCDEF0123456789ABCDEF", html)
+
     def test_mocked_smtp_send_records_local_attempt_without_fake_brevo_id(self):
         treatment = create_quality_treatment(quality_order=self.order, reason=
             'SMTP teste', actor=self.user)
@@ -624,30 +673,27 @@ class QualityTreatmentCreationTests(QualityModuleTestCase):
             return None
 
     def test_recurrence_during_monitoring_closes_current_tq_as_recurrence(self):
-        treatment = create_quality_treatment(quality_order=self.order, reason=
-            'Monitorar reincidÃªncia', actor=self.user)
-        treatment.status = QualityTreatment.Status.IN_PROGRESS
-        treatment.send_status = QualityTreatment.SendStatus.SENT
-        treatment.save(update_fields=('status', 'send_status', 'active_order_key',
-            'updated_at'))
+        treatment, _initial_ticket = self.prepare_treatment_for_rreip(
+            self.user, self.link, self.order, ticket_id=99120,
+        )
         started_at = timezone.now() - timedelta(days=2)
-        cycle = start_monitoring_cycle(quality_order=self.order, actor=self.user,
-            started_at=started_at)
+        cycle = start_monitoring_cycle(quality_order=self.order, actor=self.user, started_at=started_at,
+                                      actions_analyzed=True, otrs_actions_summary="Ações verificadas no OTRS.")
         treatment.refresh_from_db()
         self.assertEqual(treatment.status, QualityTreatment.Status.MONITORING)
-        recurrence_ticket = self.create_ticket(link=self.link, external_id=99121,
-            created_at=timezone.now() - timedelta(hours=1))
-        cycle = finish_monitoring_cycle(cycle=cycle, result=QualityMonitoringCycle.
-            Result.RECURRENCE, trigger_ticket_identifier=recurrence_ticket.
-            ticket_number, actor=self.user)
+        recurrence_ticket = self.create_ticket(link=self.link, external_id=99121, created_at=timezone.now() - timedelta(hours=1))
+        cycle = finish_monitoring_cycle(
+            cycle=cycle, result=QualityMonitoringCycle.Result.RECURRENCE,
+            trigger_ticket_identifier=recurrence_ticket.ticket_number, actor=self.user,
+            recurrence_description="Same root cause; evidence in the validated ticket.",
+            same_root_cause_confirmed=True,
+        )
         treatment.refresh_from_db()
         self.assertEqual(cycle.result, QualityMonitoringCycle.Result.RECURRENCE)
         self.assertEqual(treatment.status, QualityTreatment.Status.RECURRENCE)
         self.assertEqual(treatment.completed_at, recurrence_ticket.source_created_at)
-        next_treatment = create_quality_treatment(quality_order=self.order, reason=
-            'Novo ciclo apÃ³s reincidÃªncia', actor=self.user)
+        next_treatment = create_quality_treatment(quality_order=self.order, reason="New cycle after recurrence", actor=self.user)
         self.assertNotEqual(treatment.correlation_id, next_treatment.correlation_id)
-        return None
 
     def test_email_uses_structured_operator_and_keeps_isp_separate(self):
         regional_provider = CMDBOperatorMirror.objects.create(source_config_item_id="CMDB-TQ-ISP", name="GIGANET TELECOM")
@@ -1217,15 +1263,16 @@ class QualityDashboardTests(QualityModuleTestCase):
 
     def test_rreip_cycle_uses_configured_default_duration(self):
         actor = self.create_authorized_user("quality-rreip-default-duration")
-        order = QualityOrder.objects.create(status=QualityOrder.Status.TRATAMENTO)
+        link = CMDBLinkMirror.objects.create(source_config_item_id="QUALITY-RREIP-DEFAULT", designation="Circuito RREIP")
+        order = create_quality_order(actor=actor, link=link)
+        self.prepare_treatment_for_rreip(actor, link, order, ticket_id=99220)
         started_at = timezone.now()
-
-        cycle = start_monitoring_cycle(quality_order=order, started_at=started_at, actor=actor)
-
+        cycle = start_monitoring_cycle(quality_order=order, started_at=started_at, actor=actor,
+                                      actions_analyzed=True, otrs_actions_summary="Ações verificadas no OTRS.")
         self.assertEqual(cycle.expected_end_at - cycle.started_at, timedelta(days=30))
         order.refresh_from_db()
         self.assertEqual(order.status, QualityOrder.Status.MONITORAMENTO)
-        self.assertEqual(order.audit_events.get().event_type, "MONITORING_STARTED")
+        self.assertTrue(order.audit_events.filter(event_type="MONITORING_STARTED").exists())
 
 
     def test_empty_quality_dashboard_does_not_load_chart_assets(self):
@@ -1963,6 +2010,39 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         order = create_quality_order(actor=user, link=link, current_reason=reason)
         return link, order
 
+    def test_active_treatment_phase_and_compact_summary_update(self):
+        manager = self.create_manager("quality-treatment-summary")
+        link, order = self.create_link_and_order(manager, key="TREATMENT-SUMMARY")
+        treatment, _ticket = self.prepare_treatment_for_rreip(manager, link, order, ticket_id=85100)
+        order.status = QualityOrder.Status.NOVA
+        order.save(update_fields=("status", "updated_at"))
+        self.client.force_login(manager)
+
+        page = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}), {"tab": "tratativas"})
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.context["lifecycle_label"], "Em tratamento")
+        self.assertTrue(next(step for step in page.context["lifecycle_steps"] if step["label"] == "Tratamento")["current"])
+        self.assertContains(page, "RESUMO GERENCIAL")
+        self.assertContains(page, treatment.quality_ticket_number)
+
+        response = self.client.post(reverse("qualidade:tq_atualizar_resumo", kwargs={
+            "codigo": order.code, "treatment_id": treatment.pk,
+        }), {
+            "management_summary": "A operadora confirmou a correção e a Qualidade acompanha a estabilidade.",
+            "management_situation": QualityTreatment.ManagementSituation.ACTIONS_IN_PROGRESS,
+            "next_action": "Revisar atualização no OTRS",
+            "next_action_due": "2026-11-10",
+            "update_note": "Atualização curta recebida da operadora.",
+            "next": f"/qualidade/ordens/{order.code}/?tab=tratativas",
+        })
+        self.assertEqual(response.status_code, 302)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.management_summary, "A operadora confirmou a correção e a Qualidade acompanha a estabilidade.")
+        self.assertEqual(treatment.next_action_due, date(2026, 11, 10))
+        event = order.audit_events.filter(event_type=QualityAuditEvent.EventType.NOTES_CHANGED).latest("created_at")
+        self.assertEqual(event.metadata["treatment_code"], treatment.code)
+        self.assertTrue(AuditEvent.objects.filter(action="TREATMENT_UPDATED", object_id=str(order.pk)).exists())
+
     def test_treatment_link_history_checklist_and_empty_state(self):
         manager = self.create_manager("quality-treatment-workflow")
         link, order = self.create_link_and_order(manager, key="TREATMENTS")
@@ -1994,7 +2074,7 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         self.assertContains(detail, NOC_QUEUE_NAME)
         self.assertContains(detail, "Abrir no OTRS")
         self.assertContains(detail, "Checklist da Qualidade")
-        self.assertContains(detail, "Revisar o histÃ³rico do circuito")
+        self.assertContains(detail, "Acompanhar o retorno")
         self.assertEqual(detail.context["current_treatment"]["ticket_number"], active.ticket_number)
         self.assertEqual(detail.context["treatment_history"][0]["ticket_number"], closed.ticket_number)
         self.assertTrue(AuditEvent.objects.filter(action="QUALITY_TICKET_LINKED").exists())
@@ -2004,7 +2084,7 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
             reverse("qualidade:ordem_detail", kwargs={"codigo": empty_order.code}), {"tab": "tratativas"},
         )
         self.assertEqual(empty_response.status_code, 200)
-        self.assertContains(empty_response, "Nenhuma tratativa de Qualidade vinculada.")
+        self.assertContains(empty_response, "Nenhuma tratativa de Qualidade criada.")
         self.assertEqual(empty_link.source_config_item_id, empty_order.ci_snapshot)
 
     def test_treatment_link_rejects_ticket_from_another_circuit_and_viewer_cannot_post(self):
@@ -2072,19 +2152,24 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         )
         self.client.force_login(manager)
         page = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}), {"tab": "monitoramento"})
-        self.assertContains(page, "Desbloqueio nÃ£o significa regularizaÃ§Ã£o definitiva.")
-        self.assertContains(page, "EvidÃªncia da regularizaÃ§Ã£o")
+        self.assertContains(page, "ações registradas")
+        self.assertNotContains(page, "Iniciar ciclo RREIP</button>")
+        treatment, _initial_ticket = self.prepare_treatment_for_rreip(manager, link, order, ticket_id=85105)
         with self.assertRaises(ValidationError):
             start_monitoring_cycle(quality_order=order, actor=manager)
         with self.assertRaises(ValidationError):
             start_monitoring_cycle(
                 quality_order=order, actor=manager,
+                actions_analyzed=True, otrs_actions_summary="Ações verificadas no OTRS.",
                 financial_regularization_confirmed=True, financial_evidence="",
             )
+
 
         cycle = start_monitoring_cycle(
             quality_order=order,
             actor=manager,
+            actions_analyzed=True,
+            otrs_actions_summary="Operadora confirmou a correção; Qualidade verificou o circuito.",
             financial_regularization_confirmed=True,
             financial_evidence="Comprovante validado pela Qualidade",
         )
@@ -2096,46 +2181,79 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         ticket = self.create_ticket(
             link=link, external_id=85104, created_at=timezone.now() - timedelta(days=2),
         )
-        with self.assertRaisesRegex(ValidationError, "ocorrÃªncia vÃ¡lida"):
+        with self.assertRaises(ValidationError):
             finish_monitoring_cycle(
                 cycle=cycle, result=QualityMonitoringCycle.Result.SUCCESS, actor=manager,
             )
         failed = finish_monitoring_cycle(
             cycle=cycle, result=QualityMonitoringCycle.Result.RECURRENCE,
             trigger_ticket_identifier=ticket.ticket_number, actor=manager,
+            recurrence_description="Mesmo defeito constatado no período; evidência no ticket.",
+            same_root_cause_confirmed=True,
         )
 
         self.assertEqual(failed.result, QualityMonitoringCycle.Result.RECURRENCE)
         self.assertEqual(failed.trigger_occurrence.ticket_number, ticket.ticket_number)
         self.assertEqual(failed.ended_at, ticket.source_created_at)
         self.assertTrue(failed.trigger_occurrence.counts_as_recurrence)
+        self.assertTrue(failed.trigger_occurrence.same_root_cause)
         self.assertEqual(order.__class__.objects.get(pk=order.pk).status, QualityOrder.Status.TRATAMENTO)
         self.assertTrue(AuditEvent.objects.filter(action="STATUS_CHANGED", object_id=str(order.pk)).exists())
         self.assertTrue(AuditEvent.objects.filter(action="MONITORING_FAILED").exists())
 
     def test_monitoring_success_and_cancellation_are_recorded_locally(self):
         manager = self.create_manager("quality-monitoring-results")
-        _, order = self.create_link_and_order(manager, key="MONITORING-RESULTS")
-        successful = start_monitoring_cycle(
-            quality_order=order, actor=manager, duration_days=3,
-            started_at=timezone.now() - timedelta(days=5),
-        )
+        link, order = self.create_link_and_order(manager, key="MONITORING-RESULTS")
+        treatment, _ticket = self.prepare_treatment_for_rreip(manager, link, order, ticket_id=85106)
+        self.client.force_login(manager)
+        monitor_page = self.client.get(reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}), {"tab": "monitoramento"})
+        self.assertEqual(monitor_page.status_code, 200)
+        self.assertContains(monitor_page, "data-quality-monitoring-dialog")
+        self.assertContains(monitor_page, "Confirmar in&#237;cio do RREIP")
+        start_response = self.client.post(reverse("qualidade:monitoramento_iniciar", kwargs={"codigo": order.code}), {
+            "actions_analyzed": "on",
+            "otrs_actions_summary": "Ações verificadas no ticket OTRS.",
+            "next": f"/qualidade/ordens/{order.code}/?tab=monitoramento",
+        })
+        self.assertEqual(start_response.status_code, 302)
+        successful = order.monitoring_cycles.get(result=QualityMonitoringCycle.Result.IN_PROGRESS)
+        self.assertTrue(order.actions.get(title="Liberar para monitoramento RREIP").completed)
+        successful.started_at = timezone.now() - timedelta(days=35)
+        successful.expected_end_at = timezone.now() - timedelta(days=5)
+        successful.save(update_fields=("started_at", "expected_end_at"))
         successful = finish_monitoring_cycle(
             cycle=successful, result=QualityMonitoringCycle.Result.SUCCESS, actor=manager,
+            final_analysis="Análise final estável.", stability_validated=True,
+            occurrence_review="Ocorrências avaliadas; sem reincidência da causa tratada.",
         )
         self.assertEqual(successful.result, QualityMonitoringCycle.Result.SUCCESS)
+        self.assertTrue(order.actions.get(title="Avaliar a estabilidade ao fim do período").completed)
+        order.refresh_from_db()
+        self.assertEqual(order.status, QualityOrder.Status.MONITORAMENTO)
+        self.assertIsNone(order.completed_at)
+        treatment.refresh_from_db()
+        self.assertEqual(treatment.status, QualityTreatment.Status.MONITORING)
+        treatment = complete_quality_treatment(
+            treatment=treatment, actor=manager, confirmed=True, observations="Homologado localmente.",
+        )
+        self.assertEqual(treatment.status, QualityTreatment.Status.COMPLETED)
+        self.assertTrue(order.actions.get(title="Concluir a avaliação da Qualidade").completed)
         order.refresh_from_db()
         self.assertEqual(order.status, QualityOrder.Status.CONCLUIDA)
         self.assertIsNotNone(order.completed_at)
         with self.assertRaises(ValidationError):
             start_monitoring_cycle(quality_order=order, actor=manager)
 
-        canceled_order = QualityOrder.objects.create(status=QualityOrder.Status.TRATAMENTO)
-        canceled = start_monitoring_cycle(quality_order=canceled_order, actor=manager)
+        canceled_link, canceled_order = self.create_link_and_order(manager, key="MONITORING-CANCELLED")
+        canceled_treatment, _ = self.prepare_treatment_for_rreip(manager, canceled_link, canceled_order, ticket_id=85107)
+        canceled = start_monitoring_cycle(quality_order=canceled_order, actor=manager,
+                                          actions_analyzed=True, otrs_actions_summary="Ações verificadas no ticket OTRS.")
         canceled = finish_monitoring_cycle(
             cycle=canceled, result=QualityMonitoringCycle.Result.CANCELED, actor=manager,
         )
         self.assertEqual(canceled.result, QualityMonitoringCycle.Result.CANCELED)
+        canceled_treatment.refresh_from_db()
+        self.assertEqual(canceled_treatment.status, QualityTreatment.Status.IN_PROGRESS)
         self.assertTrue(AuditEvent.objects.filter(action="MONITORING_SUCCEEDED").exists())
         self.assertTrue(AuditEvent.objects.filter(action="MONITORING_CANCELED").exists())
 

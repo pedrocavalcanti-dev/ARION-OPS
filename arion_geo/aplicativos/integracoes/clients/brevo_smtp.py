@@ -26,13 +26,13 @@ class SMTPResult:
     stage: str = ""
 
 
-def _safe_error(exc):
+def _safe_error(exc, *, stage="smtp_authentication"):
     detail = getattr(exc, "smtp_error", b"")
     if isinstance(detail, bytes):
         detail = detail.decode("utf-8", errors="ignore")
     detail = str(detail).casefold()
     code = getattr(exc, "smtp_code", None)
-    if code == 535:
+    if isinstance(exc, smtplib.SMTPAuthenticationError) or code == 535:
         return "SMTP 535 \u2014 Login ou chave rejeitados."
     if code == 525:
         return "SMTP 525 \u2014 Possivel bloqueio de IP; verifique a autorizacao na conta Brevo."
@@ -50,7 +50,13 @@ def _safe_error(exc):
         return "Falha de conectividade SMTP."
     if isinstance(exc, smtplib.SMTPResponseException) and code:
         return f"SMTP {int(code)} \u2014 Resposta do servidor nao classificada."
-    return "Falha segura durante a autenticacao SMTP."
+    if stage == "message_build":
+        return "Falha ao preparar a mensagem de e-mail."
+    if stage == "connection_setup":
+        return "Falha ao preparar a conexao SMTP."
+    if stage == "smtp_send":
+        return "Falha durante a transmissao SMTP."
+    return "Falha durante a autenticacao SMTP."
 
 
 def _smtp_error_result(exc, started):
@@ -112,22 +118,28 @@ def send_brevo_smtp(*, username, password, config, subject, text_content, html_c
             to=[config["quality_recipient"]],
             cc=[config["quality_cc"]] if config.get("quality_cc") else None,
             reply_to=[config["reply_to"]] if config.get("reply_to") else None,
-            connection=connection, encoding="utf-8",
+            connection=connection,
         )
+        message.encoding = "utf-8"
         message.attach_alternative(html_content, "text/html")
         stage = "smtp_send"
         accepted = message.send(fail_silently=False) == 1
         return SMTPResult(accepted, "Servidor SMTP aceitou a mensagem." if accepted else "Servidor SMTP recusou a mensagem.",
                           max(0, round((time.monotonic() - started) * 1000)),
                           uncertain=False, stage=stage)
-    except (smtplib.SMTPAuthenticationError, smtplib.SMTPSenderRefused,
-            smtplib.SMTPRecipientsRefused, smtplib.SMTPDataError) as exc:
-        result = SMTPResult(False, _safe_error(exc),
+    except smtplib.SMTPAuthenticationError as exc:
+        result = SMTPResult(False, _safe_error(exc, stage="smtp_authentication"),
+                            max(0, round((time.monotonic() - started) * 1000)),
+                            getattr(exc, "smtp_code", None), uncertain=False,
+                            exception_class=type(exc).__name__, stage="smtp_authentication")
+    except (smtplib.SMTPSenderRefused, smtplib.SMTPRecipientsRefused,
+            smtplib.SMTPDataError) as exc:
+        result = SMTPResult(False, _safe_error(exc, stage=stage),
                             max(0, round((time.monotonic() - started) * 1000)),
                             getattr(exc, "smtp_code", None), uncertain=False,
                             exception_class=type(exc).__name__, stage=stage)
     except Exception as exc:
-        result = SMTPResult(False, _safe_error(exc),
+        result = SMTPResult(False, _safe_error(exc, stage=stage),
                             max(0, round((time.monotonic() - started) * 1000)),
                             getattr(exc, "smtp_code", None),
                             uncertain=(stage == "smtp_send"),

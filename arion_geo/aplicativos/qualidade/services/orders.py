@@ -66,7 +66,8 @@ def create_quality_order(*, actor=None, request=None, **fields):
 @transaction.atomic
 def update_quality_order_field(*, order, field_name, value, actor=None, request=None):
     """Change one editable OQ field and record both Quality and central audit events."""
-    allowed_fields = {"status", "recurrence_level", "owner", "priority", "treatment_deadline", "internal_notes"}
+    # Status transitions are owned by treatment/monitoring services, never by the generic edit form.
+    allowed_fields = {"recurrence_level", "owner", "priority", "treatment_deadline", "internal_notes"}
     if field_name not in allowed_fields:
         raise ValueError("Campo de atualização não permitido.")
     locked = QualityOrder.objects.select_for_update().select_related("owner").get(pk=order.pk)

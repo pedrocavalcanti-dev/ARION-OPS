@@ -1,6 +1,44 @@
 {
-  "current_version": "1.3.0",
+  "current_version": "1.3.1",
   "releases": [
+    {
+      "version": "1.3.1",
+      "released_at": "2026-11-05",
+      "title": "ARION OPS 1.3.1 — Refinamentos de Qualidade, Estabilidade e Correlações",
+      "summary": "Atualização incremental da versão 1.3.0 focada na estabilização do módulo Qualidade Operacional, integridade de schema e migrations, correlação robusta OQ → TQ → OTRS via QID, integração com Brevo SMTP e refinamentos visuais de usabilidade.",
+      "sections": [
+        {
+          "category": "Qualidade Operacional",
+          "items": [
+            "Alinhamento visual da aba Tratativas: cards de Tratativa Atual e Checklist da Qualidade alinhados na mesma altura inicial e com espaçamentos consistentes no grid.",
+            "Refinamento dos botões operacionais ('Abrir no OTRS', 'Atualizar resumo', 'Salvar atualização', 'Iniciar monitoramento RREIP') com alturas padronizadas (36px), ícones SVG dedicados, estados visuais claros (hover, focus, disabled) e hierarquia sem links soltos.",
+            "Formulário de atualização do resumo gerencial recolhido por padrão via painel retrátil, abrindo inline com acionamento claro e intuitivo.",
+            "Geração estruturada de Tratativas de Qualidade (TQs) locais vinculadas à Ordem de Qualidade e correlacionadas a chamados de suporte do circuito.",
+            "Correlação unívoca entre registros ARION OPS e tickets OTRS através do QID imutável (ARION-QID-...) gravado no ledger e validado na leitura do espelho OTRS.",
+            "Acompanhamento local do ciclo de monitoramento RREIP com persistência de resumo das ações verificadas no OTRS (otrs_actions_summary) e histórico de transições."
+          ]
+        },
+        {
+          "category": "Banco de Dados e Migrations",
+          "items": [
+            "Preservação do SQLite como banco oficial em ambiente de desenvolvimento e MySQL 8.4 em produção.",
+            "Correção de schema e desacoplamento seguro das migrações do app Qualidade: migration 0014 reconciliada e migration 0015 criada para adicionar otrs_actions_summary, active_order_key, support_ticket_id, support_ticket_number e correlation_id sem inconsistências de integridade.",
+            "Procedimento seguro de backup de banco SQLite pré-migração executado e validado com PRAGMA integrity_check.",
+            "Total compatibilidade das migrações com MySQL 8.4 para futuro deploy em produção."
+          ]
+        },
+        {
+          "category": "Segurança e Integrações",
+          "items": [
+            "Integração do envio de TQs via Brevo SMTP com suporte a TLS seguro e validação de destinatários autorizados.",
+            "Isolamento rigoroso de credenciais e tokens em variáveis de ambiente (.env), com exclusão do Git e proteção contra vazamento em logs ou frontend.",
+            "QIDs internos protegidos e apresentados de forma amigável ao operador.",
+            "Preservação de RBAC, Data Scope e proteção CSRF em todas as ações de atualização e gestão de tratativas.",
+            "Preservação estrita da TQ-2026-000002 e seu vínculo com o ticket OTRS 2026110536000319."
+          ]
+        }
+      ]
+    },
     {
       "version": "1.3.0",
       "released_at": "2026-11-02",

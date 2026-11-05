@@ -6,12 +6,13 @@ import re
 
 
 def reserve_existing_treatment_ids(apps, schema_editor):
+    database = schema_editor.connection.alias
     Treatment = apps.get_model("qualidade", "QualityTreatment")
     Identity = apps.get_model("qualidade", "QualityTreatmentIdentity")
     Sequence = apps.get_model("qualidade", "QualityTreatmentSequence")
     pattern = re.compile(r"^TQ-(\d{4})-(\d+)$")
     last_value = 0
-    for item in Treatment.objects.all().iterator():
+    for item in Treatment.objects.using(database).all().iterator():
         match = pattern.fullmatch(item.code or "")
         if match:
             sequence_number = int(match.group(2))
@@ -19,10 +20,10 @@ def reserve_existing_treatment_ids(apps, schema_editor):
             year = item.created_at.year if item.created_at else 2000
             sequence_number = item.pk
             item.code = f"TQ-{year}-{sequence_number:06d}"
-            item.save(update_fields=("code",))
+            item.save(using=database, update_fields=("code",))
         if not item.correlation_id:
             continue
-        Identity.objects.get_or_create(
+        Identity.objects.using(database).get_or_create(
             sequence_number=sequence_number,
             defaults={
                 "code": item.code,
@@ -31,7 +32,7 @@ def reserve_existing_treatment_ids(apps, schema_editor):
             },
         )
         last_value = max(last_value, sequence_number)
-    Sequence.objects.update_or_create(key="tq", defaults={"last_value": last_value})
+    Sequence.objects.using(database).update_or_create(key="tq", defaults={"last_value": last_value})
 
 
 class Migration(migrations.Migration):

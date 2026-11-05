@@ -156,9 +156,17 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
         ("Monitoramento", QualityOrder.Status.MONITORAMENTO),
         ("Concluída", QualityOrder.Status.CONCLUIDA),
     )
-    current_stage = {
-        QualityOrder.Status.AGUARDANDO_TERCEIRO: QualityOrder.Status.TRATAMENTO,
-    }.get(order.status, order.status)
+    active_treatment_status = order.treatments.filter(
+        status__in=QualityTreatment.ACTIVE_STATUSES,
+    ).values_list("status", flat=True).first()
+    if active_cycle:
+        current_stage = QualityOrder.Status.MONITORAMENTO
+    elif active_treatment_status:
+        current_stage = QualityOrder.Status.TRATAMENTO
+    else:
+        current_stage = {
+            QualityOrder.Status.AGUARDANDO_TERCEIRO: QualityOrder.Status.TRATAMENTO,
+        }.get(order.status, order.status)
     lifecycle_steps = [
         {"label": label, "current": current_stage == value}
         for label, value in lifecycle_stages
@@ -189,7 +197,7 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
         "status_label": status_labels.get(order.status, order.get_status_display()),
         "priority_label": order.get_priority_display() or "Sem classificação",
         "level_label": order.get_recurrence_level_display() if order.recurrence_level else "A classificar",
-        "lifecycle_label": status_labels.get(order.status, order.get_status_display()),
+        "lifecycle_label": status_labels.get(current_stage, status_labels.get(order.status, order.get_status_display())),
         "lifecycle_steps": lifecycle_steps,
         "latest_event_label": event_labels.get(latest_event.event_type, latest_event.get_event_type_display()) if latest_event else "",
         "active_tab": tab,

@@ -1,16 +1,17 @@
 import json
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from contextlib import nullcontext
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch, sentinel
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.test import SimpleTestCase
 from django.conf import settings
 from unittest import TestCase as UnitTestCase
 
 from .services.arion_database import (
-    activate_candidate, candidate_config, django_database_settings, migration_state,
+    activate_candidate, candidate_config, candidate_database_settings, django_database_settings, migration_state,
     record_candidate_test, rollback_to_previous, save_candidate_config, test_mysql_connection,
 )
 from .services.secrets import TestSecretProtector
@@ -31,6 +32,84 @@ class CandidateDatabaseFlowTests(SimpleTestCase):
                 "user": "arion", "password": "candidate-secret", "timeout": 10}
         data.update(overrides)
         return save_candidate_config(data, path=self.path, protector=self.protector)
+
+    @patch("aplicativos.integracoes.services.arion_database._verified_mysql_ssl_context")
+    def test_remote_database_url_uses_env_password_and_verified_ca(self, build_context):
+        build_context.return_value = sentinel.verified_tls
+        config = django_database_settings(
+            base_dir=self.path.parent,
+            environ={
+                "DATABASE_URL": (
+                    "mysql://avnadmin@arionops-arionops.c.aivencloud.com:17384/defaultdb"
+                    "?connect_timeout=8&ssl_mode=VERIFY_IDENTITY&ssl_ca=var%2Fcerts%2Faiven-ca.pem"
+                ),
+                "DATABASE_PASSWORD": "local-test-secret",
+            },
+            path=self.path,
+            protector=self.protector,
+        )
+        self.assertEqual(config["ENGINE"], "django.db.backends.mysql")
+        self.assertEqual(config["PASSWORD"], "local-test-secret")
+        self.assertEqual(config["OPTIONS"]["connect_timeout"], 8)
+        self.assertEqual(config["OPTIONS"]["charset"], "utf8mb4")
+        self.assertIs(config["OPTIONS"]["ssl"], sentinel.verified_tls)
+        self.assertEqual(config["CONN_MAX_AGE"], 0)
+        self.assertTrue(config["CONN_HEALTH_CHECKS"])
+        build_context.assert_called_once_with("var/certs/aiven-ca.pem")
+
+    def test_remote_database_url_rejects_missing_ca_or_password(self):
+        base = "mysql://avnadmin@arionops-arionops.c.aivencloud.com:17384/defaultdb"
+        with self.assertRaisesRegex(ImproperlyConfigured, "DATABASE_PASSWORD"):
+            django_database_settings(
+                base_dir=self.path.parent, environ={"DATABASE_URL": base}, path=self.path,
+                protector=self.protector,
+            )
+        with self.assertRaisesRegex(ImproperlyConfigured, "CA validada"):
+            django_database_settings(
+                base_dir=self.path.parent,
+                environ={"DATABASE_URL": base, "DATABASE_PASSWORD": "local-test-secret"},
+                path=self.path, protector=self.protector,
+            )
+
+    @patch("aplicativos.integracoes.services.arion_database._verified_mysql_ssl_context")
+    def test_connection_probe_requires_tls_cipher_when_ca_is_configured(self, build_context):
+        build_context.return_value = sentinel.verified_tls
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchone.side_effect = [
+            ("defaultdb", "8.4.0", "2026-11-05 12:00:00"),
+            ("Ssl_cipher", "TLS_AES_256_GCM_SHA384"),
+        ]
+        connector = Mock(return_value=connection)
+        result = test_mysql_connection(
+            {"engine": "mysql", "host": "aiven.example", "port": 17384,
+             "database": "defaultdb", "user": "avnadmin", "timeout": 8,
+             "ssl_ca": "var/certs/aiven-ca.pem"},
+            "local-test-secret", connection_factory=connector,
+        )
+        self.assertTrue(result["tls_verified"])
+        self.assertEqual(result["version"], "8.4.0")
+        self.assertIs(connector.call_args.kwargs["ssl"], sentinel.verified_tls)
+        self.assertEqual(cursor.execute.call_args_list[-1].args[0], "SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+
+    @patch("aplicativos.integracoes.services.arion_database._verified_mysql_ssl_context")
+    def test_candidate_uses_environment_password_and_ca_without_persisting_password(self, build_context):
+        build_context.return_value = sentinel.verified_tls
+        with patch.dict("os.environ", {
+            "DATABASE_PASSWORD": "local-test-secret",
+            "DB_SSL_CA": "var/certs/aiven-ca.pem",
+        }):
+            save_candidate_config({
+                "host": "arionops-arionops.c.aivencloud.com", "port": 17384,
+                "database": "defaultdb", "user": "avnadmin", "timeout": 8,
+            }, path=self.path, protector=self.protector)
+            candidate = candidate_config(path=self.path, protector=self.protector)
+            database = candidate_database_settings(path=self.path, protector=self.protector)
+
+        self.assertEqual(candidate["password"], "local-test-secret")
+        self.assertEqual(candidate["password_source"], "environment")
+        self.assertIs(database["OPTIONS"]["ssl"], sentinel.verified_tls)
+        self.assertNotIn("local-test-secret", self.path.read_text(encoding="utf-8"))
 
     def test_candidate_dpapi_failure_is_reported_without_secret(self):
         self.save()
@@ -177,6 +256,79 @@ class LocalDataCopyTests(UnitTestCase):
                             [migrated_legacy_scope.pk, migrated_operator.pk],
                         )
                         self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_copy_preserves_quality_qid_ledger_checkpoints_and_ticket_links(self):
+        from django.apps import apps
+        from django.utils import timezone
+
+        with tempfile.TemporaryDirectory() as directory:
+            stack, source, target = self._migrated_databases(directory)
+            with stack:
+                QualityOrder = apps.get_model("qualidade", "QualityOrder")
+                QualityOccurrence = apps.get_model("qualidade", "QualityOccurrence")
+                QualityTreatment = apps.get_model("qualidade", "QualityTreatment")
+                QualityTreatmentSequence = apps.get_model("qualidade", "QualityTreatmentSequence")
+                QualityTreatmentIdentity = apps.get_model("qualidade", "QualityTreatmentIdentity")
+                QualityCorrelationCheckpoint = apps.get_model("qualidade", "QualityCorrelationCheckpoint")
+                QualityMonitoringCycle = apps.get_model("qualidade", "QualityMonitoringCycle")
+                QualityAuditEvent = apps.get_model("qualidade", "QualityAuditEvent")
+                CMDBLinkMirror = apps.get_model("integracoes", "CMDBLinkMirror")
+                OTRSTicket = apps.get_model("integracoes", "OTRSTicket")
+
+                QualityTreatmentSequence.objects.using(source).create(key="tq", last_value=0)
+                link = CMDBLinkMirror.objects.using(source).create(source_config_item_id="CI-QUALITY-1")
+                order = QualityOrder.objects.using(source).create(code="OQ-2026-000321")
+                QualityOrder.objects.using(source).filter(pk=order.pk).update(link_id=link.source_config_item_id)
+                ticket = OTRSTicket.objects.using(source).create(
+                    external_id=987654321, ticket_number="2026110500000123", queue_external_id=12,
+                    queue_name="NOC - QUALIDADE ATACADO", external_state_id=1, external_state_name="open",
+                )
+                occurred_at = timezone.now()
+                QualityOccurrence.objects.using(source).create(
+                    quality_order=order, otrs_ticket=ticket, ticket_external_id_snapshot=ticket.external_id,
+                    ticket_number=ticket.ticket_number, occurred_at=occurred_at,
+                )
+                treatment = QualityTreatment.objects.using(source).create(
+                    quality_order=order, support_ticket=ticket, reason="Migração controlada",
+                )
+                QualityCorrelationCheckpoint.objects.using(source).create(
+                    queue_name="NOC - QUALIDADE ATACADO", last_article_id=12345, records_processed=17,
+                )
+                QualityMonitoringCycle.objects.using(source).create(
+                    quality_order=order, cycle_number=1, expected_end_at=occurred_at + timedelta(days=30),
+                )
+                QualityAuditEvent.objects.using(source).create(
+                    quality_order=order, event_type="TREATMENT_CREATED", description="TQ de migração",
+                )
+                expected_code = treatment.code
+                expected_qid = treatment.correlation_id
+                expected_sequence = QualityTreatmentSequence.objects.using(source).get(key="tq").last_value
+
+                migration_service._copy_models(source, target)
+
+                migrated = QualityTreatment.objects.using(target).get(code=expected_code)
+                self.assertEqual(migrated.correlation_id, expected_qid)
+                self.assertRegex(migrated.correlation_id, r"^ARION-QID-[0-9A-F]{32}$")
+                self.assertEqual(
+                    QualityTreatmentIdentity.objects.using(target).get(code=expected_code).correlation_id,
+                    expected_qid,
+                )
+                self.assertGreaterEqual(
+                    QualityTreatmentSequence.objects.using(target).get(key="tq").last_value,
+                    expected_sequence,
+                )
+                self.assertEqual(migrated.support_ticket_id, ticket.external_id)
+                migrated_order = QualityOrder.objects.using(target).get(code="OQ-2026-000321")
+                self.assertEqual(migrated_order.link_id, link.source_config_item_id)
+                self.assertEqual(
+                    QualityCorrelationCheckpoint.objects.using(target).get(
+                        queue_name="NOC - QUALIDADE ATACADO").last_article_id,
+                    12345,
+                )
+                self.assertTrue(QualityMonitoringCycle.objects.using(target).filter(
+                    quality_order=migrated_order, cycle_number=1).exists())
+                self.assertTrue(QualityAuditEvent.objects.using(target).filter(
+                    quality_order=migrated_order, event_type="TREATMENT_CREATED").exists())
 
     def test_permission_natural_keys_ignore_unused_history_and_copy_custom_assignments_idempotently(self):
         from django.contrib.auth.models import Group, Permission

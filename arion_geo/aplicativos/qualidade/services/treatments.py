@@ -8,18 +8,18 @@ from aplicativos.chamados.services import otrs_ticket_url
 from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket, OTRSTicketConfigItem, OTRSStateMapping
 from aplicativos.integracoes.services.analytics import TicketQueryService
 
-from ..models import QualityAction, QualityAuditEvent, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
+from ..models import QualityAction, QualityAuditEvent, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
 from .data_scope import QualityDataScopeService
 from aplicativos.configuracoes.data_scope import DataScopeService
 
 
 DEFAULT_ACTIONS = (
-    "Revisar o histórico do circuito",
-    "Confirmar a reincidência",
-    "Solicitar e registrar a causa raiz",
-    "Validar a ação corretiva",
-    "Validar a ação preventiva",
+    "Revisar a reincidência e a prioridade da OQ",
+    "Confirmar o vínculo da TQ ao ticket OTRS",
+    "Acompanhar o retorno da operadora no OTRS",
     "Liberar para monitoramento RREIP",
+    "Avaliar a estabilidade ao fim do período",
+    "Concluir a avaliação da Qualidade",
 )
 
 
@@ -31,6 +31,8 @@ def quality_treatment_creation_blocker(order):
         return f"Esta OQ j\u00e1 possui uma tratativa ativa: {active.code}."
     previous = QualityTreatment.objects.filter(quality_order=order).order_by("-created_at", "-pk").first()
     if not previous:
+        return ""
+    if previous.status == QualityTreatment.Status.CANCELED and previous.completed_at:
         return ""
     if previous.status not in {QualityTreatment.Status.COMPLETED, QualityTreatment.Status.RECURRENCE} or not previous.completed_at:
         return f"A TQ {previous.code} ainda n\u00e3o foi conclu\u00edda formalmente."
@@ -115,10 +117,17 @@ def create_quality_treatment(*, quality_order, reason, description="", support_t
             raise ValidationError(f"Esta Ordem de Qualidade já possui uma tratativa ativa: {existing.code}.") from None
         raise
 
-    if order.status == QualityOrder.Status.CONCLUIDA:
+    if order.status in {QualityOrder.Status.NOVA, QualityOrder.Status.TRIAGEM, QualityOrder.Status.CONCLUIDA}:
+        previous_status = order.status
         order.status = QualityOrder.Status.TRATAMENTO
         order.completed_at = None
         order.save(update_fields=("status", "completed_at", "updated_at"))
+        previous_label = dict(QualityOrder.Status.choices).get(previous_status, previous_status)
+        _record_order_event(
+            order, QualityAuditEvent.EventType.STATUS_CHANGED,
+            f"Fase da OQ alterada de {previous_label} para Tratamento após gerar {treatment.code}.",
+            actor, request, {"previous_status": previous_status, "status": order.status, "treatment_code": treatment.code},
+        )
     description_text = f"Tratativa {treatment.code} criada para {order.code}."
     if support_ticket:
         description_text += f" Chamado de suporte relacionado: {support_ticket.ticket_number}."
@@ -290,6 +299,128 @@ def get_monitoring_tickets(order):
     } for record in records]
 
 
+@transaction.atomic
+def update_quality_treatment_summary(*, treatment, actor, request=None, management_summary="",
+                                     management_situation="", next_action="", next_action_due=None,
+                                     update_note=""):
+    order = _lock_visible_order(treatment.quality_order, actor)
+    locked = QualityTreatment.objects.select_for_update().get(pk=treatment.pk, quality_order=order)
+    if locked.status not in {QualityTreatment.Status.IN_PROGRESS, QualityTreatment.Status.MONITORING}:
+        raise ValidationError("Esta TQ não aceita atualizações gerenciais neste estado.")
+    summary = " ".join(str(management_summary or "").split())[:1600]
+    situation = str(management_situation or "")
+    if situation not in QualityTreatment.ManagementSituation.values:
+        raise ValidationError("Selecione uma situação válida para a tratativa.")
+    action = " ".join(str(next_action or "").split())[:500]
+    note = " ".join(str(update_note or "").split())[:800]
+    changed_fields = []
+    for field, value in (
+        ("management_summary", summary),
+        ("management_situation", situation),
+        ("next_action", action),
+        ("next_action_due", next_action_due),
+    ):
+        if getattr(locked, field) != value:
+            setattr(locked, field, value)
+            changed_fields.append(field)
+    if not changed_fields and not note:
+        return locked, False
+    if changed_fields:
+        locked.save(update_fields=(*changed_fields, "updated_at"))
+    description = note or f"Resumo gerencial da TQ {locked.code} atualizado."
+    QualityAuditEvent.objects.create(
+        quality_order=order,
+        event_type=QualityAuditEvent.EventType.NOTES_CHANGED,
+        actor=actor,
+        description=description,
+        metadata={
+            "treatment_code": locked.code,
+            "changed_fields": changed_fields,
+            "management_situation": locked.management_situation,
+            "update_note": note,
+        },
+    )
+    AuditService.record(
+        request=request, user=actor, category="QUALITY", action="TREATMENT_UPDATED",
+        module="Qualidade", description=f"Atualização gerencial da TQ {locked.code}.",
+        obj=order, metadata={"code": order.code, "treatment_code": locked.code,
+                             "changed_fields": changed_fields, "situation": locked.management_situation},
+    )
+    return locked, True
+
+
+@transaction.atomic
+def complete_quality_treatment(*, treatment, actor, request=None, confirmed=False, observations=""):
+    order = _lock_visible_order(treatment.quality_order, actor)
+    locked = QualityTreatment.objects.select_for_update().get(pk=treatment.pk, quality_order=order)
+    if locked.status != QualityTreatment.Status.MONITORING:
+        raise ValidationError("A TQ só pode ser concluída após o monitoramento RREIP.")
+    cycle = QualityMonitoringCycle.objects.select_for_update().filter(
+        quality_order=order, quality_treatment=locked, result=QualityMonitoringCycle.Result.SUCCESS,
+    ).order_by("-cycle_number").first()
+    if not cycle or not cycle.stability_validated or not cycle.final_analysis or not cycle.occurrence_review:
+        raise ValidationError("Conclua e valide o monitoramento antes de concluir a TQ.")
+    if not confirmed:
+        raise ValidationError("Confirme a conclusão local da TQ após avaliar o RREIP.")
+    now = timezone.now()
+    if observations:
+        QualityAuditEvent.objects.create(
+            quality_order=order, event_type=QualityAuditEvent.EventType.NOTES_CHANGED,
+            actor=actor, description=" ".join(str(observations).split())[:800],
+            metadata={"treatment_code": locked.code, "update_note": "conclusão da TQ"},
+        )
+    previous_treatment = locked.status
+    locked.status = QualityTreatment.Status.COMPLETED
+    locked.completed_at = now
+    locked.save(update_fields=("status", "completed_at", "active_order_key", "updated_at"))
+    previous_order = order.status
+    if not QualityTreatment.objects.filter(quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES).exists():
+        order.status = QualityOrder.Status.CONCLUIDA
+        order.completed_at = now
+        order.save(update_fields=("status", "completed_at", "updated_at"))
+        if previous_order != order.status:
+            _record_order_event(order, QualityAuditEvent.EventType.STATUS_CHANGED,
+                "OQ concluída após o encerramento validado de todos os ciclos ativos.", actor, request,
+                {"previous_status": previous_order, "status": order.status, "treatment_code": locked.code})
+    _complete_treatment_checklist_action(order, "Concluir a avaliação da Qualidade", locked, actor, request)
+    _record_order_event(order, QualityAuditEvent.EventType.TREATMENT_COMPLETED,
+        f"{locked.code} concluída formalmente após validação do RREIP.", actor, request,
+        {"treatment_code": locked.code, "previous_status": previous_treatment, "status": locked.status,
+         "previous_order_status": previous_order, "order_status": order.status})
+    return locked
+
+
+@transaction.atomic
+def cancel_quality_treatment(*, treatment, actor, request=None, reason):
+    order = _lock_visible_order(treatment.quality_order, actor)
+    locked = QualityTreatment.objects.select_for_update().get(pk=treatment.pk, quality_order=order)
+    reason = " ".join(str(reason or "").split())[:2000]
+    if not reason:
+        raise ValidationError("Informe a justificativa do cancelamento.")
+    if locked.status not in QualityTreatment.ACTIVE_STATUSES:
+        raise ValidationError("Somente uma TQ ativa pode ser cancelada.")
+    if locked.send_status in {QualityTreatment.SendStatus.IN_PROGRESS, QualityTreatment.SendStatus.UNCERTAIN, QualityTreatment.SendStatus.SENT} or locked.quality_ticket_external_id:
+        raise ValidationError("A solicitação já foi aceita ou vinculada a ticket. A TQ não pode ser cancelada sem encerrar o ciclo por reconciliação.")
+    if locked.status == QualityTreatment.Status.MONITORING or order.monitoring_cycles.filter(result=QualityMonitoringCycle.Result.IN_PROGRESS).exists():
+        raise ValidationError("Encerre ou avalie o ciclo RREIP antes do cancelamento administrativo.")
+    previous = locked.status
+    locked.status = QualityTreatment.Status.CANCELED
+    locked.completed_at = timezone.now()
+    locked.save(update_fields=("status", "completed_at", "active_order_key", "updated_at"))
+    if order.status in {QualityOrder.Status.TRATAMENTO, QualityOrder.Status.MONITORAMENTO}:
+        previous_order_status = order.status
+        order.status = QualityOrder.Status.TRIAGEM
+        order.completed_at = None
+        order.save(update_fields=("status", "completed_at", "updated_at"))
+        _record_order_event(order, QualityAuditEvent.EventType.STATUS_CHANGED,
+            "OQ retornou à triagem após cancelamento local justificado da TQ.", actor, request,
+            {"previous_status": previous_order_status, "status": order.status, "treatment_code": locked.code})
+    _record_order_event(order, QualityAuditEvent.EventType.TREATMENT_CANCELED,
+        f"{locked.code} cancelada administrativamente. Ticket OTRS não foi alterado.", actor, request,
+        {"treatment_code": locked.code, "previous_status": previous, "status": locked.status, "reason": reason})
+    return locked
+
+
 def _lock_visible_order(order, actor):
     if not actor or not getattr(actor, "is_authenticated", False):
         raise ValidationError("Usuário autenticado obrigatório.")
@@ -308,13 +439,26 @@ def _record_order_event(order, event_type, description, actor, request, metadata
         description=description,
         metadata=metadata,
     )
+
+
+def _complete_treatment_checklist_action(order, title, treatment, actor, request):
+    action = QualityAction.objects.select_for_update().filter(
+        quality_order=order, title__iexact=title, completed=False,
+    ).first()
+    if not action:
+        return
+    action.completed = True
+    action.completed_at = timezone.now()
+    action.completed_by = actor
+    action.save(update_fields=("completed", "completed_at", "completed_by"))
+    description = f"Checklist atualizado: {title}."
+    metadata = {"action_id": action.pk, "completed": True, "treatment_code": treatment.code}
+    _record_order_event(
+        order, QualityAuditEvent.EventType.CHECKLIST_ITEM_CHANGED,
+        description, actor, request, metadata,
+    )
     AuditService.record(
-        request=request,
-        user=actor,
-        category="QUALITY",
-        action=event_type,
-        module="Qualidade",
-        description=description,
-        obj=order,
+        request=request, user=actor, category="QUALITY", action="CHECKLIST_ITEM_CHANGED",
+        module="Qualidade", description=description, obj=order,
         metadata={"code": order.code, **metadata},
     )

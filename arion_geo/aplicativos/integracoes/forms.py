@@ -8,8 +8,6 @@ class ArionDatabaseCandidateForm(forms.Form):
     port = forms.IntegerField(label="Porta", min_value=1, max_value=65535, initial=3306)
     database = forms.CharField(label="Schema", max_length=128, initial="arion_geo")
     user = forms.CharField(label="Usuário", max_length=255)
-    password = forms.CharField(label="Senha", max_length=512, required=False, strip=False,
-                               widget=forms.PasswordInput(render_value=False))
     timeout = forms.IntegerField(label="Timeout (segundos)", min_value=1, max_value=60, initial=10)
 
     def clean(self):

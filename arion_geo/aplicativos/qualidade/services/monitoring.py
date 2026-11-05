@@ -2,14 +2,14 @@ from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.chamados.services import otrs_ticket_url
 from aplicativos.configuracoes.data_scope import DataScopeService
-from aplicativos.integracoes.models import OTRSTicket
+from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket
 from aplicativos.integracoes.services.project_names import canonical_project_name, display_project_name, project_alias_groups
 from aplicativos.integracoes.services.semantics import (
     clean_link_designation,
@@ -22,7 +22,7 @@ from aplicativos.integracoes.services.semantics import (
 
 from .constants import QUALITY_RREIP_DAYS
 from .data_scope import QualityDataScopeService
-from ..models import QualityAuditEvent, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
+from ..models import QualityAction, QualityAuditEvent, QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
 from .recurrence import build_quality_recurrence_analysis
 
 
@@ -32,12 +32,11 @@ PAGE_SIZES = (25, 50, 100)
 
 @transaction.atomic
 def start_monitoring_cycle(
-    *, quality_order, quality_ticket=None, started_at=None, duration_days=QUALITY_RREIP_DAYS,
-    actor=None, request=None, financial_regularization_confirmed=False, financial_evidence="",
+    *, quality_order, quality_ticket=None, started_at=None, actor=None, request=None,
+    actions_analyzed=False, otrs_actions_summary="",
+    financial_regularization_confirmed=False, financial_evidence="",
 ):
     """Start a local RREIP cycle; this service never changes a remote OTRS ticket."""
-    if duration_days < 1:
-        raise ValueError("A duração do ciclo RREIP deve ser positiva.")
     if not actor or not getattr(actor, "is_authenticated", False):
         raise ValidationError("Usuário autenticado obrigatório.")
     visible_order_ids = QualityDataScopeService.orders_for(actor).filter(pk=quality_order.pk).values("pk")
@@ -47,9 +46,25 @@ def start_monitoring_cycle(
         raise ValidationError("A OQ não está disponível no escopo do usuário.") from None
     if order.status in {QualityOrder.Status.CONCLUIDA, QualityOrder.Status.CANCELADA}:
         raise ValidationError("Uma OQ concluída ou cancelada não pode iniciar novo monitoramento.")
+    treatment = QualityTreatment.objects.select_for_update().filter(
+        quality_order=order, status=QualityTreatment.Status.IN_PROGRESS,
+    ).order_by("-created_at", "-pk").first()
+    if not treatment or not treatment.quality_ticket_external_id:
+        raise ValidationError("O RREIP exige uma TQ em tratamento com ticket OTRS vinculado.")
+    otrs_actions_summary = " ".join(str(otrs_actions_summary or "").split())[:1200]
+    if not actions_analyzed or not otrs_actions_summary:
+        raise ValidationError("Confirme a análise das ações no OTRS e registre um resumo antes de iniciar o RREIP.")
     if quality_ticket is not None:
-        if not isinstance(quality_ticket, QualityTicket) or quality_ticket.quality_order_id != order.pk or quality_ticket.ticket_type != QualityTicket.TicketType.TREATMENT:
+        if (not isinstance(quality_ticket, QualityTicket) or quality_ticket.quality_order_id != order.pk
+                or quality_ticket.ticket_type != QualityTicket.TicketType.TREATMENT
+                or quality_ticket.ticket_external_id_snapshot != treatment.quality_ticket_external_id):
             raise ValidationError("O TQ de tratamento deve pertencer à mesma OQ.")
+    else:
+        quality_ticket = QualityTicket.objects.filter(
+            quality_order=order,
+            ticket_type=QualityTicket.TicketType.TREATMENT,
+            ticket_external_id_snapshot=treatment.quality_ticket_external_id,
+        ).first()
     if order.monitoring_cycles.filter(result=QualityMonitoringCycle.Result.IN_PROGRESS).exists():
         raise ValidationError("Esta OQ já possui um ciclo RREIP em andamento.")
     financial = is_financial_reason(order.current_reason)
@@ -59,30 +74,39 @@ def start_monitoring_cycle(
 
     started_at = started_at or timezone.now()
     last_cycle = order.monitoring_cycles.order_by("-cycle_number").first()
-    cycle = QualityMonitoringCycle.objects.create(
-        quality_order=order,
-        quality_ticket=quality_ticket,
-        cycle_number=(last_cycle.cycle_number + 1) if last_cycle else 1,
-        started_at=started_at,
-        expected_end_at=started_at + timedelta(days=duration_days),
-        financial_regularization_confirmed=bool(financial and financial_regularization_confirmed),
-        financial_evidence=financial_evidence if financial else "",
-    )
-    treatment = QualityTreatment.objects.select_for_update().filter(
-        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
-    ).order_by("-created_at", "-pk").first()
-    if treatment:
-        treatment.status = QualityTreatment.Status.MONITORING
-        treatment.save(update_fields=("status", "active_order_key", "updated_at"))
+    try:
+        cycle = QualityMonitoringCycle.objects.create(
+            quality_order=order,
+            active_order_key=order.pk,
+            quality_treatment=treatment,
+            quality_ticket=quality_ticket,
+            cycle_number=(last_cycle.cycle_number + 1) if last_cycle else 1,
+            started_at=started_at,
+            expected_end_at=started_at + timedelta(days=QUALITY_RREIP_DAYS),
+            otrs_actions_summary=otrs_actions_summary,
+            financial_regularization_confirmed=bool(financial and financial_regularization_confirmed),
+            financial_evidence=financial_evidence if financial else "",
+        )
+    except IntegrityError:
+        raise ValidationError("Esta OQ já possui um ciclo RREIP ativo.") from None
+    previous_treatment_status = treatment.status
+    treatment.status = QualityTreatment.Status.MONITORING
+    treatment.save(update_fields=("status", "active_order_key", "updated_at"))
+    previous_order_status = order.status
     if order.status != QualityOrder.Status.MONITORAMENTO:
         order.status = QualityOrder.Status.MONITORAMENTO
         order.save(update_fields=("status", "updated_at"))
+    _complete_checklist_milestone(
+        order, "Liberar para monitoramento RREIP", actor, treatment.code, cycle.cycle_number, request,
+    )
     QualityAuditEvent.objects.create(
         quality_order=order,
         event_type=QualityAuditEvent.EventType.MONITORING_STARTED,
         actor=actor if getattr(actor, "is_authenticated", False) else None,
-        description=f"Ciclo RREIP {cycle.cycle_number} iniciado.",
-        metadata={"cycle_number": cycle.cycle_number, "duration_days": duration_days},
+        description=f"Ciclo RREIP {cycle.cycle_number} iniciado para a TQ {treatment.code}.",
+        metadata={"cycle_number": cycle.cycle_number, "duration_days": QUALITY_RREIP_DAYS,
+                  "treatment_code": treatment.code, "previous_treatment_status": previous_treatment_status,
+                  "treatment_status": treatment.status, "actions_analyzed": True},
     )
     AuditService.record(
         request=request,
@@ -90,15 +114,33 @@ def start_monitoring_cycle(
         category="QUALITY",
         action="MONITORING_STARTED",
         module="Qualidade",
-        description="Ciclo RREIP iniciado.",
+        description=f"Ciclo RREIP iniciado para a TQ {treatment.code}.",
         obj=order,
-        metadata={"code": order.code, "cycle_number": cycle.cycle_number, "financial_clearance_confirmed": cycle.financial_regularization_confirmed},
+        metadata={"code": order.code, "cycle_number": cycle.cycle_number, "financial_clearance_confirmed": cycle.financial_regularization_confirmed,
+                  "treatment_code": treatment.code, "previous_treatment_status": previous_treatment_status,
+                  "treatment_status": treatment.status, "actions_analyzed": True},
     )
+    if previous_order_status != order.status:
+        status_description = f"Fase da OQ alterada de {dict(QualityOrder.Status.choices).get(previous_order_status, previous_order_status)} para Monitoramento ao iniciar o RREIP de {treatment.code}."
+        QualityAuditEvent.objects.create(
+            quality_order=order, event_type=QualityAuditEvent.EventType.STATUS_CHANGED, actor=actor,
+            description=status_description,
+            metadata={"previous_status": previous_order_status, "status": order.status,
+                      "cycle_number": cycle.cycle_number, "treatment_code": treatment.code},
+        )
+        AuditService.record(
+            request=request, user=actor, category="QUALITY", action="STATUS_CHANGED", module="Qualidade",
+            description=status_description, obj=order,
+            metadata={"code": order.code, "previous_status": previous_order_status,
+                      "status": order.status, "cycle_number": cycle.cycle_number, "treatment_code": treatment.code},
+        )
     return cycle
 
 
 @transaction.atomic
-def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticket_identifier=""):
+def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticket_identifier="",
+                            final_analysis="", stability_validated=False, occurrence_review="",
+                            recurrence_description="", same_root_cause_confirmed=False):
     if result not in {
         QualityMonitoringCycle.Result.SUCCESS,
         QualityMonitoringCycle.Result.RECURRENCE,
@@ -120,12 +162,10 @@ def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticke
     if result == QualityMonitoringCycle.Result.SUCCESS and locked.expected_end_at > now:
         raise ValidationError("O ciclo ainda não completou os 30 dias previstos.")
     if result == QualityMonitoringCycle.Result.SUCCESS:
-        recurrence = build_quality_recurrence_analysis(actor, now=now)["links"].get(locked.quality_order.link_id, {})
-        if any(
-            locked.started_at < item["occurred_at"] <= locked.expected_end_at
-            for item in recurrence.get("occurrences", ())
-        ):
-            raise ValidationError("Há uma ocorrência válida no espelho do OTRS durante o ciclo. Registre a reincidência antes de concluir.")
+        if not str(final_analysis or "").strip() or not stability_validated or not str(occurrence_review or "").strip():
+            raise ValidationError("Informe o resultado, valide a estabilidade e avalie as ocorrências antes de concluir o monitoramento.")
+    if result == QualityMonitoringCycle.Result.RECURRENCE and (not str(recurrence_description or "").strip() or not same_root_cause_confirmed):
+        raise ValidationError("Descreva a evidência e confirme que a reincidência corresponde à causa raiz tratada.")
 
     trigger_occurrence = None
     if result == QualityMonitoringCycle.Result.RECURRENCE:
@@ -135,28 +175,33 @@ def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticke
             cycle=locked,
             identifier=trigger_ticket_identifier,
         )
+        trigger_occurrence.same_root_cause = True
+        trigger_occurrence.reason = " ".join(str(recurrence_description).split())[:4000]
+        trigger_occurrence.save(update_fields=("same_root_cause", "reason"))
         locked.trigger_occurrence = trigger_occurrence
     locked.result = result
+    locked.active_order_key = None
     locked.ended_at = trigger_occurrence.occurred_at if trigger_occurrence else now
-    locked.save(update_fields=("result", "ended_at", "trigger_occurrence"))
+    if result == QualityMonitoringCycle.Result.SUCCESS:
+        locked.final_analysis = " ".join(str(final_analysis).split())[:4000]
+        locked.stability_validated = True
+        locked.occurrence_review = " ".join(str(occurrence_review).split())[:4000]
+        locked.validated_by = actor
+    locked.save(update_fields=("result", "active_order_key", "ended_at", "trigger_occurrence", "final_analysis", "stability_validated", "occurrence_review", "validated_by"))
 
     previous_status = order.status
-    if previous_status == QualityOrder.Status.MONITORAMENTO:
-        order.status = (
-            QualityOrder.Status.CONCLUIDA
-            if result == QualityMonitoringCycle.Result.SUCCESS
-            else QualityOrder.Status.TRATAMENTO
-        )
-        order.completed_at = now if result == QualityMonitoringCycle.Result.SUCCESS else None
+    if previous_status == QualityOrder.Status.MONITORAMENTO and result != QualityMonitoringCycle.Result.SUCCESS:
+        order.status = QualityOrder.Status.TRATAMENTO
+        order.completed_at = None
         order.save(update_fields=("status", "completed_at", "updated_at"))
 
-    treatment = QualityTreatment.objects.select_for_update().filter(
-        quality_order=order, status__in=QualityTreatment.ACTIVE_STATUSES,
-    ).order_by("-created_at", "-pk").first()
+    treatment = QualityTreatment.objects.select_for_update().filter(pk=locked.quality_treatment_id).first()
+    previous_treatment_status = treatment.status if treatment else ""
     if treatment:
         if result == QualityMonitoringCycle.Result.SUCCESS:
-            treatment.status = QualityTreatment.Status.COMPLETED
-            treatment.completed_at = now
+            # A successful RREIP is followed by an explicit TQ conclusion action.
+            treatment.status = QualityTreatment.Status.MONITORING
+            treatment.completed_at = None
         elif result == QualityMonitoringCycle.Result.RECURRENCE:
             treatment.status = QualityTreatment.Status.RECURRENCE
             # The recurrence itself is the terminal event that permits the next TQ cycle.
@@ -165,12 +210,16 @@ def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticke
             treatment.status = QualityTreatment.Status.IN_PROGRESS
             treatment.completed_at = None
         treatment.save(update_fields=("status", "completed_at", "active_order_key", "updated_at"))
-
+    if result == QualityMonitoringCycle.Result.SUCCESS:
+        _complete_checklist_milestone(
+            order, "Avaliar a estabilidade ao fim do período", actor,
+            treatment.code if treatment else "", locked.cycle_number, request,
+        )
     event_values = {
         QualityMonitoringCycle.Result.SUCCESS: (
             QualityAuditEvent.EventType.MONITORING_SUCCEEDED,
             "MONITORING_SUCCEEDED",
-            f"Ciclo RREIP {locked.cycle_number} concluído após 30 dias sem reincidência registrada.",
+            f"Ciclo RREIP {locked.cycle_number} concluído após avaliação de estabilidade pela Qualidade.",
         ),
         QualityMonitoringCycle.Result.CANCELED: (
             QualityAuditEvent.EventType.MONITORING_CANCELED,
@@ -186,7 +235,10 @@ def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticke
             f"Ciclo RREIP {locked.cycle_number} reincidiu após {failed_days} dias.",
         )
     event_type, action, description = event_values[result]
-    metadata = {"cycle_number": locked.cycle_number, "result": result}
+    metadata = {"cycle_number": locked.cycle_number, "result": result,
+                "treatment_code": treatment.code if treatment else "",
+                "previous_treatment_status": previous_treatment_status,
+                "treatment_status": treatment.status if treatment else ""}
     if trigger_occurrence:
         metadata["ticket_number"] = trigger_occurrence.ticket_number
     QualityAuditEvent.objects.create(
@@ -223,12 +275,38 @@ def finish_monitoring_cycle(*, cycle, result, actor, request=None, trigger_ticke
     return locked
 
 
+def _complete_checklist_milestone(order, title, actor, treatment_code, cycle_number, request):
+    action = QualityAction.objects.select_for_update().filter(
+        quality_order=order, title__iexact=title, completed=False,
+    ).first()
+    if not action:
+        return
+    action.completed = True
+    action.completed_at = timezone.now()
+    action.completed_by = actor
+    action.save(update_fields=("completed", "completed_at", "completed_by"))
+    description = f"Checklist atualizado: {title}."
+    metadata = {
+        "action_id": action.pk, "completed": True, "treatment_code": treatment_code,
+        "cycle_number": cycle_number,
+    }
+    QualityAuditEvent.objects.create(
+        quality_order=order, event_type=QualityAuditEvent.EventType.CHECKLIST_ITEM_CHANGED,
+        actor=actor, description=description, metadata=metadata,
+    )
+    AuditService.record(
+        request=request, user=actor, category="QUALITY", action="CHECKLIST_ITEM_CHANGED",
+        module="Qualidade", description=description, obj=order,
+        metadata={"code": order.code, **metadata},
+    )
+
+
 def get_monitoring_queue(user, params):
     today = timezone.localdate()
     orders = QualityDataScopeService.orders_for(user)
     queryset = QualityMonitoringCycle.objects.filter(quality_order_id__in=orders.values("pk")).select_related(
         "quality_order", "quality_order__link", "quality_order__link__operator", "quality_order__owner",
-        "quality_ticket", "quality_ticket__otrs_ticket", "trigger_occurrence", "trigger_occurrence__otrs_ticket",
+        "quality_ticket", "quality_ticket__otrs_ticket", "quality_treatment", "trigger_occurrence", "trigger_occurrence__otrs_ticket",
     )
     selected = {
         key: str(params.get(key, "")).strip()[:160]
@@ -353,6 +431,8 @@ def get_monitoring_queue(user, params):
         cycle.uf_display = order.uf_snapshot or (link.state if link else "—")
         cycle.owner_label = (order.owner.get_full_name() or order.owner.get_username()) if order.owner_id else "Não atribuído"
         cycle.status_label = cycle.get_result_display()
+        cycle.treatment_code = cycle.quality_treatment.code if cycle.quality_treatment_id else "—"
+        cycle.quality_ticket_number = cycle.quality_treatment.quality_ticket_number if cycle.quality_treatment_id else (cycle.quality_ticket.ticket_number if cycle.quality_ticket_id else "—")
         total_days = max((cycle.expected_end_at.date() - cycle.started_at.date()).days, 1)
         days_elapsed = max((today - cycle.started_at.date()).days, 0)
         cycle.total_days = total_days
@@ -409,7 +489,13 @@ def _resolve_cycle_trigger(*, actor, order, cycle, identifier):
         raise ValidationError("O ticket não foi encontrado no espelho local do OTRS.")
     if not order.link_id:
         raise ValidationError("O ticket não está relacionado ao circuito desta OQ.")
-    analysis = build_quality_recurrence_analysis(actor, now=timezone.now())
+    analysis = build_quality_recurrence_analysis(
+        actor, now=timezone.now(),
+        scope_links=DataScopeService.filter_queryset(actor, CMDBLinkMirror.objects.filter(
+            source_config_item_id=order.link_id, is_present_in_source=True,
+        )),
+        scoped_orders=QualityDataScopeService.orders_for(actor).filter(pk=order.pk),
+    )
     occurrence = analysis["ticket_index"].get((order.link_id, ticket.external_id))
     if occurrence is None:
         raise ValidationError("O ticket não atende às regras de ocorrência válida da Qualidade.")
