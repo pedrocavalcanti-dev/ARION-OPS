@@ -131,7 +131,7 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 49)
+        self.assertEqual(len(DOCUMENTS), 68)
 
     def test_otrs_reference_is_a_navigable_and_searchable_documentation_group(self):
         self.client.force_login(self.admin)
@@ -148,6 +148,33 @@ class DocumentationPortalTests(TestCase):
             {"otrs-consultas-sql"},
         )
         self.assertIn("otrs-dicionario", {item["slug"] for item in DocumentationService.search("article_data_mime.a_body")})
+
+    def test_cmdb_reference_is_a_navigable_and_searchable_documentation_group(self):
+        self.client.force_login(self.admin)
+        home = self.client.get(reverse("configuracoes:documentation"))
+        cmdb_pages = [item for item in DocumentationService.navigation() if item["category"] == "CMDB ServiceUp"]
+
+        self.assertEqual(len(cmdb_pages), 20)
+        self.assertContains(home, "CMDB ServiceUp")
+        self.assertContains(home, "20 documentos")
+        category = next(item for item in DocumentationService.categories() if item["name"] == "CMDB ServiceUp")
+        self.assertEqual(len(category["documents"]), 20)
+        self.assertEqual(
+            {item["slug"] for item in DocumentationService.search("CMDB-API002")},
+            {"cmdb", "cmdb-endpoints"},
+        )
+        self.assertIn("cmdb-consumidores", {item["slug"] for item in DocumentationService.search("CMDB-T008")})
+
+    def test_cmdb_field_catalog_and_query_transformation_inventories_match_overview(self):
+        fields = (DOCS_ROOT / DOCUMENTS["cmdb-dicionario"][3]).read_text(encoding="utf-8-sig")
+        operators, links = fields.split("## CMDBLinkMirror", 1)
+        count_table_rows = lambda source: len(re.findall(r"^\| [a-z][a-z0-9_]* \|", source, re.M))
+        self.assertEqual(count_table_rows(operators), 24)
+        self.assertEqual(count_table_rows(links), 41)
+
+        consumers = (DOCS_ROOT / DOCUMENTS["cmdb-consumidores"][3]).read_text(encoding="utf-8-sig")
+        self.assertEqual(len(re.findall(r"^### CMDB-Q\d{3}", consumers, re.M)), 8)
+        self.assertEqual(len(re.findall(r"^\| CMDB-T\d{3} \|", consumers, re.M)), 8)
 
     def test_otrs_inventory_totals_match_the_documented_tables_fields_and_query_families(self):
         tables = (DOCS_ROOT / DOCUMENTS["otrs-tabelas"][3]).read_text(encoding="utf-8-sig")
@@ -244,9 +271,9 @@ class DocumentationPortalTests(TestCase):
         source = (DOCS_ROOT / DOCUMENTS["cmdb"][3]).read_text(encoding="utf-8-sig")
         page = DocumentationService.get("cmdb")
         words = re.findall(r"\w+", re.sub(r"<[^>]+>", " ", page["body"]))
-        self.assertGreater(len(words), 450)
-        self.assertGreater((DOCS_ROOT / DOCUMENTS["cmdb"][3]).stat().st_size, 5000)
-        for term in ("ConfigItemSearch", "ConfigItemGet", "CMDBLinkMirror", "CMDBOperatorMirror", "TELMEX", "UsuarioPPOE"):
+        self.assertGreater(len(words), 200)
+        self.assertGreater((DOCS_ROOT / DOCUMENTS["cmdb"][3]).stat().st_size, 2500)
+        for term in ("ConfigItemSearch", "ConfigItemGet", "CMDBLinkMirror", "CMDBOperatorMirror", "ConfigItemID", "CMDB-Q001"):
             with self.subTest(term=term):
                 self.assertIn(term, source)
 
