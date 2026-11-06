@@ -4,7 +4,7 @@
 {% block extra_js %}{{ block.super }}{% if can_manage_orders %}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script>{% endif %}{% endblock %}
 {% block quality_content %}
 <div class="quality-link-detail">
-  <a class="quality-link-back" href="{% url 'qualidade:links_prioritarios' %}?period={{ period }}&amp;state={{ operational_state_filter }}"><span aria-hidden="true">←</span> Links prioritários</a>
+  <a class="quality-link-back" href="{% url 'qualidade:links_prioritarios' %}?{{ page_query }}"><span aria-hidden="true">←</span> Links prioritários</a>
 
   <header class="quality-link-heading">
     <div>

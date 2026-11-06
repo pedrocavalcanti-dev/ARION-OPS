@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,14 @@ class WindowsProcessIdentityTests(unittest.TestCase):
         current = run_process._process_identity(os.getpid())
         self.assertIsNotNone(current)
         self.assertFalse(run_process._pid_is_running(os.getpid(), current["created_at"] + 1))
+
+    def test_native_listener_lookup_returns_owning_pid_for_exact_endpoint(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            self.assertIn(os.getpid(), run_process._listener_pids(port))
+            self.assertNotIn(os.getpid(), run_process._listener_pids(port + 1))
 
     def test_intermediate_and_effective_processes_are_distinguished(self):
         own_executable = run_process._process_identity(os.getpid())["executable"]
@@ -82,8 +91,9 @@ class WindowsProcessIdentityTests(unittest.TestCase):
                         "web", "child", service_pid, parent_pid=parent_map[service_pid]
                     )
                     with mock.patch.object(run_process, "_is_locked", return_value=True):
-                        with mock.patch("builtins.print") as output:
-                            self.assertEqual(run_process._print_status("web"), 0)
+                        with mock.patch.object(run_process, "_listener_pids", return_value={service_pid}):
+                            with mock.patch("builtins.print") as output:
+                                self.assertEqual(run_process._print_status("web"), 0)
                     rendered = " ".join(str(part) for call in output.call_args_list for part in call.args)
                     self.assertIn(f"launcher pid {launcher.pid}", rendered)
                     self.assertIn(f"child pid {service_pid}", rendered)
@@ -145,6 +155,41 @@ class WindowsProcessIdentityTests(unittest.TestCase):
                 self.assertEqual(invocation, {"pid": os.getpid(), "args": ["integration_worker"]})
                 self.assertFalse(run_process._process_pid_path("worker", "child").exists())
                 self.assertFalse(run_process._process_record_path("worker", "child").exists())
+
+    def test_module_entrypoint_uses_python_module_argv_shape(self):
+        original_argv = sys.argv[:]
+        observed = {}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.object(run_process, "RUN_ROOT", Path(temp_dir) / "run"):
+                with mock.patch.object(
+                    run_process, "_command", return_value=[sys.executable, "-m", "waitress", "--listen=127.0.0.1:8100"]
+                ):
+                    with mock.patch.object(
+                        run_process.runpy, "run_module", side_effect=lambda *args, **kwargs: observed.update(argv=sys.argv[:])
+                    ):
+                        self.assertEqual(run_process._run_managed_child("web"), 0)
+        self.assertEqual(observed["argv"], ["waitress", "--listen=127.0.0.1:8100"])
+        sys.argv[:] = original_argv
+
+
+class WebReadinessTests(unittest.TestCase):
+    def test_web_status_requires_managed_child_to_own_configured_listener(self):
+        records = {
+            "supervisor": {"pid": 11},
+            "launcher": {"pid": 22, "running": False, "executable": "python.exe"},
+            "child": {"pid": 33, "executable": "python3.12.exe"},
+        }
+        with mock.patch.object(run_process, "_is_locked", return_value=True):
+            with mock.patch.object(run_process, "_read_process_record", side_effect=lambda role, name, **kwargs: records[name]):
+                with mock.patch.object(run_process, "_service_process_matches_launcher", return_value=True):
+                    with mock.patch.object(run_process, "_web_port", return_value=8100):
+                        with mock.patch.object(run_process, "_listener_pids", return_value={33}):
+                            self.assertEqual(run_process._print_status("web"), 0)
+                        with mock.patch.object(run_process, "_listener_pids", return_value={44}):
+                            with mock.patch("builtins.print") as output:
+                                self.assertEqual(run_process._print_status("web"), 2)
+            output.assert_called_once()
+            self.assertIn("8100", output.call_args.args[0])
 
 
 if __name__ == "__main__":

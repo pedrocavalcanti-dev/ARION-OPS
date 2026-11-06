@@ -245,7 +245,7 @@ class AnalyticsQueryService:
         "provider": "Provedor",
         "uf": "UF",
         "status": "Status",
-        "source_state": "Situa\u00e7\u00e3o OTRS",
+        "source_state": "Status de origem",
         "priority": "Prioridade",
         "termination_reason": "Motivo de encerramento",
         "sla": "SLA",
@@ -273,8 +273,8 @@ class AnalyticsQueryService:
         "pendente": "Pendente",
         "agendado": "Agendado",
         "resolvido": "Resolvido",
-        "closed successful": "Encerrado com sucesso",
-        "encerrado com viabilidade": "Encerrado com viabilidade",
+        "closed successful": "Resolvido",
+        "encerrado com viabilidade": "Resolvido",
         "cancelado": "Cancelado",
     }
     METRIC_STATUS = {
@@ -1140,7 +1140,10 @@ class AnalyticsQueryService:
             elif key == "provider" and value in providers: evidence.append(f"Provedor = {value}")
             elif key == "uf" and value in states: evidence.append(f"UF = {value}")
             elif key == "status" and normalize_business_status(value) == ticket_status: evidence.append(f"Status = {status}")
-            elif key == "source_state" and value == ticket.external_state_name: evidence.append(f"Situa\u00e7\u00e3o OTRS = {ticket.external_state_name}")
+            elif key == "source_state" and (
+                    value == ticket.external_state_name
+                    or (value in cls.STATUS_LABELS and normalize_business_status(value) == ticket_status)):
+                evidence.append(f"Status de origem = {cls._source_state_label(ticket.external_state_name, ticket_status)}")
             elif key == "priority" and value == ticket.priority_name: evidence.append(f"Prioridade = {ticket.priority_name}")
             elif key == "priority" and value == "high-critical":
                 normalized_priority = unicodedata.normalize("NFKD", ticket.priority_name).encode("ascii", "ignore").decode().casefold()
@@ -1553,7 +1556,7 @@ class AnalyticsQueryService:
         from django.utils import timezone
 
         query = {}
-        for key, field in (("status", "business_status"), ("source_state", "external_state_name"),
+        for key, field in (("status", "business_status"),
                            ("service", "service_name"), ("sla", "sla_name"),
                            ("stage", "_operational_stage"), ("origin", "_operational_origin"),
                            ("queue", "queue_name"), ("responsibility", "responsibility_normalized")):
@@ -1562,6 +1565,12 @@ class AnalyticsQueryService:
         filtered = tickets.filter(**query) if query else tickets
         if filters.get("status"):
             filtered = filtered.filter(business_status_query("business_status", filters["status"]))
+        source_state = filters.get("source_state")
+        if source_state:
+            if source_state in cls.STATUS_LABELS:
+                filtered = filtered.filter(business_status_query("business_status", source_state))
+            else:  # Retain compatibility for saved queries that used raw OTRS state names.
+                filtered = filtered.filter(external_state_name=source_state)
         if filters.get("responsible") == "unassigned":
             filtered = filtered.filter(Q(responsible_user_id__isnull=True) | Q(responsible_user_id=0))
         elif filters.get("responsible") == "assigned":
@@ -1677,7 +1686,7 @@ class AnalyticsQueryService:
                 "provider": "cmdb_link__operator__name",
                 "uf": "cmdb_link__state",
                 "status": "ticket__business_status",
-                "source_state": "ticket__external_state_name",
+                "source_state": "ticket__business_status",
                 "service": "ticket__service_name",
                 "sla": "ticket__sla_name",
                 "priority": "ticket__priority_name",
@@ -1699,6 +1708,11 @@ class AnalyticsQueryService:
                     Value("N\u00e3o classificado"),
                 )
                 by_link = relations.annotate(dimension=project_name).values("dimension", "cmdb_link_id")
+            elif group in {"status", "source_state"}:
+                by_link = relations.annotate(dimension=Case(
+                    When(**{f"{field}__in": ["CLOSED"]}, then=Value(RESOLVED_STATUS)),
+                    default=F(field), output_field=CharField(max_length=16),
+                )).values("dimension", "cmdb_link_id")
             else:
                 by_link = relations.annotate(
                     dimension=Coalesce(NullIf(F(field), Value("")), Value("N\u00e3o classificado")),
@@ -1731,7 +1745,7 @@ class AnalyticsQueryService:
             "provider": "config_items__cmdb_link__operator__name",
             "uf": "config_items__cmdb_link__state",
             "status": "business_status",
-            "source_state": "external_state_name",
+            "source_state": "business_status",
             "service": "service_name",
             "sla": "sla_name",
             "priority": "priority_name",
@@ -1746,7 +1760,7 @@ class AnalyticsQueryService:
                 rows = rows.exclude(config_items__cmdb_link__operator__isnull=True).exclude(config_items__cmdb_link__operator__name="")
         if group == "termination_reason":
             rows = ClosingReasonCanonicalizer.annotate_key(rows, field=field, output="dimension")
-        elif group == "status":
+        elif group in {"status", "source_state"}:
             rows = rows.annotate(dimension=Case(
                 When(business_status="CLOSED", then=Value(RESOLVED_STATUS)),
                 default=F("business_status"), output_field=CharField(max_length=16),
@@ -1800,7 +1814,7 @@ class AnalyticsQueryService:
         if group == "operational_origin":
             return cls.ORIGIN_LABELS.get(value, value if value == TicketQueryService.QUEUE_NAME else "N\u00e3o classificado")
         if group == "source_state":
-            return cls.SOURCE_STATE_LABELS.get(str(value).casefold(), value)
+            return cls._source_state_label(value)
         if group == "month":
             if value == "Atual":
                 return value
@@ -1827,10 +1841,7 @@ class AnalyticsQueryService:
                                  tickets.values_list("business_status", flat=True).distinct()})
             if value in cls.STATUS_LABELS
         ]
-        result["source_state"] = [
-            {"value": value, "label": cls.SOURCE_STATE_LABELS.get(value.casefold(), value)}
-            for value in tickets.exclude(external_state_name="").values_list("external_state_name", flat=True).distinct().order_by("external_state_name")
-        ]
+        result["source_state"] = [dict(option) for option in result["status"]]
         result["queue"] = list(tickets.exclude(queue_name="").values_list("queue_name", flat=True).distinct().order_by("queue_name"))
         result["service"] = list(tickets.exclude(service_name="").values_list("service_name", flat=True).distinct().order_by("service_name"))
         result["priority"] = list(tickets.exclude(priority_name="").values_list("priority_name", flat=True).distinct().order_by("priority_name"))
@@ -1851,6 +1862,26 @@ class AnalyticsQueryService:
             )
         result["project"] = sorted(project_values, key=str.casefold)
         return result
+
+    @classmethod
+    def _source_state_label(cls, value, business_status=None):
+        raw = str(value or "")
+        normalized_status = normalize_business_status(business_status) if business_status else ""
+        if not normalized_status and raw.upper() in cls.STATUS_LABELS:
+            normalized_status = normalize_business_status(raw)
+        if normalized_status == "RESOLVED":
+            return "Resolvido"
+        if normalized_status in cls.STATUS_LABELS:
+            return cls.STATUS_LABELS[normalized_status]
+        label = cls.SOURCE_STATE_LABELS.get(raw.casefold())
+        if label:
+            return label
+        normalized = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode().casefold()
+        if "cancel" in normalized:
+            return "Cancelado"
+        if "resolv" in normalized or "closed" in normalized or "encerr" in normalized:
+            return "Resolvido"
+        return raw or "N\u00e3o classificado"
 
 class DashboardAnalyticsService:
     """Build the executive Dashboard from scoped local CMDB and NOC mirrors."""

@@ -503,7 +503,7 @@ def analytics_export(request):
         today = generated_at.strftime("%Y-%m-%d")
         generated_by = request.user.get_username()
         filter_labels = {
-            "status": "Status", "source_state": "Situa\u00e7\u00e3o OTRS", "provider": "Provedor", "uf": "UF",
+            "status": "Status", "source_state": "Status de origem", "provider": "Provedor", "uf": "UF",
             "sla": "SLA", "priority": "Prioridade", "service": "Servi\u00e7o", "termination_reason": "Motivo",
             "stage": "Etapa", "origin": "Origem", "project": "Projeto / cliente",
             "responsibility": "Proced\u00eancia", "responsible": "Respons\u00e1vel", "queue": "Fila",
@@ -540,13 +540,13 @@ def analytics_export(request):
         else:
             filter_rows.append(("Regra operacional", result.get("metric_semantics", "Escopo operacional do Cockpit")))
         group_slug = slugify(result["group_by"]) or "resultado"
-        ticket_headers = ["ticket", "data_base", "created_at", "resolved_at", "status", "otrs_state", "closing_reason", "closing_reason_raw", "provider", "uf",
+        ticket_headers = ["ticket", "data_base", "created_at", "resolved_at", "status", "closing_reason", "closing_reason_raw", "provider", "uf",
                           "priority", "sla", "source", "config_item", "number", "designation", "circuit"]
         def ticket_values(row):
             links = row.get("links", [])
             fields = ("config_item_id", "number", "designation", "circuit")
             flattened = [" | ".join(str(link.get(field) or "") for link in links) for field in fields]
-            base = [row.get("ticket"), row.get("base_date"), row.get("created_at"), row.get("resolved_at"), row.get("status"), row.get("source_state"),
+            base = [row.get("ticket"), row.get("base_date"), row.get("created_at"), row.get("resolved_at"), row.get("status"),
                     row.get("reason"), row.get("closing_code_raw"), row.get("provider"), row.get("uf"), row.get("priority"), row.get("sla"), row.get("source")]
             return base + flattened
         if export_format == "csv":

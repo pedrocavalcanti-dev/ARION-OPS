@@ -30,7 +30,7 @@ if ($existingCode -eq 2) {
         Start-Sleep -Seconds 1
     } while ([DateTime]::UtcNow -lt $deadline)
     $existingOutput
-    throw 'An existing ARION supervisor did not confirm its service process within 30 seconds.'
+    throw 'O supervisor ARION existente não confirmou o processo e, no Web, a prontidão do Waitress na porta configurada em 30 segundos.'
 }
 
 $process = Start-Process -FilePath $pythonw -ArgumentList @('"' + $runner + '"', $Role) `
@@ -50,4 +50,4 @@ do {
     Start-Sleep -Seconds 1
 } while ([DateTime]::UtcNow -lt $deadline)
 $statusOutput
-throw 'The supervisor stayed active but did not confirm its service process within 30 seconds.'
+throw 'O supervisor permaneceu ativo, mas não confirmou o processo e, no Web, a prontidão do Waitress na porta configurada em 30 segundos.'

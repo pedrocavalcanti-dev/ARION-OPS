@@ -1424,8 +1424,8 @@ class MirrorAnalyticsTests(TestCase):
             ("PENDING", "Pendente", "Pendente"),
             ("SCHEDULED", "agendado", "Agendado"),
             ("RESOLVED", "resolvido", "Resolvido"),
-            ("CLOSED", "closed successful", "Encerrado com sucesso"),
-            ("CLOSED", "Encerrado com viabilidade", "Encerrado com viabilidade"),
+            ("CLOSED", "closed successful", "Resolvido"),
+            ("CLOSED", "Encerrado com viabilidade", "Resolvido"),
             ("CANCELED", "cancelado", "Cancelado"),
             ("UNKNOWN", "estado novo", "estado novo"),
         )
@@ -1439,9 +1439,13 @@ class MirrorAnalyticsTests(TestCase):
             "period_to": "2026-10", "period": "2026-10", "filters": {},
         }, user=self.user)
         labels = {row["key"]: row["dimension"] for row in result["detail"]}
-        self.assertEqual(labels["em atendimento"], "Em atendimento")
-        self.assertEqual(labels["closed successful"], "Encerrado com sucesso")
-        self.assertEqual(labels["Encerrado com viabilidade"], "Encerrado com viabilidade")
+        self.assertEqual(labels["OPEN"], "Em atendimento")
+        self.assertEqual(labels["RESOLVED"], "Resolvido")
+        source_options = {row["value"]: row["label"] for row in result["options"]["source_state"]}
+        self.assertEqual(source_options["RESOLVED"], "Resolvido")
+        legacy_ticket = next(row for row in result["tickets"] if row["source_state"] == "closed successful")
+        self.assertEqual(legacy_ticket["status"], "Resolvido")
+        self.assertEqual(legacy_ticket["source_state"], "closed successful")
         self.assertNotIn("estado novo", labels)
         unknown = AnalyticsQueryService().query({"metric":"tickets", "group_by":"source_state", "period_from":"2026-10", "period_to":"2026-10", "filters":{"status":"UNKNOWN"}}, user=self.user)
         self.assertEqual(unknown["value"], 0)

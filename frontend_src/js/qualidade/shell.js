@@ -10,6 +10,58 @@
   const popovers = [...document.querySelectorAll(popoverSelector)];
   let sidebarCollapsed = false;
 
+  document.querySelectorAll("form[data-quality-persist]").forEach(form => {
+    const screen = form.dataset.qualityPersist;
+    const key = `arion_quality_filters:${form.dataset.qualityUser || "anonymous"}:${screen}`;
+    const fields = [...form.elements].filter(field => field.name && field.type !== "submit" && field.type !== "button");
+    const query = new URLSearchParams(window.location.search);
+    const hasUrlState = fields.some(field => query.has(field.name));
+    const readState = () => Object.fromEntries(fields.map(field => [field.name, field.type === "checkbox" ? field.checked : field.value]));
+    const writeState = state => fields.forEach(field => {
+      if (!Object.prototype.hasOwnProperty.call(state, field.name)) return;
+      if (field.type === "checkbox") field.checked = Boolean(state[field.name]);
+      else if (field.tagName === "SELECT" && ![...field.options].some(option => option.value === String(state[field.name]))) return;
+      else field.value = String(state[field.name]);
+    });
+    const saveState = () => {
+      const state = readState();
+      try { window.localStorage.setItem(key, JSON.stringify(state)); } catch (_) { /* URL segue persistindo os filtros. */ }
+      const params = new URLSearchParams();
+      fields.forEach(field => {
+        if (field.type === "checkbox") { if (field.checked) params.set(field.name, "on"); }
+        else if (field.value !== "") params.set(field.name, field.value);
+      });
+      window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}${window.location.hash}`);
+    };
+
+    if (hasUrlState) {
+      try { window.localStorage.setItem(key, JSON.stringify(readState())); } catch (_) { /* Armazenamento local opcional. */ }
+    } else {
+      try {
+        const saved = window.localStorage.getItem(key);
+        if (saved) {
+          const before = JSON.stringify(readState());
+          writeState(JSON.parse(saved));
+          if (JSON.stringify(readState()) !== before) {
+            saveState();
+            form.requestSubmit();
+          }
+        }
+      } catch (_) { /* Mantém os filtros padrão da página. */ }
+    }
+    form.addEventListener("input", saveState);
+    form.addEventListener("change", saveState);
+    form.addEventListener("submit", saveState);
+  });
+
+  document.querySelectorAll("[data-quality-clear-filters]").forEach(link => {
+    link.addEventListener("click", () => {
+      const screen = link.dataset.qualityClearFilters;
+      const owner = document.querySelector(`form[data-quality-persist="${screen}"]`)?.dataset.qualityUser || "anonymous";
+      try { window.localStorage.removeItem(`arion_quality_filters:${owner}:${screen}`); } catch (_) { /* Limpeza da URL continua funcional. */ }
+    });
+  });
+
   try {
     sidebarCollapsed = window.localStorage.getItem(sidebarStorageKey) === "true";
   } catch (_) {

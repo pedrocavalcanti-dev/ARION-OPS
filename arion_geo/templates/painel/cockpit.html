@@ -52,7 +52,7 @@
         <label>Status<select name="status" data-option="status"><option value="all">Todos</option></select></label>
       </div>
       <details class="cockpit-more-filters" data-more-filters><summary><span data-more-label>Mais filtros</span></summary><div>
-        <label>Situa&ccedil;&atilde;o OTRS<select name="source_state" data-option="source_state"><option value="all">Todas</option></select></label>
+        <label>Status de origem<select name="source_state" data-option="source_state"><option value="all">Todos</option></select></label>
         <label>UF<select name="uf" data-option="uf"><option value="all">Todas</option></select></label>
         <label>SLA<select name="sla" data-option="sla"><option value="all">Todos</option></select></label>
         <label>Prioridade<select name="priority" data-option="priority"><option value="all">Todas</option></select></label>
@@ -101,7 +101,7 @@
       <button type="button" class="cockpit-collapse-toggle cockpit-distributions-toggle" data-collapse-toggle="dimensions" aria-expanded="true" aria-controls="cockpit-dimensions-panel">
         <span class="cockpit-collapse-heading"><span class="panel-kicker">DISTRIBUI&Ccedil;&Otilde;ES</span><strong id="cockpit-distributions-title">Distribui&ccedil;&otilde;es da an&aacute;lise</strong><small>Explore o resultado por provedor, UF, prioridade e outras dimens&otilde;es.</small></span><i class="cockpit-chevron" aria-hidden="true"></i>
       </button>
-      <label class="cockpit-visualize-by">Visualizar por<select aria-label="Visualizar por" data-breakdown><option value="provider">Provedor</option><option value="uf">UF</option><option value="status">Status</option><option value="source_state">Situa&ccedil;&atilde;o OTRS</option><option value="cancellation_stage">Etapa do cancelamento</option><option value="operational_origin">Origem</option><option value="project">Projeto / cliente</option><option value="priority">Prioridade</option><option value="sla">SLA</option><option value="termination_reason">Motivo</option><option value="month">Per&iacute;odo</option></select></label>
+      <label class="cockpit-visualize-by">Visualizar por<select aria-label="Visualizar por" data-breakdown><option value="provider">Provedor</option><option value="uf">UF</option><option value="status">Status</option><option value="source_state">Status de origem</option><option value="cancellation_stage">Etapa do cancelamento</option><option value="operational_origin">Origem</option><option value="project">Projeto / cliente</option><option value="priority">Prioridade</option><option value="sla">SLA</option><option value="termination_reason">Motivo</option><option value="month">Per&iacute;odo</option></select></label>
     </header>
     <div class="cockpit-collapse-panel" id="cockpit-dimensions-panel" data-collapse-panel="dimensions" aria-hidden="false"><div class="cockpit-collapse-inner">
       <div class="cockpit-chart-grid cockpit-dimension-grid" data-dimension-grid aria-live="polite"><article class="cockpit-skeleton cockpit-skeleton-chart"></article></div>
@@ -120,7 +120,7 @@
     <div class="cockpit-collapse-panel" id="cockpit-tickets-panel" data-collapse-panel="tickets" aria-hidden="false"><div class="cockpit-collapse-inner">
       <div class="cockpit-ticket-tools"><label>Buscar nos tickets<input type="search" data-ticket-search maxlength="120" placeholder="Ticket, ConfigItem, circuito ou provedor"></label><label>Exibir<select data-ticket-size><option value="25">25</option><option value="50">50</option><option value="100">100</option></select><span>por p&aacute;gina</span></label></div>
       <div class="cockpit-ticket-day-note" data-ticket-day-active hidden role="status"><span data-ticket-day-label></span><button type="button" data-ticket-day-clear>Voltar ao resultado completo</button></div>
-      <div class="cockpit-table-wrap"><table><thead><tr><th>Ticket / fonte</th><th>Data base</th><th>Cria&ccedil;&atilde;o</th><th>Resolvido em</th><th>Status</th><th>Situa&ccedil;&atilde;o OTRS</th><th>Motivo</th><th>Provedor</th><th>UF</th><th>Prioridade</th><th>SLA</th></tr></thead><tbody data-ticket-body><tr><td colspan="11"><span class="cockpit-skeleton cockpit-skeleton-row"></span></td></tr><tr><td colspan="11"><span class="cockpit-skeleton cockpit-skeleton-row"></span></td></tr><tr><td colspan="11"><span class="cockpit-skeleton cockpit-skeleton-row"></span></td></tr></tbody></table></div>
+      <div class="cockpit-table-wrap"><table><thead><tr><th>Ticket / fonte</th><th>Data base</th><th>Cria&ccedil;&atilde;o</th><th>Resolvido em</th><th>Status</th><th>Motivo</th><th>Provedor</th><th>UF</th><th>Prioridade</th><th>SLA</th></tr></thead><tbody data-ticket-body><tr><td colspan="10"><span class="cockpit-skeleton cockpit-skeleton-row"></span></td></tr><tr><td colspan="10"><span class="cockpit-skeleton cockpit-skeleton-row"></span></td></tr><tr><td colspan="10"><span class="cockpit-skeleton cockpit-skeleton-row"></span></td></tr></tbody></table></div>
       <nav class="cockpit-pagination" data-ticket-pagination aria-label="Pagina&ccedil;&atilde;o dos tickets"></nav>
     </div></div>
   </section>

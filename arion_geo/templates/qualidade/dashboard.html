@@ -10,7 +10,7 @@
     <p class="quality-page-subtitle">Resultado das tratativas, estabilidade dos circuitos e reincidências.</p>
     {% include "qualidade/partials/guide_trigger.html" %}
   </div>
-  <form class="quality-filters" method="get" action="{% url 'qualidade:dashboard' %}" aria-label="Filtros do dashboard">
+  <form class="quality-filters" method="get" action="{% url 'qualidade:dashboard' %}" aria-label="Filtros do dashboard" data-quality-persist="dashboard" data-quality-user="{{ request.user.pk }}">
     <input type="hidden" name="concentration_by" value="{{ concentration_by }}">
     <label class="quality-period-control">Período gerencial
       <select name="period">
@@ -29,7 +29,7 @@
         <label>Projeto<select name="projeto"><option value="">Todos</option>{% for option in filter_options.projeto %}<option value="{{ option }}"{% if filters.projeto == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
         <label>ISP<select name="isp"><option value="">Todos</option>{% for option in filter_options.isp %}<option value="{{ option }}"{% if filters.isp == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
         <label>UF<select name="uf"><option value="">Todas</option>{% for option in filter_options.uf %}<option value="{{ option }}"{% if filters.uf == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-        <div class="quality-filter-actions"><a href="{% url 'qualidade:dashboard' %}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
+        <div class="quality-filter-actions"><a href="{% url 'qualidade:dashboard' %}" data-quality-clear-filters="dashboard">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
       </div>
     </details>
     <button class="quality-period-apply" type="submit">Aplicar</button>
@@ -74,7 +74,7 @@
 
   <section class="quality-panel quality-panel--concentration" aria-labelledby="quality-concentration-title">
     <header class="quality-panel__header"><div><h2 id="quality-concentration-title">Concentração das reincidências</h2><p>Top 5 · percentual sobre {{ concentration_total }} reincidências do recorte</p></div>
-      <form class="quality-concentration-filter" method="get" action="{% url 'qualidade:dashboard' %}">
+      <form class="quality-concentration-filter" method="get" action="{% url 'qualidade:dashboard' %}" data-quality-persist="dashboard" data-quality-user="{{ request.user.pk }}">
         <input type="hidden" name="period" value="{{ filters.period }}"><input type="hidden" name="group_by" value="{{ filters.group_by }}"><input type="hidden" name="cliente" value="{{ filters.cliente }}"><input type="hidden" name="projeto" value="{{ filters.projeto }}"><input type="hidden" name="isp" value="{{ filters.isp }}"><input type="hidden" name="uf" value="{{ filters.uf }}">
         <label><span>Visualizar por</span><select name="concentration_by"><option value="project"{% if concentration_by == "project" %} selected{% endif %}>Projeto</option><option value="isp"{% if concentration_by == "isp" %} selected{% endif %}>ISP</option></select></label><button type="submit">Ver</button>
       </form>

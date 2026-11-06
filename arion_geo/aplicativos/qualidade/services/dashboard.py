@@ -34,7 +34,7 @@ from .priority_links import ACTIVE_ORDER_STATUSES, business_priority, build_prio
 from .recurrence import build_quality_recurrence_analysis
 
 PERIOD_OPTIONS = (
-    ("7", "7 dias"),
+    ("7", "7 dias (Semana)"),
     ("30", "30 dias"),
     ("60", "60 dias"),
     ("90", "90 dias"),

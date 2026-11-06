@@ -14,7 +14,7 @@
   <span class="quality-list-period">Janela gerencial · {{ period }} dias</span>
 </header>
 
-<form class="quality-list-toolbar" method="get" action="{% url 'qualidade:links_prioritarios' %}" aria-label="Filtros de links prioritários">
+<form class="quality-list-toolbar" method="get" action="{% url 'qualidade:links_prioritarios' %}" aria-label="Filtros de links prioritários" data-quality-persist="priority-links" data-quality-user="{{ request.user.pk }}">
   <label class="quality-search-field"><span class="quality-sr-only">Buscar link, CI ou cliente</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{ selected.q }}" placeholder="Buscar link, CI ou cliente…"></label>
   <label class="quality-toolbar-control"><span>Período</span><select name="period">{% for value,label in period_options %}<option value="{{ value }}"{% if period == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
   <label class="quality-toolbar-control quality-sort-control"><span>Ordenar</span><select name="sort"><option value="attention"{% if sort == 'attention' %} selected{% endif %}>Maior atenção</option><option value="recurrences"{% if sort == 'recurrences' %} selected{% endif %}>Reincidências</option><option value="recent"{% if sort == 'recent' %} selected{% endif %}>Mais recente</option><option value="occurrences"{% if sort == 'occurrences' %} selected{% endif %}>Ocorrências</option></select></label>
@@ -32,14 +32,14 @@
       <label>OQ ativa<select name="oq"><option value="">Todas</option><option value="WITH"{% if selected.oq == 'WITH' %} selected{% endif %}>Com OQ ativa</option><option value="WITHOUT"{% if selected.oq == 'WITHOUT' %} selected{% endif %}>Sem OQ ativa</option></select></label>
       <label>Status da OQ<select name="status"><option value="">Todos</option>{% for value,label in active_status_options %}<option value="{{ value }}"{% if selected.status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <label class="quality-filter-wide">Motivo<input type="search" name="reason" value="{{ selected.reason }}" placeholder="Buscar motivo registrado"></label>
-      <div class="quality-list-filter-actions"><a href="{% url 'qualidade:links_prioritarios' %}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
+      <div class="quality-list-filter-actions"><a href="{% url 'qualidade:links_prioritarios' %}" data-quality-clear-filters="priority-links">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
     </div>
   </details>
   <label class="quality-toolbar-control quality-page-size"><span>Por página</span><select name="per_page">{% for size in page_sizes %}<option value="{{ size }}"{% if page_size == size %} selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
   <button class="quality-list-submit" type="submit">Aplicar</button>
 </form>
 
-{% if filter_chips %}<div class="quality-active-filters" aria-label="Filtros ativos">{% for chip in filter_chips %}<a href="{{ chip.remove_url }}" class="quality-filter-chip"><span>{{ chip.label }}: {{ chip.value }}</span><span aria-hidden="true">×</span></a>{% endfor %}<a class="quality-clear-filters" href="{% url 'qualidade:links_prioritarios' %}">Limpar filtros</a></div>{% endif %}
+{% if filter_chips %}<div class="quality-active-filters" aria-label="Filtros ativos">{% for chip in filter_chips %}<a href="{{ chip.remove_url }}" class="quality-filter-chip"><span>{{ chip.label }}: {{ chip.value }}</span><span aria-hidden="true">×</span></a>{% endfor %}<a class="quality-clear-filters" href="{% url 'qualidade:links_prioritarios' %}" data-quality-clear-filters="priority-links">Limpar filtros</a></div>{% endif %}
 
 <section class="quality-list-panel" aria-label="Carteira de links prioritários">
   <header class="quality-list-panel__header"><div><strong>{{ candidate_count }}</strong><span>circuitos na carteira</span></div><small>Ocorrências válidas espelhadas · mesma causa registrada pela Qualidade</small></header>
@@ -50,7 +50,7 @@
       <tbody>
         {% for row in rows %}<tr>
           <td><span class="quality-rank">#{{ row.rank|stringformat:"02d" }}</span></td>
-          <td><a class="quality-cell-primary quality-priority-link" href="{% url 'qualidade:priority_link_detail' identificador=row.source_config_item_id %}?period={{ period }}&amp;state={{ selected.state }}">{{ row.designation_display }}</a><small>CI {{ row.source_config_item_id }}</small><small class="quality-priority-state"><span class="quality-operational-state{% if row.is_active_recurrence %} quality-operational-state--active{% elif row.is_stabilized %} quality-operational-state--stabilized{% elif row.operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ row.operational_state_label }}</span>{% if row.current_episode_number %} · Episódio {{ row.current_episode_number }}{% endif %} · {{ row.operational_recurrence_level }}</small></td>
+          <td><a class="quality-cell-primary quality-priority-link" href="{% url 'qualidade:priority_link_detail' identificador=row.source_config_item_id %}?{{ page_query }}">{{ row.designation_display }}</a><small>CI {{ row.source_config_item_id }}</small><small class="quality-priority-state"><span class="quality-operational-state{% if row.is_active_recurrence %} quality-operational-state--active{% elif row.is_stabilized %} quality-operational-state--stabilized{% elif row.operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ row.operational_state_label }}</span>{% if row.current_episode_number %} · Episódio {{ row.current_episode_number }}{% endif %} · {{ row.operational_recurrence_level }}</small></td>
           <td><strong class="quality-cell-primary">{{ row.contracting_client|default:"—" }}</strong><small>{{ row.project_display|default:"Projeto não informado" }}{% if row.business_priority < 90 %} · Estratégica{% endif %}</small></td>
           <td><strong class="quality-cell-primary">{{ row.provider_name|default:"—" }}</strong><small>{{ row.state|default:"UF não informada" }}</small></td>
           <td><strong class="quality-metric">{{ row.valid_occurrence_count }}</strong><small>válida{{ row.valid_occurrence_count|pluralize }}</small></td>
@@ -67,7 +67,7 @@
   </div>
   <div class="quality-priority-cards">
     {% for row in rows %}<article class="quality-priority-card">
-      <header><span class="quality-rank">#{{ row.rank|stringformat:"02d" }}</span><a class="quality-priority-card__title" href="{% url 'qualidade:priority_link_detail' identificador=row.source_config_item_id %}?period={{ period }}&amp;state={{ selected.state }}">{{ row.designation_display }}</a><span class="quality-pill quality-pill--priority quality-pill--{{ row.active_priority|default:'none'|lower }}">{{ row.priority_label }}</span></header>
+      <header><span class="quality-rank">#{{ row.rank|stringformat:"02d" }}</span><a class="quality-priority-card__title" href="{% url 'qualidade:priority_link_detail' identificador=row.source_config_item_id %}?{{ page_query }}">{{ row.designation_display }}</a><span class="quality-pill quality-pill--priority quality-pill--{{ row.active_priority|default:'none'|lower }}">{{ row.priority_label }}</span></header>
       <p class="quality-priority-card__context">{{ row.contracting_client|default:"Cliente não informado" }}{% if row.provider_name %} · {{ row.provider_name }}{% endif %}{% if row.state %} · {{ row.state }}{% endif %}</p>
       <p class="quality-priority-card__operational-state"><span class="quality-operational-state{% if row.is_active_recurrence %} quality-operational-state--active{% elif row.is_stabilized %} quality-operational-state--stabilized{% elif row.operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ row.operational_state_label }}</span>{% if row.current_episode_number %} · Episódio {{ row.current_episode_number }}{% endif %} · Sequência {{ row.operational_recurrence_level }}</p>
       <small>{{ row.project_display|default:"Projeto não informado" }} · CI {{ row.source_config_item_id }}</small>
@@ -76,7 +76,7 @@
     </article>{% endfor %}
   </div>
   {% else %}
-  <div class="quality-list-empty"><span aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg></span><strong>{% if has_any_source_data %}Nenhum link prioritário encontrado.{% else %}Ainda não existem ocorrências suficientes para gerar a carteira de Links Prioritários.{% endif %}</strong><p>{% if has_any_source_data %}Não existem circuitos que correspondam aos filtros e ao período selecionado.{% else %}Os tickets OTRS espelhados no escopo atual aparecerão quando houver dados disponíveis.{% endif %}</p>{% if filter_chips %}<a href="{% url 'qualidade:links_prioritarios' %}">Limpar filtros</a>{% endif %}</div>
+  <div class="quality-list-empty"><span aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg></span><strong>{% if has_any_source_data %}Nenhum link prioritário encontrado.{% else %}Ainda não existem ocorrências suficientes para gerar a carteira de Links Prioritários.{% endif %}</strong><p>{% if has_any_source_data %}Não existem circuitos que correspondam aos filtros e ao período selecionado.{% else %}Os tickets OTRS espelhados no escopo atual aparecerão quando houver dados disponíveis.{% endif %}</p>{% if filter_chips %}<a href="{% url 'qualidade:links_prioritarios' %}" data-quality-clear-filters="priority-links">Limpar filtros</a>{% endif %}</div>
   {% endif %}
 </section>
 {% include "qualidade/_pagination.html" %}

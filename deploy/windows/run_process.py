@@ -13,6 +13,8 @@ from pathlib import Path
 import re
 import runpy
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -205,8 +207,14 @@ def _print_status(role: str) -> int:
     launcher = _read_process_record(role, "launcher", require_running=False)
     service = _read_process_record(role, "child")
     supervisor_pid = str(supervisor["pid"]) if supervisor else "unknown"
-    if (supervisor and launcher and service
-            and _service_process_matches_launcher(launcher, service)):
+    service_matches = bool(supervisor and launcher and service
+                           and _service_process_matches_launcher(launcher, service))
+    web_ready = True
+    web_port = None
+    if role == "web" and service_matches:
+        web_port = _web_port()
+        web_ready = int(service["pid"]) in _listener_pids(web_port)
+    if service_matches and web_ready:
         print(
             f"{role}: running (supervisor pid {supervisor_pid}, "
             f"launcher pid {launcher['pid']} ({'running' if launcher['running'] else 'exited'}), "
@@ -216,6 +224,12 @@ def _print_status(role: str) -> int:
         return 0
     launcher_pid = str(launcher["pid"]) if launcher else "unknown"
     child_pid = str(service["pid"]) if service else "unknown"
+    if role == "web" and service_matches:
+        print(
+            f"web: supervisor running (pid {supervisor_pid}); launcher pid {launcher_pid}, "
+            f"child pid {child_pid}; Waitress not ready on 127.0.0.1:{web_port}"
+        )
+        return 2
     print(
         f"{role}: supervisor running (pid {supervisor_pid}); "
         f"launcher pid {launcher_pid}, child pid {child_pid}; child restarting or unavailable"
@@ -244,6 +258,65 @@ def _pid_is_running(pid: int, expected_created_at: int | None = None) -> bool:
     if identity is None:
         return False
     return expected_created_at is None or identity["created_at"] == expected_created_at
+
+
+def _web_port() -> int:
+    """Read the same safe, non-secret port setting used by Waitress startup."""
+    value = os.environ.get("ARION_WEB_PORT")
+    if value is None:
+        try:
+            value = dotenv_values(PROJECT_ROOT / ".env").get("ARION_WEB_PORT")
+        except (OSError, UnicodeError):
+            value = None
+    try:
+        port = int(value or "8000")
+    except (TypeError, ValueError):
+        raise RuntimeError("ARION_WEB_PORT inválida.") from None
+    if not 1 <= port <= 65535:
+        raise RuntimeError("ARION_WEB_PORT inválida.")
+    return port
+
+
+def _listener_pids(port: int, address: str = "127.0.0.1") -> set[int]:
+    """Return Windows PIDs owning an IPv4 LISTEN socket at the exact endpoint."""
+    if os.name != "nt":
+        return set()
+
+    class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+        _fields_ = [
+            ("dwState", wintypes.DWORD), ("dwLocalAddr", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD), ("dwRemoteAddr", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD),
+        ]
+
+    iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
+    get_table = iphlpapi.GetExtendedTcpTable
+    get_table.argtypes = (
+        ctypes.c_void_p, ctypes.POINTER(wintypes.ULONG), wintypes.BOOL,
+        wintypes.ULONG, wintypes.ULONG, wintypes.ULONG,
+    )
+    get_table.restype = wintypes.DWORD
+    size = wintypes.ULONG(0)
+    # AF_INET=2, TCP_TABLE_OWNER_PID_LISTENER=3, ERROR_INSUFFICIENT_BUFFER=122.
+    result = get_table(None, ctypes.byref(size), False, 2, 3, 0)
+    if result not in (0, 122) or size.value == 0:
+        return set()
+    buffer = ctypes.create_string_buffer(size.value)
+    result = get_table(buffer, ctypes.byref(size), False, 2, 3, 0)
+    if result != 0:
+        return set()
+    count = ctypes.cast(buffer, ctypes.POINTER(wintypes.DWORD)).contents.value
+    row_offset = ctypes.sizeof(wintypes.DWORD)
+    row_size = ctypes.sizeof(MIB_TCPROW_OWNER_PID)
+    expected_address = socket.inet_aton(address)
+    matched = set()
+    for index in range(count):
+        row = MIB_TCPROW_OWNER_PID.from_buffer(buffer, row_offset + index * row_size)
+        row_address = struct.pack("=I", row.dwLocalAddr)
+        row_port = socket.ntohs(row.dwLocalPort & 0xFFFF)
+        if row.dwState == 2 and row_address == expected_address and row_port == port:
+            matched.add(int(row.dwOwningPid))
+    return matched
 
 
 def _write_process_record(
@@ -391,7 +464,7 @@ def _run_managed_child(role: str) -> int:
         sys.path.insert(0, str(PROJECT_ROOT / "arion_geo"))
         if target[1] == "-m":
             module_name = target[2]
-            sys.argv = ["-m", module_name, *target[3:]]
+            sys.argv = [module_name, *target[3:]]
             runpy.run_module(module_name, run_name="__main__", alter_sys=True)
         else:
             script_path = target[1]
@@ -450,12 +523,7 @@ def _command(role: str) -> list[str]:
     if not python.is_file():
         raise RuntimeError("O interpretador da .venv não foi encontrado.")
     if role == "web":
-        try:
-            port = int(os.environ.get("ARION_WEB_PORT", "8000"))
-        except ValueError:
-            raise RuntimeError("ARION_WEB_PORT inválida.") from None
-        if not 1 <= port <= 65535:
-            raise RuntimeError("ARION_WEB_PORT inválida.")
+        port = _web_port()
         return [
             str(python),
             "-m",
