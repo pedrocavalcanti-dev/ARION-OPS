@@ -417,3 +417,82 @@ class OTRSTicketConfigItem(models.Model):
         ]
         verbose_name = "relação OTRS Ticket–ConfigItem"
         verbose_name_plural = "relações OTRS Ticket–ConfigItem"
+
+
+class OTRSOperationalSnapshot(models.Model):
+    """One immutable daily observation from a successful full queue sync."""
+
+    scope_signature = models.CharField(max_length=512)
+    snapshot_date = models.DateField(db_index=True)
+    captured_at = models.DateTimeField(db_index=True)
+    source_run = models.OneToOneField(
+        IntegrationRun, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="operational_snapshot",
+    )
+    ticket_count = models.PositiveIntegerField(default=0)
+    backlog_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=("scope_signature", "snapshot_date"),
+            name="uniq_otrs_oper_snapshot_day",
+        )]
+        indexes = [models.Index(fields=("scope_signature", "captured_at"), name="otrs_ops_snap_scope_at_idx")]
+        ordering = ("captured_at", "pk")
+        verbose_name = "snapshot operacional OTRS"
+        verbose_name_plural = "snapshots operacionais OTRS"
+
+
+class OTRSOperationalTicketSnapshot(models.Model):
+    snapshot = models.ForeignKey(
+        OTRSOperationalSnapshot, on_delete=models.CASCADE, related_name="tickets",
+    )
+    external_id = models.PositiveBigIntegerField()
+    ticket_number = models.CharField(max_length=80)
+    queue_name = models.CharField(max_length=250)
+    external_state_name = models.CharField(max_length=250)
+    external_state_type = models.CharField(max_length=120, blank=True)
+    business_status = models.CharField(max_length=16, db_index=True)
+    source_created_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    canceled_at = models.DateTimeField(null=True, blank=True)
+    responsibility_normalized = models.CharField(max_length=20, blank=True)
+    closing_code_raw = models.CharField(max_length=250, blank=True)
+    priority_name = models.CharField(max_length=160, blank=True)
+    service_name = models.CharField(max_length=250, blank=True)
+    sla_name = models.CharField(max_length=250, blank=True)
+    responsible_user_id = models.PositiveIntegerField(null=True, blank=True)
+    cancellation_stage = models.CharField(max_length=24, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=("snapshot", "external_id"), name="uniq_otrs_snap_ticket",
+        )]
+        indexes = [
+            models.Index(fields=("snapshot", "queue_name", "business_status"), name="otrs_snap_q_status_idx"),
+            models.Index(fields=("snapshot", "source_created_at"), name="otrs_snap_created_idx"),
+        ]
+        verbose_name = "ticket no snapshot OTRS"
+
+
+class OTRSOperationalConfigItemSnapshot(models.Model):
+    ticket_snapshot = models.ForeignKey(
+        OTRSOperationalTicketSnapshot, on_delete=models.CASCADE, related_name="config_items",
+    )
+    config_item_id = models.CharField(max_length=40)
+    provider_name = models.CharField(max_length=300, blank=True)
+    uf = models.CharField(max_length=100, blank=True)
+    project = models.CharField(max_length=300, blank=True)
+    legacy_project = models.CharField(max_length=300, blank=True)
+    client = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=("ticket_snapshot", "config_item_id"), name="uniq_otrs_snap_ticket_ci",
+        )]
+        indexes = [
+            models.Index(fields=("config_item_id", "ticket_snapshot"), name="otrs_snap_ci_ticket_idx"),
+            models.Index(fields=("provider_name", "uf"), name="otrs_snap_provider_uf_idx"),
+        ]
+        verbose_name = "ConfigItem no snapshot OTRS"

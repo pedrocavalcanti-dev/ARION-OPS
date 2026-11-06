@@ -47,6 +47,14 @@ O catálogo não possui uma data de encerramento administrativo separada. termin
 
 “Criado no período e atualmente resolvido” seleciona source_created_at no intervalo e consulta o status atual. “Resolvido durante o período” seleciona a data operacional de resolução no intervalo e exige estado atual operacional RESOLVED. Cockpit, Rankings e Mapa usam campos/datasets conforme cada métrica; não interprete todo total como fluxo de resoluções.
 
-O backlog do Cockpit é snapshot atual de OPEN/PENDING, não reconstrução de estoque histórico. A série de fluxo constrói entradas por source_created_at e fechamentos pela data operacional, sujeito à cobertura histórica e validação dos horários.
+O indicador **Backlog atual** usa somente tickets `OPEN`/`PENDING` do mirror corrente. A linha histórica do Cockpit usa observações persistidas após FULL, nos horários capturados, e não projeta estoque ao fim do período. Novos e Resolvidos usam as datas do mirror corrente e não cobrem necessariamente todas as reaberturas ou tickets que saíram das filas.
+
+## Histórico persistente do Cockpit
+
+O esquema e a consulta documentados neste repositório não sustentam um backfill completo de transições. O serviço lê `ticket_history` para obter o maior `create_time` de StateUpdate que corresponda ao estado terminal atual; isso não recupera sequências de reabertura, todos os ciclos de resolução nem o pertencimento passado às filas. O dicionário não documenta uma chave única de evento adequada para deduplicar um ledger completo. A produção e o schema remoto não foram consultados para esta implementação; portanto não se presume que existam colunas ou garantias adicionais.
+
+O ARION grava `OTRSOperationalSnapshot`, `OTRSOperationalTicketSnapshot` e `OTRSOperationalConfigItemSnapshot` após uma FULL aplicada e bem-sucedida. Cada captura tem uma assinatura das filas e unicidade por data local e assinatura; os detalhes de tickets e ConfigItems também possuem chaves únicas dentro da captura. FAST não grava snapshot e não gera transições inferidas. Repetir captura da mesma cobertura no mesmo dia mantém a primeira observação.
+
+Não há comando de backfill histórico: os dados anteriores ao primeiro snapshot confiável continuam indisponíveis para backlog. Uma falha de captura é registrada no `IntegrationRun`; a próxima FULL pode capturar o dia atual, mas uma data passada sem snapshot não pode ser reconstruída pelo mirror. A implantação requer aplicar as migrations locais do app `integracoes` no banco ARION de cada ambiente, seguida de FULL normal; isso não escreve no OTRS. Não executar migration ou sync de produção sem o procedimento operacional e aprovação próprios.
 
 Links: [estados](otrs-estados.md), [indicadores](otrs-indicadores.md), [limitações](otrs-limitacoes.md).

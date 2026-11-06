@@ -2,12 +2,19 @@ from datetime import datetime, timezone as datetime_timezone
 from unittest.mock import patch
 from django.test import TestCase as DjangoTestCase, override_settings
 
-from .models import CMDBLinkMirror, CMDBOperatorMirror, OTRSStateMapping, OTRSTicket, OTRSTicketConfigItem
+from .models import (
+    CMDBLinkMirror, CMDBOperatorMirror, Integration, IntegrationRun,
+    OTRSOperationalConfigItemSnapshot, OTRSOperationalSnapshot,
+    OTRSOperationalTicketSnapshot, OTRSStateMapping, OTRSTicket,
+    OTRSTicketConfigItem,
+)
 from .otrs_queues import (
-    CANCELLATION_PROFILE_ACTIVE_STATES, CANCELLATION_REQUEST_QUEUE_NAME, COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME,
+    CANCELLATION_PROFILE_ACTIVE_STATES, CANCELLATION_REQUEST_QUEUE_NAME,
+    COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME, queue_signature,
 )
 from .services.cmdb_sync import CMDBSyncService
 from .services.otrs_sync import OTRSSyncService, _otrs_naive_local_datetime
+from .services.otrs_snapshots import capture_daily_operational_snapshot
 
 
 class FakeCMDBClient:
@@ -211,6 +218,68 @@ class OTRSMirrorSyncTests(DjangoTestCase):
     def setUp(self):
         self.operator = CMDBOperatorMirror.objects.create(source_config_item_id="op-1", source_number="operator-number", name="Operadora")
         CMDBLinkMirror.objects.create(source_config_item_id="ci-1", source_number="36131000001", name="Link local", isp_raw="op-1", operator=self.operator)
+
+    def test_full_snapshot_is_immutable_per_day_and_deduplicates_ticket_and_config_item(self):
+        from datetime import datetime, timezone as utc
+
+        link = CMDBLinkMirror.objects.get(source_config_item_id="ci-1")
+        link.state = "SP"
+        link.business_project = "Projeto Snapshot"
+        link.contracting_client = "Cliente Snapshot"
+        link.save(update_fields=("state", "business_project", "contracting_client"))
+        ticket = OTRSTicket.objects.create(
+            external_id=900, ticket_number="SNAP-900", queue_external_id=107,
+            queue_name=NOC_QUEUE_NAME, external_state_id=10,
+            external_state_name="em atendimento", business_status="OPEN",
+            is_business_open=True, is_present_in_queue=True,
+            source_created_at=datetime(2026, 3, 2, 9, tzinfo=utc.utc),
+        )
+        OTRSTicketConfigItem.objects.create(
+            ticket=ticket, config_item_id="ci-1", cmdb_link=link,
+            relation_type="DependsOn", relation_state="Valid",
+        )
+        integration = Integration.objects.create(
+            key=Integration.Key.OTRS, name="OTRS", kind="mysql",
+        )
+        signature = queue_signature(COCKPIT_QUEUE_NAMES)
+        first_run = IntegrationRun.objects.create(
+            integration=integration, operation=IntegrationRun.Operation.OTRS_FULL_SYNC,
+            status=IntegrationRun.Status.SUCCESS,
+            message=f"Apply; queues={signature}; tickets=1",
+            finished_at=datetime(2026, 3, 2, 12, tzinfo=utc.utc),
+        )
+
+        first = capture_daily_operational_snapshot(first_run, COCKPIT_QUEUE_NAMES)
+        ticket.business_status = "RESOLVED"
+        ticket.save(update_fields=("business_status",))
+        later_run = IntegrationRun.objects.create(
+            integration=integration, operation=IntegrationRun.Operation.OTRS_FULL_SYNC,
+            status=IntegrationRun.Status.SUCCESS,
+            message=f"Apply; queues={signature}; tickets=1",
+            finished_at=datetime(2026, 3, 2, 18, tzinfo=utc.utc),
+        )
+        repeated = capture_daily_operational_snapshot(later_run, COCKPIT_QUEUE_NAMES)
+
+        self.assertTrue(first["created"])
+        self.assertFalse(repeated["created"])
+        self.assertEqual(OTRSOperationalSnapshot.objects.count(), 1)
+        self.assertEqual(OTRSOperationalSnapshot.objects.get().ticket_count, 1)
+        self.assertEqual(OTRSOperationalSnapshot.objects.get().backlog_count, 1)
+        historical_ticket = OTRSOperationalTicketSnapshot.objects.get()
+        self.assertEqual(historical_ticket.business_status, "OPEN")
+        historical_link = OTRSOperationalConfigItemSnapshot.objects.get()
+        self.assertEqual(historical_link.provider_name, "Operadora")
+        self.assertEqual(historical_link.uf, "SP")
+        self.assertEqual(historical_link.project, "Projeto Snapshot")
+        self.assertEqual(historical_link.client, "Cliente Snapshot")
+        fast_run = IntegrationRun.objects.create(
+            integration=integration, operation=IntegrationRun.Operation.OTRS_FAST_SYNC,
+            status=IntegrationRun.Status.SUCCESS, message=f"Apply; queues={signature}",
+        )
+        self.assertEqual(
+            capture_daily_operational_snapshot(fast_run, COCKPIT_QUEUE_NAMES)["reason"],
+            "run_not_eligible",
+        )
 
     def test_explicit_business_status_rule_and_unknown_is_not_open(self):
         cases = {

@@ -17,7 +17,8 @@ from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.base_links.models import Operadora, Projeto
 from aplicativos.integracoes.models import (
     CMDBLinkMirror, CMDBOperatorMirror, Integration, IntegrationRun,
-    IntegrationSyncState, OTRSTicket, OTRSTicketConfigItem,
+    IntegrationSyncState, OTRSOperationalConfigItemSnapshot,
+    OTRSOperationalSnapshot, OTRSTicket, OTRSTicketConfigItem,
 )
 from aplicativos.integracoes.otrs_queues import (
     COCKPIT_QUEUE_NAMES, PAYMENT_PENDING_QUEUE_NAME, queue_signature,
@@ -25,6 +26,7 @@ from aplicativos.integracoes.otrs_queues import (
 from aplicativos.integracoes.services.cancellation import classify_cancellation_stage
 from aplicativos.integracoes.services.analytics import TicketQueryService
 from aplicativos.integracoes.services.semantics import LinkSemantics
+from aplicativos.integracoes.services.otrs_snapshots import capture_daily_operational_snapshot
 from aplicativos.qualidade.models import QualityMonitoringCycle, QualityOrder
 from .services.analytics import (
     AnalyticsQueryService, DashboardAnalyticsService, _operational_buckets,
@@ -175,6 +177,21 @@ class MirrorAnalyticsTests(TestCase):
         created_at = datetime(2026, 10, day, 3, tzinfo=datetime_timezone.utc)
         terminal_at = created_at if status in {"RESOLVED", "CLOSED", "CANCELED"} else None
         return OTRSTicket.objects.create(external_id=ext, ticket_number=f"A-{ext}", queue_external_id=107, queue_name="NOC - ATACADO", external_state_id=ext, external_state_name=status, business_status=status, is_business_open=open_state, priority_name="3 normal", service_name="Internet", sla_name="Resposta NOC", source_created_at=created_at, terminal_state_at=terminal_at, canceled_at=terminal_at if status == "CANCELED" else None)
+
+    def _full_snapshot(self, captured_at):
+        integration, _ = Integration.objects.get_or_create(
+            key=Integration.Key.OTRS,
+            defaults={"name": "OTRS", "kind": "mysql"},
+        )
+        signature = queue_signature(COCKPIT_QUEUE_NAMES)
+        run = IntegrationRun.objects.create(
+            integration=integration,
+            operation=IntegrationRun.Operation.OTRS_FULL_SYNC,
+            status=IntegrationRun.Status.SUCCESS,
+            message=f"Apply; queues={signature}; tickets=fixture",
+            finished_at=captured_at,
+        )
+        return capture_daily_operational_snapshot(run, COCKPIT_QUEUE_NAMES)
 
     def test_dashboard_renders_real_snapshot_and_period(self):
         ticket = self._ticket(101, "OPEN", True, 5)
@@ -847,8 +864,8 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(aging["24-48"], 1)
         self.assertEqual(sum(aging.values()), 3)
         self.assertFalse(result["operational"]["backlog"]["available"])
-        self.assertEqual(result["operational"]["backlog"]["final"], sum(aging.values()))
-        self.assertIn("sem todas as transições", result["operational"]["backlog"]["message"])
+        self.assertIsNone(result["operational"]["backlog"]["final"])
+        self.assertIn("Sem snapshot FULL", result["operational"]["backlog"]["message"])
         long_range = AnalyticsQueryService().query({
             "scope": "support", "metric": "tickets", "group_by": "status",
             "start": "2026-10-01", "end": "2026-12-31", "filters": {},
@@ -885,7 +902,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(cross_year_grain, "month")
         self.assertEqual([point[1] for point in cross_year], ["Nov/25", "Dez/25", "Jan/26", "Fev/26"])
 
-    def test_backlog_reconstructs_initial_flow_final_and_current_aging(self):
+    def test_backlog_never_reconstructs_history_from_current_mirror_rows(self):
         baseline_at = datetime(2026, 10, 4, 12, tzinfo=datetime_timezone.utc)
         closed_at = datetime(2026, 10, 7, 15, tzinfo=datetime_timezone.utc)
         for index in range(30):
@@ -1025,11 +1042,68 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(operational["backlog"]["current_snapshot"], 1)
         self.assertTrue(all(point["backlog"] is None for point in operational["series"]))
 
+    def test_full_backlog_snapshots_keep_historical_filters_and_deduplicate_multiple_config_items(self):
+        allowed_project = Projeto.objects.create(name="Projeto A", normalized_name="projeto-a")
+        scope = self.user.groups.get(name="Analista NOC").data_scope
+        scope.mode = GroupDataScope.Mode.CUSTOM
+        scope.save()
+        allowed_operator = Operadora.objects.create(
+            name="Operadora Analytics", normalized_name="operadora-analytics",
+        )
+        scope.allowed_operators.set([allowed_operator])
+        scope.allowed_projects.set([allowed_project])
+        self.link.business_project = "Projeto A"
+        self.link.contracting_client = "Operadora Analytics"
+        self.link.save(update_fields=("business_project", "contracting_client"))
+        self.other_link.business_project = "Projeto B"
+        self.other_link.contracting_client = "Operadora Analytics"
+        self.other_link.save(update_fields=("business_project", "contracting_client"))
+
+        first_ticket = self._ticket(2080, "OPEN", True, 3)
+        second_ticket = self._ticket(2081, "OPEN", True, 4)
+        for ticket, link, ci in (
+            (first_ticket, self.link, "analytics-ci-1"),
+            (first_ticket, self.other_link, "analytics-ci-2"),
+            (second_ticket, self.other_link, "analytics-ci-2"),
+        ):
+            OTRSTicketConfigItem.objects.create(
+                ticket=ticket, config_item_id=ci, cmdb_link=link,
+                relation_type="DependsOn", relation_state="Valid",
+            )
+
+        self._full_snapshot(datetime(2026, 10, 6, 12, tzinfo=datetime_timezone.utc))
+        self._full_snapshot(datetime(2026, 10, 28, 12, tzinfo=datetime_timezone.utc))
+        self._full_snapshot(datetime(2026, 9, 30, 12, tzinfo=datetime_timezone.utc))
+        self._full_snapshot(datetime(2026, 10, 31, 12, tzinfo=datetime_timezone.utc))
+        self.assertEqual(OTRSOperationalSnapshot.objects.count(), 4)
+        self.assertEqual(OTRSOperationalConfigItemSnapshot.objects.count(), 12)
+
+        filters = {"provider": "Operadora Analytics", "uf": "SP", "project": "Projeto A"}
+        weekly = AnalyticsQueryService().query({
+            "scope": "support", "metric": "tickets", "start": "2026-10-01",
+            "end": "2026-10-30", "filters": filters,
+        }, user=self.user)["operational"]
+        observed = [row for row in weekly["series"] if row["backlog"] is not None]
+        self.assertTrue(weekly["backlog"]["available"])
+        self.assertEqual([row["backlog"] for row in observed], [1, 1])
+        self.assertEqual(weekly["backlog"]["observation_count"], 2)
+        self.assertTrue(all(row["backlog_observed_label"] for row in observed))
+
+        monthly = AnalyticsQueryService().query({
+            "scope": "support", "metric": "tickets", "start": "2026-09-01",
+            "end": "2026-10-31", "filters": filters,
+        }, user=self.user)["operational"]
+        monthly_points = [row for row in monthly["series"] if row["backlog"] is not None]
+        self.assertEqual(monthly["grain"], "month")
+        self.assertEqual(len(monthly_points), 2)
+        self.assertEqual([point["backlog"] for point in monthly_points], [1, 1])
+
     def test_cockpit_page_starts_with_noc_filters_and_paged_results(self):
         response = self.client.get(reverse("cockpit"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "NOC ATACADO")
-        self.assertContains(response, "Situa&ccedil;&atilde;o OTRS")
+        self.assertContains(response, "<th>Status</th>")
+        self.assertNotContains(response, "Situa&ccedil;&atilde;o OTRS")
         self.assertContains(response, "Provedor")
         self.assertContains(response, "data-detail-pagination")
         self.assertNotContains(response, "Firewall")
@@ -1477,6 +1551,31 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(unknown["detail"], [])
         status_options = {row["value"]: row["label"] for row in result["options"]["status"]}
         self.assertEqual(status_options, {"OPEN": "Em atendimento", "PENDING": "Pendente", "SCHEDULED": "Agendado", "RESOLVED": "Resolvido", "CANCELED": "Cancelado"})
+        for export_format in ("csv", "xlsx"):
+            with self.subTest(export_format=export_format):
+                response = self.client.post(
+                    reverse("analytics-export"),
+                    data=json.dumps({
+                        "format": export_format, "metric": "tickets", "group_by": "status",
+                        "start": "2026-10-01", "end": "2026-10-31", "filters": {},
+                    }),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 200)
+                if export_format == "csv":
+                    csv_text = response.content.decode("utf-8-sig")
+                    self.assertIn("Resolvido", csv_text)
+                    self.assertNotIn("Situação OTRS", csv_text)
+                else:
+                    from openpyxl import load_workbook
+                    workbook = load_workbook(BytesIO(response.content), read_only=True)
+                    ticket_sheet = workbook["Tickets"]
+                    header = [cell.value for cell in ticket_sheet[1]]
+                    status_column = header.index("status") + 1
+                    exported = [ticket_sheet.cell(row=row, column=status_column).value
+                                for row in range(2, ticket_sheet.max_row + 1)]
+                    self.assertIn("Resolvido", exported)
+                    self.assertNotIn("Encerrado com viabilidade", exported)
 
     def test_noc_period_and_current_backlog_have_separate_date_semantics(self):
         september = self._ticket(111, "CLOSED", False, 5)

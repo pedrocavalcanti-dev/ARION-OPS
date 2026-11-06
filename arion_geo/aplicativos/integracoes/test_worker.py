@@ -15,7 +15,11 @@ from django.utils import timezone
 from aplicativos.integracoes.management.commands.integration_worker import Command
 from aplicativos.integracoes.management.commands.sincronizar_otrs import Command as OTRSSyncCommand
 from aplicativos.integracoes.clients.factory import otrs_configuration_notice
-from aplicativos.integracoes.models import Integration, IntegrationLease, IntegrationRun, IntegrationSyncState
+from aplicativos.integracoes.models import (
+    Integration, IntegrationLease, IntegrationRun, IntegrationSyncState,
+    OTRSOperationalSnapshot, OTRSTicket,
+)
+from aplicativos.integracoes.otrs_queues import COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME
 from aplicativos.qualidade.models import QualityCorrelationCheckpoint
 from aplicativos.integracoes.services.sync_lock import Lease
 from aplicativos.integracoes.services.errors import OTRSAuthenticationError, OTRSConnectionRefusedError, OTRSTLSRequiredError
@@ -121,6 +125,63 @@ class IntegrationWorkerTests(TestCase):
         Integration.objects.create(
             key=Integration.Key.OTRS, name="OTRS", kind="MySQL", enabled=True,
         )
+
+    def test_full_apply_captures_once_and_fast_does_not_create_snapshots(self):
+        OTRSTicket.objects.create(
+            external_id=7654321, ticket_number="SNAP-COMMAND-1",
+            queue_external_id=107, queue_name=NOC_QUEUE_NAME,
+            external_state_id=1, external_state_name="em atendimento",
+            business_status="OPEN", is_business_open=True,
+            is_present_in_queue=True,
+        )
+        counts = {"found": 0, "processed": 0, "created": 0, "updated": 0,
+                  "unchanged": 0, "stale": 0, "unresolved_link": 0}
+        relation_stats = {
+            "tickets_with_ci": 0, "tickets_without_ci": 1, "tickets_one_ci": 0,
+            "tickets_multiple_ci": 0, "unique_config_items": 0,
+            "configitems_multiple_tickets": 0, "resolved_local_links": 0,
+            "unresolved_local_links": 0,
+        }
+        run_result = {
+            "tickets": counts, "relations": counts,
+            "ticket_terminal_fields": {"closing_code_filled": 0, "resolved_at_filled": 0, "terminal_at_filled": 0},
+            "relation_stats": relation_stats,
+            "performance": {"duration_ms": 1, "select_queries": 0, "ticket_query_rows": 0, "relation_batches": 0},
+            "queues": [{"name": name} for name in COCKPIT_QUEUE_NAMES],
+            "tickets_by_queue": [],
+            "business_status": {"OPEN": 1, "PENDING": 0, "SCHEDULED": 0, "RESOLVED": 0,
+                                "CLOSED": 0, "CANCELED": 0, "UNKNOWN": 0},
+            "business_open": 1, "warnings": [], "cursor": timezone.now(),
+        }
+        class ReadOnlySessionClient:
+            database = "otrs"
+
+            def read_only_session(self):
+                from contextlib import nullcontext
+                return nullcontext(self)
+
+        with patch(
+            "aplicativos.integracoes.management.commands.sincronizar_otrs._otrs_client",
+            return_value=ReadOnlySessionClient(),
+        ), patch(
+            "aplicativos.integracoes.management.commands.sincronizar_otrs.OTRSSyncService",
+        ) as sync_service:
+            sync_service.return_value.run.return_value = run_result
+            command = OTRSSyncCommand(stdout=StringIO(), stderr=StringIO())
+            command.handle(
+                apply=True, fast=False, full=True, dry_run=False, queues=None,
+                scheduler_lease=True, verbosity=1,
+            )
+            full_run = IntegrationRun.objects.get(operation=IntegrationRun.Operation.OTRS_FULL_SYNC)
+            self.assertIn("history_snapshot=captured:1", full_run.message)
+            self.assertEqual(OTRSOperationalSnapshot.objects.count(), 1)
+
+            command.handle(
+                apply=True, fast=True, full=False, dry_run=False, queues=None,
+                scheduler_lease=True, verbosity=1,
+            )
+
+        self.assertEqual(OTRSOperationalSnapshot.objects.count(), 1)
 
     def test_due_sync_updates_success_without_overwriting_command_cursor(self):
         cursor = timezone.now() - timedelta(minutes=3)

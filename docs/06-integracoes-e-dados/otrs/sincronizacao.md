@@ -30,6 +30,7 @@ TX --> MIRROR[Atualiza mirror e cursor]
 7. Valida colisões do TN com IDs externos locais antes de escrever.
 8. Em apply, grava dimensões, tickets e relações dentro de transação local; marca como ausentes tickets/relações não retornados no conjunto conciliado.
 9. Só após sucesso o comando persiste cursor e data de FULL, e fecha IntegrationRun como sucesso.
+10. Depois de uma FULL aplicada com sucesso, grava uma observação operacional diária no banco local; a falha dessa captura é registrada e não altera o resultado da sincronização.
 
 FULL não pagina o SELECT de tickets. As consultas de relações, Dynamic Field Value e histórico são divididas em batches; o conjunto de tickets é lido e validado em memória antes da reconciliação. Esse custo é uma limitação documentada, não uma suposição de falha.
 
@@ -40,6 +41,14 @@ FAST usa IntegrationSyncState.change_cursor, que é a data do início da leitura
 Além dos tickets nas filas selecionadas, FAST inclui IDs que já estavam no mirror dessas filas. Assim, uma mudança de fila pode ser observada e o registro pode passar a is_present_in_queue=False se saiu do universo. Tickets retornados voltam a ser reconciliados; campos relacionais são relidos para os tickets afetados. FAST não marca como ausente todo registro que simplesmente não apareceu na consulta incremental.
 
 FAST é recusado se cursor não existe ou se a última FULL não cobre exatamente a assinatura de filas atual. Faça FULL antes de mudar a cobertura.
+
+## Snapshots históricos do Cockpit
+
+Somente FULL com `--apply`, status `SUCCESS` e cobertura de filas identificada pode criar um snapshot. A unicidade é por assinatura exata das filas e data local, portanto uma execução repetida no mesmo dia não sobrescreve a observação original. A captura registra `captured_at`, run de origem, contagem do conjunto, status bruto/operacional e datas do ticket, além dos ConfigItems e dimensões que o mirror conhecia naquele momento. O snapshot não substitui o mirror.
+
+FAST continua atualizando apenas o estado corrente e não reconstrói eventos nem altera snapshots. Não existe backfill automático ou manual para dezembro/2025 a março/2026: o acesso documentado a `ticket_history` não prova cobertura nem uma chave de evento para tal reconstrução. Dias sem captura permanecem lacunas; a próxima FULL só captura o dia em que for executada. Se uma captura falhar, o run recebe um estado seguro `history_snapshot=failed:<classe>` e o worker pode tentar novamente em outra FULL.
+
+Para recuperação local, aplique as migrations pendentes do app `integracoes` no banco ARION e execute a sincronização FULL normal; não é necessária escrita remota no OTRS. Não reaplicar snapshots históricos por edição manual. Em produção, planeje as migrations e o reinício pelo processo operacional autorizado; esta alteração não foi implantada nem validada contra o servidor de produção.
 
 ## Locks, commits e recuperação
 

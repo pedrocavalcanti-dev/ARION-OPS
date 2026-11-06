@@ -346,11 +346,20 @@ class AnalyticsQueryService:
         options = self._options(metric_universe, allowed_links)
         filtered = self._apply_filters(metric_universe, allowed_links, filters)
         history_meta = self._backlog_history_meta(stock_rows)
+        from .operational_history import backlog_snapshot_observations
+
+        _operational_grain, operational_buckets = _operational_buckets(start, end)
+        backlog_observations = backlog_snapshot_observations(
+            user=user, allowed_links=allowed_links, scope=scope,
+            filters=filters, buckets=operational_buckets,
+            period_start=start_at, period_end=end_exclusive,
+        )
         operational = self._operational_summary(
             operational_rows, scope, start, end, metric, history_meta,
             stock_rows=stock_rows,
             include_cancelled=include_cancelled,
             include_improcedente=include_improcedente,
+            backlog_observations=backlog_observations,
         )
         date_field = self._metric_date_field(metric)
         if metric in self.SNAPSHOT_METRICS:
@@ -536,7 +545,8 @@ class AnalyticsQueryService:
 
     @classmethod
     def _operational_summary(cls, rows, scope, start, end, metric, history_meta, *,
-                             stock_rows=None, include_cancelled=False, include_improcedente=False):
+                             stock_rows=None, include_cancelled=False, include_improcedente=False,
+                             backlog_observations=None):
         from django.db.models import Avg, Case, CharField, Count, DateTimeField, DurationField, ExpressionWrapper, F, Q, Value, When
         from django.utils import timezone
 
@@ -569,24 +579,11 @@ class AnalyticsQueryService:
         if scope != "support":
             ledger_filter |= Q(_operational_stage="UNKNOWN")
         ledger_rows = rows.filter(ledger_filter)
-        closing_date = _operational_closure_expression()
-        stock_ledger = stock_rows.filter(ledger_filter).annotate(_operational_closed_at=closing_date)
-        flow_ledger = ledger_rows.annotate(_operational_closed_at=closing_date)
+        flow_ledger = ledger_rows.annotate(_operational_closed_at=_operational_closure_expression())
 
         history_start = history_meta.get("history_start")
-        # A current-state mirror cannot prove a historical backlog baseline:
-        # reopened tickets and tickets that left the synchronized queues have
-        # no complete transition/membership ledger. Never infer past stock from
-        # the current row set, even if its visible timestamps happen to be full.
-        history_available = False
-        baseline = stock_ledger.filter(business_statuses_query(
-            "business_status", (*BACKLOG_STATUSES, *TERMINAL_STATUSES),
-        )).filter(source_created_at__lt=start_at).filter(
-            Q(_operational_closed_at__isnull=True)
-            | (Q(_operational_closed_at__gte=start_at)
-               & Q(_operational_closed_at__gte=F("source_created_at")))
-        )
-        baseline_count = baseline.values("pk").distinct().count() if history_available else None
+        backlog_observations = backlog_observations or {}
+        history_available = bool(backlog_observations)
 
         def aggregate_event(event_rows, field):
             if observed_end <= start_at:
@@ -630,10 +627,6 @@ class AnalyticsQueryService:
             terminal_groups, {"CANCELED"} if include_cancelled or metric == "canceled_tickets" else set(),
             allow_improper=flow_improper,
         )
-        stock_entry_values = collect_event(
-            entry_groups, {*BACKLOG_STATUSES, *TERMINAL_STATUSES}, allow_improper=False,
-        )
-        stock_closure_values = collect_event(terminal_groups, None, allow_improper=False)
         entries_total = sum(entry_values.values())
         closed_total = sum(closed_values.values())
         canceled_total = sum(canceled_values.values())
@@ -651,8 +644,7 @@ class AnalyticsQueryService:
         average_hours = round(average_duration.total_seconds() / 3600, 1) if average_duration else None
 
         series = []
-        running_backlog = baseline_count or 0
-        for key, label, bucket_start, _bucket_end in buckets:
+        for key, label, bucket_start, bucket_end in buckets:
             entry_support = entry_values.get((key, "SUPPORT"), 0)
             entry_cancel = entry_values.get((key, "CANCELLATION"), 0)
             closed_support = closed_values.get((key, "SUPPORT"), 0)
@@ -662,11 +654,8 @@ class AnalyticsQueryService:
             entry_count = entry_support + entry_cancel
             closed_count = closed_support + closed_cancel
             canceled_count = canceled_support + canceled_cancel
-            backlog_start = running_backlog
-            stock_entry_count = stock_entry_values.get((key, "SUPPORT"), 0) + stock_entry_values.get((key, "CANCELLATION"), 0)
-            stock_closure_count = stock_closure_values.get((key, "SUPPORT"), 0) + stock_closure_values.get((key, "CANCELLATION"), 0)
-            running_backlog += stock_entry_count - stock_closure_count
-            point_has_observed_data = bucket_start < observed_end
+            backlog_observation = backlog_observations.get(key)
+            bucket_duration = (bucket_end - bucket_start).total_seconds()
             series.append({
                 "key": key, "label": label,
                 "entries": entry_count, "closed": closed_count, "canceled": canceled_count,
@@ -674,8 +663,20 @@ class AnalyticsQueryService:
                 "support_entries": entry_support, "support_closed": closed_support,
                 "cancellation_entries": entry_cancel, "cancellation_closed": closed_cancel,
                 "support_canceled": canceled_support, "cancellation_canceled": canceled_cancel,
-                "backlog_start": backlog_start if history_available and point_has_observed_data else None,
-                "backlog": running_backlog if history_available and point_has_observed_data else None,
+                "backlog_start": None,
+                "backlog": backlog_observation["value"] if backlog_observation else None,
+                "backlog_observed_at": (
+                    timezone.localtime(backlog_observation["captured_at"]).isoformat()
+                    if backlog_observation else None
+                ),
+                "backlog_observed_label": (
+                    timezone.localtime(backlog_observation["captured_at"]).strftime("%d/%m/%Y %H:%M")
+                    if backlog_observation else None
+                ),
+                "backlog_position": (
+                    min(1.0, max(0.0, (backlog_observation["captured_at"] - bucket_start).total_seconds() / bucket_duration))
+                    if backlog_observation and bucket_duration else None
+                ),
             })
         now = timezone.now()
         age_edges = (4, 8, 24, 48, 72)
@@ -707,42 +708,27 @@ class AnalyticsQueryService:
         pending_count = sum(item.get("PENDING", 0) for item in by_origin_status.values())
         older_than_day = sum(item["total"] for item in aging[3:])
         balance = entries_total - closed_total - canceled_total
-        stock_balance = sum(stock_entry_values.values()) - sum(stock_closure_values.values())
-        backlog_initial = baseline_count if history_available else None
-        backlog_final = running_backlog if history_available else None
-        history_message = ""
-        if not history_meta.get("history_complete"):
-            history_message = (
-                "Backlog histórico não comprovável: o mirror guarda o estado atual, "
-                "sem todas as transições, reaberturas e saídas das filas sincronizadas. "
-                "Novos e resolvidos mostram apenas eventos datados presentes no recorte do mirror."
-            )
-            missing_created = history_meta.get("missing_created_at", 0)
-            missing_terminal = history_meta.get("missing_terminal_at", 0)
-            invalid_terminal = history_meta.get("invalid_terminal_at", 0)
-            if missing_created or missing_terminal or invalid_terminal:
-                history_message += (
-                    f" Lacunas de datas neste recorte: {missing_created} sem criação, "
-                    f"{missing_terminal} terminais sem resolução e {invalid_terminal} "
-                    "com resolução anterior à criação."
-                )
-        if history_available and end == as_of.date() and backlog_final != total_active:
-            history_available = False
-            backlog_initial = None
-            backlog_final = total_active
-            history_message = "O fluxo histórico não reconciliou com o estoque atual; a linha foi ocultada."
-            for item in series:
-                item["backlog_start"] = None
-                item["backlog"] = None
-        elif not history_available and end == as_of.date():
-            backlog_final = total_active
-
-        variation_percent = (
-            round(stock_balance * 100 / backlog_initial, 1)
-            if backlog_initial not in (None, 0)
-            else (0 if backlog_initial == 0 and stock_balance == 0 else None)
+        observed_points = [
+            backlog_observations[key] for key, _label, _start, _end in buckets
+            if key in backlog_observations
+        ]
+        backlog_initial = observed_points[0]["value"] if observed_points else None
+        backlog_final = observed_points[-1]["value"] if observed_points else None
+        history_message = (
+            "Backlog usa snapshots FULL nos horários capturados; intervalos sem captura não são estimados."
+            if history_available else
+            "Sem snapshot FULL de backlog neste período; o estoque atual segue nos indicadores."
         )
-        final_label = "Backlog atual" if end == as_of.date() else "Backlog final"
+        flow_message = (
+            "Novos e Resolvidos refletem as datas disponíveis no mirror sincronizado. "
+            "Tickets fora das filas sincronizadas e ciclos anteriores podem faltar. "
+            "Filtros de Provedor, UF e Projeto nos eventos usam o vínculo atual, não o vínculo na data."
+        )
+
+        # Current mirror rows are not a complete event population, so a net
+        # historical percentage would imply coverage the source does not prove.
+        variation_percent = None
+        final_label = "Backlog no último snapshot"
 
         def kpi(label, value, unit="tickets", *, stage=None, title=None, help_text=None):
             result = {"label": label, "value": value if value is not None else "\u2014", "unit": unit}
@@ -755,11 +741,11 @@ class AnalyticsQueryService:
             return result
 
         flow_primary = [
-            kpi("Backlog inicial", backlog_initial, "tickets no início do período"),
+            kpi("Backlog no primeiro snapshot", backlog_initial, "tickets observados"),
             kpi("Novos", entries_total, "tickets criados no período"),
             kpi("Resolvidos", closed_total, "categoria operacional RESOLVED"),
             *([kpi("Cancelados", canceled_total, "tickets cancelados no período")] if include_cancelled or metric == "canceled_tickets" else []),
-            kpi(final_label, backlog_final, "tickets no fim do período"),
+            kpi(final_label, backlog_final, "tickets observados"),
         ]
         if scope == "cancellation":
             primary = [kpi(label, stage_counts[key], stage=key,
@@ -771,29 +757,25 @@ class AnalyticsQueryService:
                     title=cls._stage_title("UNKNOWN", ""),
                 ))
             secondary = [
-                kpi("Backlog inicial", backlog_initial, "tickets no início do período"),
+                kpi("Backlog no primeiro snapshot", backlog_initial, "tickets observados"),
                 kpi("Novos", entries_total, "tickets criados no período"),
                 kpi("Resolvidos", closed_total, "categoria operacional RESOLVED"),
                 *([kpi("Cancelados", canceled_total, "tickets cancelados no período")] if include_cancelled or metric == "canceled_tickets" else []),
-                kpi(final_label, backlog_final, "tickets no fim do período"),
-                kpi("Variação líquida", balance, "Novos − encerrados", help_text=(
-                    "Diferença entre tickets criados e encerrados no período. "
-                    "Valor positivo: mais tickets entraram do que saíram. "
-                    "Valor negativo: mais tickets foram resolvidos ou cancelados do que criados."
+                kpi(final_label, backlog_final, "tickets observados"),
+                kpi("Saldo dos eventos visíveis", balance, "tickets", help_text=(
+                    "Diferença entre tickets novos, resolvidos e cancelados incluídos que ainda "
+                    "estão representados no recorte atual do mirror. Não é variação comprovada do backlog."
                 )),
-                kpi("Variação %", variation_percent, "% do backlog inicial"),
                 kpi("Tempo médio de resolução", average_hours, "horas"),
                 kpi("Tickets acima de 24h", older_than_day),
             ]
         else:
             primary = flow_primary
             secondary = [
-                kpi("Variação líquida", balance, "Novos − encerrados", help_text=(
-                    "Diferença entre tickets criados e encerrados no período. "
-                    "Valor positivo: mais tickets entraram do que saíram. "
-                    "Valor negativo: mais tickets foram resolvidos ou cancelados do que criados."
+                kpi("Saldo dos eventos visíveis", balance, "tickets", help_text=(
+                    "Diferença entre tickets novos, resolvidos e cancelados incluídos que ainda "
+                    "estão representados no recorte atual do mirror. Não é variação comprovada do backlog."
                 )),
-                kpi("Variação %", variation_percent, "% do backlog inicial"),
                 kpi("Tempo médio de resolução", average_hours, "horas"),
                 kpi("Tickets acima de 24h", older_than_day),
             ]
@@ -830,12 +812,16 @@ class AnalyticsQueryService:
             "period": period,
             "backlog": {
                 "available": history_available,
-                # A minimum creation date in the mutable mirror is not a
-                # proven start of historical coverage.
-                "history_start": None,
+                "history_start": observed_points[0]["captured_at"].date().isoformat() if observed_points else None,
                 "earliest_observed_created_at": history_start.isoformat() if history_start else None,
                 "date_fields_complete": bool(history_meta.get("date_fields_complete")),
+                "observation_count": len(observed_points),
+                "last_observed_at": (
+                    timezone.localtime(observed_points[-1]["captured_at"]).isoformat()
+                    if observed_points else None
+                ),
                 "message": history_message,
+                "flow_message": flow_message,
                 "initial": backlog_initial,
                 "final": backlog_final,
                 "current_snapshot": total_active,

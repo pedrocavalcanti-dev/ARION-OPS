@@ -66,11 +66,13 @@ O atalho **Improcedentes** continua filtrando especificamente os tickets cuja pr
 
 O saldo do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets `OPEN` e `PENDING`, sem `SCHEDULED`, improcedentes ou desconhecidos.
 
-O backlog histórico não é calculado a partir do mirror atual: o espelho não persiste um ledger completo de transições, reaberturas e pertencimento às filas ao longo do tempo. Datas completas nas linhas atuais não provam um backlog inicial confiável, então a série histórica fica indisponível e não é preenchida com zero ou estimativa. O estoque atual `OPEN`/`PENDING` continua disponível nos indicadores e no aging. A mensagem do gráfico identifica essa limitação e informa lacunas de datas encontradas no recorte.
+O mirror atual não persiste um ledger completo de transições, reaberturas e pertencimento às filas. Para começar uma série confiável de estoque, cada FULL aplicada com sucesso grava um snapshot operacional imutável por dia e assinatura exata de filas. O snapshot guarda o estado dos tickets presentes, suas datas operacionais e as dimensões de ConfigItems observadas naquele momento. O estado de backlog considera apenas `OPEN` e `PENDING`, excluindo improcedentes.
+
+Cada ponto de backlog é a observação no horário da FULL, não um fechamento projetado do dia, semana ou mês. Se não houver snapshot dentro do período ou de um intervalo do gráfico, esse ponto fica ausente; não se preenche lacuna com zero. Snapshots são deduplicados por cobertura e data local. Filtros de Provedor, UF e Projeto/cliente usam os valores capturados junto ao snapshot, e tickets com múltiplos ConfigItems são contados uma vez. Data Scope continua aplicado pelos ConfigItems atualmente autorizados ao usuário antes da contagem.
 
 O aviso antigo dependia apenas de datas presentes nas linhas atuais. A normalização do alias legado `CLOSED` ampliou as linhas terminais avaliadas e tornou visíveis datas de resolução ausentes; uma FULL também tira do conjunto atual tickets que saíram das filas. Em cada sincronização, campos de resolução ausentes na leitura OTRS são gravados como ausentes no mirror. Preservar automaticamente uma data antiga seria incorreto quando houve reabertura, então o serviço falha de forma conservadora em vez de transformar esse conjunto mutável em uma história de estoque.
 
-**Novos** e **Resolvidos** mostram eventos datados que existem nas linhas atualmente presentes no recorte sincronizado. Tickets que saíram das filas e ciclos anteriores de resolução/reabertura podem não estar representados; por isso o gráfico informa que essas séries não têm cobertura histórica completa. A data de criação não representa entrada na fila.
+**Novos** e **Resolvidos** usam as datas disponíveis nas linhas atuais do mirror e contam TicketIDs distintos. Um ticket em `RESOLVED` ou no alias legado `CLOSED` contribui uma vez para a categoria Resolvido; cancelamento permanece separado. Como o mirror não guarda todos os ciclos de reabertura nem tickets que saíram das filas, essas séries podem omitir eventos antigos. Elas não são um ledger histórico completo e não devem ser usadas para reconstruir o estoque. A data de criação não representa entrada na fila. Dimensões de Provedor, UF e Projeto/cliente nos eventos atuais descrevem os vínculos disponíveis no mirror, não comprovam a atribuição histórica na data do evento.
 
 O aging é um snapshot do backlog `OPEN`/`PENDING` em faixas `0-4h`, `4-8h`, `8-24h`, `24-48h`, `48-72h` e `>72h`, calculadas desde `source_created_at`. Não é tempo médio de resolução. A faixa **Acima de 24h** é um filtro de backlog atual, não uma métrica histórica.
 
@@ -85,7 +87,7 @@ As opções de registros considerados ficam em **Mais filtros**. Ambas vêm liga
 
 O estado das opções é preservado na URL e nas consultas salvas. Quando uma opção é desmarcada, o PDF registra a exclusão correspondente.
 
-Os demais filtros incluem Provedor, UF, Status, Situação OTRS, Serviço, SLA, Prioridade, Motivo, Etapa, Origem, Projeto/cliente, Fila, Procedência, Responsável e Aging. Data Scope continua sendo aplicado antes de cada um deles.
+Os demais filtros incluem Provedor, UF, Status, Status de origem, Serviço, SLA, Prioridade, Motivo, Etapa, Origem, Projeto/cliente, Fila, Procedência, Responsável e Aging. A tabela de evidências apresenta uma única coluna **Status**, com `RESOLVED` e `CLOSED` consolidados como **Resolvido** e **Cancelado** separado. O estado bruto continua no campo de origem para diagnóstico. Data Scope é aplicado antes dos filtros e agrupamentos.
 
 As categorias de motivo usam `ClosingReasonCanonicalizer` para mapear valores equivalentes a uma chave e um rótulo estáveis. O valor raw continua preservado em coluna própria nas exportações de tickets.
 
@@ -102,7 +104,7 @@ Os atalhos representam consultas reais e preservam contexto e período, salvo os
 
 ## Gráficos, calendário e evidências
 
-A evolução operacional apresenta Novos e Resolvidos com eventos datados do recorte local. A linha histórica de backlog só poderá ser exibida quando houver uma fonte de transições e snapshots com cobertura verificável; o mirror atual não fornece essa evidência. Cancelados e improcedentes podem compor o universo do fluxo sem criar séries visuais adicionais. Valores positivos são rotulados quando há espaço; zeros não recebem rótulo visual, mas permanecem disponíveis nos dados da consulta. Em séries densas, os rótulos são reduzidos para evitar sobreposição.
+A evolução operacional apresenta Novos e Resolvidos com eventos datados do recorte local e desenha backlog apenas nos horários cobertos pelos snapshots FULL. A seleção diária, semanal ou mensal escolhe a última observação dentro de cada intervalo; lacunas permanecem sem ponto e sem interpolação. Cada tooltip informa o horário observado. Cancelados e improcedentes podem compor o universo do fluxo sem criar séries visuais adicionais. Valores positivos são rotulados quando há espaço; zeros não recebem rótulo visual, mas permanecem disponíveis nos dados da consulta. Em séries densas, os rótulos são reduzidos para evitar sobreposição.
 
 O gráfico de análise selecionada e o calendário usam a métrica principal. O calendário mostra o resumo mensal, os valores diários e o pico. A seleção de um dia pode filtrar temporariamente a evidência ou aplicar aquele dia como novo período, sem alterar a regra de Data Scope.
 

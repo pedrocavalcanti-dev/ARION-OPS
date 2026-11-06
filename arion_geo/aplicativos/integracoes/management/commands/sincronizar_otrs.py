@@ -180,6 +180,30 @@ class Command(BaseCommand):
                 if not fast:
                     state.last_full_success_at = run.finished_at
                 state.save()
+                if not fast:
+                    try:
+                        from aplicativos.integracoes.services.otrs_snapshots import capture_daily_operational_snapshot
+
+                        snapshot_result = capture_daily_operational_snapshot(run, queue_names)
+                        snapshot_status = (
+                            f"captured:{snapshot_result['tickets']}"
+                            if snapshot_result["created"]
+                            else snapshot_result["reason"]
+                        )
+                        run.message = (run.message + f"; history_snapshot={snapshot_status}")[:240]
+                        run.save(update_fields=("message",))
+                        self.stdout.write(f"Snapshot histórico diário: {snapshot_status}.")
+                    except Exception as snapshot_error:
+                        # The mirror FULL succeeded independently. Keep its
+                        # cursor and expose the missing history capture so a
+                        # later FULL can retry; never fabricate a snapshot.
+                        snapshot_status = f"failed:{type(snapshot_error).__name__}"
+                        run.message = (run.message + f"; history_snapshot={snapshot_status}")[:240]
+                        run.save(update_fields=("message",))
+                        self.stderr.write(self.style.WARNING(
+                            f"Snapshot histórico não gravado ({type(snapshot_error).__name__}); "
+                            "o FULL segue válido e outro FULL poderá tentar novamente."
+                        ))
             AuditService.record(category="INTEGRATION", action="SYNC_COMPLETED", description="Sincronização OTRS concluída", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "queues": list(queue_names), "counts": {"tickets": result["tickets"]["found"], "relations": result["relations"]["found"], "created": run.records_created, "updated": run.records_updated, "stale": run.records_stale}, "duration_ms": run.duration_ms})
         except Exception as exc:
             if isinstance(exc, IntegrationError):

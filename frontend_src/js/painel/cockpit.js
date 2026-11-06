@@ -297,21 +297,17 @@
     const container = page.querySelector("[data-secondary-kpis]");
     container.hidden = !items?.length;
     container.innerHTML = (items || []).map(item => {
-      const isNet = item.label === "Variação líquida" && typeof item.value === "number";
-      const isBacklogVariation = item.label === "Variação %";
+      const isNet = item.label === "Saldo dos eventos visíveis" && typeof item.value === "number";
       const isAverage = item.label === "Tempo médio de resolução";
       const isOlderThanDay = item.label === "Tickets acima de 24h";
-      const label = isBacklogVariation ? "Variação do backlog" : isOlderThanDay ? "Acima de 24h" : item.label;
+      const label = isOlderThanDay ? "Acima de 24h" : item.label;
       let value = item.value == null ? "—" : typeof item.value === "number" ? number.format(item.value) : escapeHTML(item.value);
       let note = item.unit || "tickets";
       let title = item.help_text || "";
       if (isNet) {
         const amount = number.format(Math.abs(item.value));
         value = item.value > 0 ? `↑ +${amount}` : item.value < 0 ? `↓ ${amount}` : "0";
-        note = item.value > 0 ? `${amount} tickets a mais no saldo do fluxo` : item.value < 0 ? `${amount} tickets a menos no saldo do fluxo` : "Novos e encerrados em equilíbrio";
-      } else if (isBacklogVariation) {
-        value = item.value == null ? "—" : `${percentage.format(item.value)}%`;
-        note = "vs início do período";
+        note = item.value > 0 ? `${amount} tickets a mais no saldo do fluxo` : item.value < 0 ? `${amount} tickets a menos no saldo do fluxo` : "Novos e Resolvidos em equilíbrio";
       } else if (isAverage) {
         note = "resolução";
         if (typeof item.value === "number") {
@@ -341,10 +337,10 @@
       });
     }
     const subtitle = {
-      all: "Novos e resolvidos por intervalo; backlog acumulado na linha.",
+      all: "Novos e Resolvidos por intervalo; snapshots de backlog no horário observado.",
       created: general && originMode ? "Entradas por intervalo, divididas por origem." : "Tickets novos em cada intervalo do per\u00edodo.",
       closed: general && originMode ? "Resolu\u00e7\u00f5es por intervalo, divididas por origem." : "Tickets resolvidos em cada intervalo do per\u00edodo.",
-      backlog: "Estoque de tickets ativos ao fim de cada intervalo.",
+      backlog: "Snapshots FULL do estoque; cada ponto informa a data e hora observadas.",
     }[mode];
     page.querySelector("[data-operational-subtitle]").textContent = subtitle;
     page.querySelectorAll("[data-chart-view]").forEach(button => {
@@ -393,7 +389,7 @@
     const plotTop = 12, plotBottom = 188, plotHeight = plotBottom - plotTop;
     const toY = value => plotBottom - ((Number(value) - backlogLow) / (backlogHigh - backlogLow)) * plotHeight;
     const points = rows.map((row, index) => row.backlog === null || row.backlog === undefined ? null : {
-      x: ((index + .5) / rows.length) * 1000,
+      x: ((index + Number(row.backlog_position ?? .5)) / rows.length) * 1000,
       y: toY(row.backlog),
     });
     const segments = [];
@@ -404,7 +400,6 @@
     });
     if (segment.length) segments.push(segment);
     const linePath = segments.map(part => part.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")).join(" ");
-    const fillPath = segments.map(part => `${part.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")} L${part[part.length - 1].x.toFixed(2)},${plotBottom} L${part[0].x.toFixed(2)},${plotBottom} Z`).join(" ");
     const grain = operational.granularity || operational.grain || "day";
     const lineVisible = backlogAvailable && (mode === "all" || mode === "backlog");
     const lastBacklogIndex = points.reduce((last, point, index) => point ? index : last, -1);
@@ -421,7 +416,7 @@
       const anchor = mode === "all" || lastLabel ? "end" : "middle";
       return `<text class="cockpit-ops-line-label" x="${x.toFixed(2)}" y="${Math.max(13, point.y - 8).toFixed(2)}" text-anchor="${anchor}">${number.format(rows[index].backlog)}</text>`;
     }).join("") : "";
-    const svg = lineVisible ? `<svg class="cockpit-ops-line" viewBox="0 0 1000 200" preserveAspectRatio="none" aria-hidden="true">${mode === "backlog" ? `<path class="cockpit-ops-area" d="${fillPath}"></path>` : ""}<path class="cockpit-ops-line-path" d="${linePath}"></path>${points.map((point, index) => point && (grain !== "hour" || index % 3 === 0 || index === lastBacklogIndex) ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="${grain === "hour" ? "2.2" : "3.2"}"></circle>` : "").join("")}${lineLabels}</svg>` : "";
+    const svg = lineVisible ? `<svg class="cockpit-ops-line" viewBox="0 0 1000 200" preserveAspectRatio="none" aria-hidden="true"><path class="cockpit-ops-line-path" d="${linePath}"></path>${points.map((point, index) => point && (grain !== "hour" || index % 3 === 0 || index === lastBacklogIndex) ? `<circle cx="${point.x.toFixed(2)}" cy="${point.y.toFixed(2)}" r="${grain === "hour" ? "2.2" : "3.2"}"></circle>` : "").join("")}${lineLabels}</svg>` : "";
     const visualHeight = grain === "hour" ? 260 : 268;
     const axisSpanPercent = ((visualHeight - 28) / (visualHeight - 14)) * 100;
     const makeAxis = values => values.map((value, index) => `<span class="cockpit-ops-axis-label" style="--axis-position:${values.length > 1 ? index / (values.length - 1) * axisSpanPercent : 0}%">${number.format(value)}</span>`).join("");
@@ -446,31 +441,36 @@
       }).join("");
       const net = Number(row.balance || 0), netLabel = `${net > 0 ? "+" : ""}${number.format(net)}`;
       const rowBacklog = row.backlog !== null && row.backlog !== undefined ? number.format(row.backlog) : "\u2014";
-      const rowBacklogStart = row.backlog_start !== null && row.backlog_start !== undefined ? number.format(row.backlog_start) : "\u2014";
       const entryOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_entries)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_entries)}</small>` : "";
       const closedOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_closed)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_closed)}</small>` : "";
+      const backlogTooltip = row.backlog !== null && row.backlog !== undefined
+        ? `<small>Backlog observado: ${rowBacklog}</small><small>Snapshot FULL: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small>`
+        : `<small>Sem snapshot FULL neste intervalo.</small>`;
       const tooltipLines = mode === "all"
-        ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Varia\u00e7\u00e3o l\u00edquida: ${escapeHTML(netLabel)}</small>${backlogAvailable ? `<small>Backlog inicial: ${rowBacklogStart}</small><small>Backlog: ${rowBacklog}</small>` : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
+        ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Saldo dos eventos visíveis: ${escapeHTML(netLabel)}</small>${backlogAvailable ? backlogTooltip : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
         : mode === "created" ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}`
           : mode === "closed" ? `<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}`
-            : `<small>Backlog: ${rowBacklog}</small>`;
+            : backlogTooltip;
       const originAccessible = general
         ? mode === "all" ? ` Suporte: ${number.format(row.support_entries)} novos, ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_entries)} novos, ${number.format(row.cancellation_closed)} resolvidos.`
           : mode === "created" ? ` Suporte: ${number.format(row.support_entries)} novos. Cancelamentos: ${number.format(row.cancellation_entries)} novos.`
             : mode === "closed" ? ` Suporte: ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_closed)} resolvidos.` : ""
         : "";
+      const accessibleBacklog = row.backlog !== null && row.backlog !== undefined
+        ? ` Backlog observado: ${rowBacklog} em ${row.backlog_observed_label || "data indisponível"}.`
+        : " Sem snapshot de backlog neste intervalo.";
       const accessible = mode === "all"
-        ? `${row.label}. Novos: ${number.format(row.entries)}. Resolvidos: ${number.format(row.closed)}. Varia\u00e7\u00e3o l\u00edquida: ${netLabel}. Backlog: ${rowBacklog}.${originAccessible}`
+        ? `${row.label}. Novos: ${number.format(row.entries)}. Resolvidos: ${number.format(row.closed)}. Saldo dos eventos visíveis: ${netLabel}.${backlogAvailable ? accessibleBacklog : " Backlog histórico indisponível."}${originAccessible}`
         : mode === "created" ? `${row.label}. Novos: ${number.format(row.entries)}.${originAccessible}`
           : mode === "closed" ? `${row.label}. Resolvidos: ${number.format(row.closed)}.${originAccessible}`
-            : `${row.label}. Backlog: ${rowBacklog}.`;
+            : `${row.label}.${accessibleBacklog}`;
       const label = index % labelStep === 0 || (grain !== "hour" && index === rows.length - 1) ? row.label : "";
       return `<button type="button" class="cockpit-ops-point" data-chart-point aria-label="${escapeHTML(accessible)}"><span class="cockpit-ops-bars">${bars}</span><span class="cockpit-ops-x-label">${escapeHTML(label ? shortLabel(label) : "")}</span><span class="cockpit-point-tooltip" role="tooltip"><strong>${escapeHTML(row.label)}</strong>${tooltipLines}</span></button>`;
     }).join("");
     const legendItems = definitions.map(([, label, cls]) => `<span><i class="${cls}"></i>${escapeHTML(label)}</span>`);
-    if (lineVisible) legendItems.push('<span><i class="backlog-line-key"></i>Backlog</span>');
-    const note = mode !== "backlog" && !backlogAvailable && history.message
-      ? history.message
+    if (lineVisible) legendItems.push('<span><i class="backlog-line-key"></i>Backlog (snapshot FULL)</span>');
+    const note = mode !== "backlog" && history.flow_message
+      ? history.flow_message
       : !hasFlow && mode !== "backlog" ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "";
     return `<article class="cockpit-ops-chart" data-mode="${mode}" data-grain="${escapeHTML(grain)}" style="--ops-plot-height:${visualHeight}px"><div class="cockpit-ops-legend" aria-label="S\u00e9ries do gr\u00e1fico">${legendItems.join("")}</div>${chartNote(note)}<div class="cockpit-ops-chart-frame"><div class="cockpit-ops-axis cockpit-ops-axis-left" aria-hidden="true">${makeAxis(flowTicks)}</div><div class="cockpit-ops-plot-area"><div class="cockpit-ops-grid-lines" aria-hidden="true"></div>${svg}<div class="cockpit-ops-point-grid" style="--series-count:${rows.length}" role="group" aria-label="Pontos do per\u00edodo">${pointsHTML}</div></div><div class="cockpit-ops-axis cockpit-ops-axis-right" aria-hidden="true">${makeAxis(backlogTicks)}</div></div></article>`;
   }
