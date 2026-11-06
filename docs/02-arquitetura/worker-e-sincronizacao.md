@@ -163,3 +163,9 @@ Não coloque credenciais nos argumentos de shell compartilhado nem em logs.
 | Relações Ticket–CI incompletas | Compare quantidade de relações atuais e resolvidas para Link; OTRS pode não ter relação válida ou ConfigItem pode não existir no mirror CMDB. Ver [OTRS](..\06-integracoes-e-dados\otrs.md) e [CMDB](..\06-integracoes-e-dados\cmdb.md). |
 
 Não há política automática de retenção de `IntegrationRun` documentada como contrato. Models, tabelas físicas, ownership e restore estão em [Banco de Dados e Modelos](banco-de-dados.md); detalhes das origens em [OTRS](..\06-integracoes-e-dados\otrs.md) e [CMDB](..\06-integracoes-e-dados\cmdb.md); implantação em [Implantação e Produção](implantacao-e-producao.md).
+
+## Identidade do processo supervisionado no Windows
+
+Os scripts `start-arion.ps1`, `stop-arion.ps1`, `restart-arion.ps1` e `status-arion.ps1` atuam somente nos supervisores ARION identificados pelos locks por papel. O arquivo `.pid` do papel é o PID do supervisor; `.launcher.pid` é o launcher iniciado pela `.venv`; `.child.pid` é o PID efetivo que executa Waitress ou o comando `integration_worker`. Cada PID tem um registro de horário de criação e executável.
+
+O status usa APIs nativas para confirmar que o processo continua vivo e que o PID conserva o horário de criação registrado. Isso evita falsos estados por PID inexistente ou reutilizado. No Python Microsoft Store, o PID do launcher pode diferir do interpretador que executa o serviço; ambos são informados e a relação é verificada pela árvore de processos. O encerramento também confere o horário de criação antes de atuar sobre um processo efetivo separado, sem buscar/encerrar outros Python do servidor.

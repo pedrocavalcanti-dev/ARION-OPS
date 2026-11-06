@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+from ctypes import wintypes
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
+import runpy
 import signal
 import subprocess
 import sys
 import threading
 import time
 from urllib.parse import urlsplit
+import uuid
 
 from dotenv import dotenv_values, load_dotenv
 
@@ -109,47 +114,292 @@ def _pid_path(role: str) -> Path:
     return RUN_ROOT / f"{role}.pid"
 
 
-def _child_pid_path(role: str) -> Path:
-    return RUN_ROOT / f"{role}.child.pid"
+def _process_pid_path(role: str, process: str) -> Path:
+    if process == "supervisor":
+        return _pid_path(role)
+    return RUN_ROOT / f"{role}.{process}.pid"
+
+
+def _process_record_path(role: str, process: str) -> Path:
+    return RUN_ROOT / f"{role}.{process}.json"
 
 
 def _stop_path(role: str) -> Path:
     return RUN_ROOT / f"{role}.stop"
 
 
+def _filetime_value(value) -> int:
+    return (value.dwHighDateTime << 32) | value.dwLowDateTime
+
+
+def _windows_process_created_at(handle) -> int | None:
+    if os.name != "nt" or not handle:
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetProcessTimes.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+    )
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    created = wintypes.FILETIME()
+    exited = wintypes.FILETIME()
+    kernel = wintypes.FILETIME()
+    user = wintypes.FILETIME()
+    if not kernel32.GetProcessTimes(
+        handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)
+    ):
+        return None
+    return _filetime_value(created)
+
+
+def _windows_process_identity(pid: int) -> dict[str, int | str] | None:
+    """Read process identity through kernel32, including its non-reusable start time."""
+    if os.name != "nt" or pid <= 0:
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetProcessTimes.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+    )
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    handle = kernel32.OpenProcess(0x00100000 | 0x00001000, False, pid)
+    if not handle:
+        return None
+    try:
+        if kernel32.WaitForSingleObject(handle, 0) != 0x00000102:  # WAIT_TIMEOUT
+            return None
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)
+        ):
+            return None
+        image_buffer = ctypes.create_unicode_buffer(32768)
+        image_length = wintypes.DWORD(len(image_buffer))
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, image_buffer, ctypes.byref(image_length)):
+            return None
+        return {"pid": pid, "created_at": _filetime_value(created), "executable": image_buffer.value}
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _print_status(role: str) -> int:
-    pid_file = _pid_path(role)
     if not _is_locked(role):
         print(f"{role}: stopped")
         return 1
-    try:
-        supervisor_pid = pid_file.read_text(encoding="ascii").strip() or "unknown"
-    except OSError:
-        supervisor_pid = "unknown"
-    try:
-        child_pid = _child_pid_path(role).read_text(encoding="ascii").strip()
-        child_running = _pid_is_running(int(child_pid))
-    except (OSError, ValueError):
-        child_pid, child_running = "", False
-    if child_running:
-        print(f"{role}: running (supervisor pid {supervisor_pid}, child pid {child_pid})")
+    supervisor = _read_process_record(role, "supervisor")
+    launcher = _read_process_record(role, "launcher", require_running=False)
+    service = _read_process_record(role, "child")
+    supervisor_pid = str(supervisor["pid"]) if supervisor else "unknown"
+    if (supervisor and launcher and service
+            and _service_process_matches_launcher(launcher, service)):
+        print(
+            f"{role}: running (supervisor pid {supervisor_pid}, "
+            f"launcher pid {launcher['pid']} ({'running' if launcher['running'] else 'exited'}), "
+            f"child pid {service['pid']}, "
+            f"executable {service['executable']})"
+        )
         return 0
-    print(f"{role}: supervisor running (pid {supervisor_pid}); child restarting or unavailable")
+    launcher_pid = str(launcher["pid"]) if launcher else "unknown"
+    child_pid = str(service["pid"]) if service else "unknown"
+    print(
+        f"{role}: supervisor running (pid {supervisor_pid}); "
+        f"launcher pid {launcher_pid}, child pid {child_pid}; child restarting or unavailable"
+    )
     return 2
 
 
-def _pid_is_running(pid: int) -> bool:
+def _process_identity(pid: int) -> dict[str, int | str] | None:
     if pid <= 0:
-        return False
+        return None
+    if os.name == "nt":
+        return _windows_process_identity(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return False
+        return None
     except PermissionError:
-        return True
+        return {"pid": pid, "created_at": 0, "executable": ""}
     except OSError:
+        return None
+    return {"pid": pid, "created_at": 0, "executable": ""}
+
+
+def _pid_is_running(pid: int, expected_created_at: int | None = None) -> bool:
+    identity = _process_identity(pid)
+    if identity is None:
         return False
-    return True
+    return expected_created_at is None or identity["created_at"] == expected_created_at
+
+
+def _write_process_record(
+    role: str,
+    process: str,
+    pid: int,
+    *,
+    parent_pid: int | None = None,
+    executable: str | None = None,
+    created_at: int | None = None,
+) -> dict[str, int | str]:
+    RUN_ROOT.mkdir(parents=True, exist_ok=True)
+    identity = _process_identity(pid)
+    if identity is None and created_at is None:
+        raise RuntimeError(f"Não foi possível confirmar a identidade do processo {pid}.")
+    record = {
+        "pid": pid,
+        "created_at": created_at if created_at is not None else identity["created_at"],
+        "executable": executable or (identity["executable"] if identity else "") or sys.executable,
+        "parent_pid": parent_pid,
+    }
+    pid_path = _process_pid_path(role, process)
+    pid_temp = pid_path.with_name(f"{pid_path.name}.{uuid.uuid4().hex}.tmp")
+    record_path = _process_record_path(role, process)
+    record_temp = record_path.with_name(f"{record_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        pid_temp.write_text(f"{pid}\n", encoding="ascii")
+        record_temp.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        os.replace(pid_temp, pid_path)
+        os.replace(record_temp, record_path)
+    finally:
+        pid_temp.unlink(missing_ok=True)
+        record_temp.unlink(missing_ok=True)
+    return record
+
+
+def _read_process_record(
+    role: str, process: str, *, require_running: bool = True
+) -> dict[str, int | str | bool] | None:
+    try:
+        pid = int(_process_pid_path(role, process).read_text(encoding="ascii").strip())
+        record = json.loads(_process_record_path(role, process).read_text(encoding="utf-8"))
+        created_at = int(record["created_at"])
+        if int(record["pid"]) != pid:
+            return None
+        identity = _process_identity(pid)
+        running = identity is not None and identity["created_at"] == created_at
+        if require_running and not running:
+            return None
+        executable = identity["executable"] if running else record.get("executable", "")
+        return {
+            **record, "pid": pid, "created_at": created_at,
+            "executable": executable, "running": running,
+        }
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def _windows_parent_map() -> dict[int, int]:
+    if os.name != "nt":
+        return {}
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        return {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        parents: dict[int, int] = {}
+        if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            while True:
+                parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    break
+        return parents
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _service_process_matches_launcher(
+    launcher: dict[str, int | str | bool], service: dict[str, int | str | bool]
+) -> bool:
+    launcher_pid = int(launcher["pid"])
+    service_pid = int(service["pid"])
+    if service_pid == launcher_pid:
+        return int(service["created_at"]) == int(launcher["created_at"])
+    if int(service["created_at"]) < int(launcher["created_at"]):
+        return False
+    if os.name == "nt":
+        parents = _windows_parent_map()
+        if parents.get(service_pid) == launcher_pid:
+            return True
+        if service_pid not in parents and service.get("parent_pid") == launcher_pid:
+            return True
+        current = service_pid
+        visited = set()
+        for _ in range(128):
+            parent = parents.get(current)
+            if parent is None or parent == current or parent in visited:
+                return False
+            if parent == launcher_pid:
+                return True
+            visited.add(parent)
+            current = parent
+        return False
+    return service.get("parent_pid") == launcher_pid
+
+
+def _remove_process_record(role: str, process: str, *, only_pid: int | None = None) -> None:
+    pid_path = _process_pid_path(role, process)
+    if only_pid is not None:
+        try:
+            if int(pid_path.read_text(encoding="ascii").strip()) != only_pid:
+                return
+        except (OSError, ValueError):
+            return
+    pid_path.unlink(missing_ok=True)
+    _process_record_path(role, process).unlink(missing_ok=True)
+
+
+def _run_managed_child(role: str) -> int:
+    """Run the service command in the effective interpreter and publish its PID."""
+    target = _command(role)
+    child_pid = os.getpid()
+    _write_process_record(role, "child", child_pid, parent_pid=os.getppid())
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT / "arion_geo"))
+        if target[1] == "-m":
+            module_name = target[2]
+            sys.argv = ["-m", module_name, *target[3:]]
+            runpy.run_module(module_name, run_name="__main__", alter_sys=True)
+        else:
+            script_path = target[1]
+            sys.argv = [script_path, *target[2:]]
+            runpy.run_path(script_path, run_name="__main__")
+    finally:
+        _remove_process_record(role, "child", only_pid=child_pid)
+    return 0
 
 
 def _load_project_environment(project_root: Path = PROJECT_ROOT) -> dict[str, str | bool]:
@@ -227,17 +477,80 @@ def _read_child_output(child: subprocess.Popen, logger: logging.Logger) -> None:
         logger.info("child: %s", sanitize_line(line))
 
 
-def _stop_child(child: subprocess.Popen, logger: logging.Logger) -> None:
-    if child.poll() is not None:
-        return
-    logger.info("requesting child shutdown")
-    child.terminate()
+def _terminate_windows_process(pid: int, expected_created_at: int) -> bool:
+    """Terminate only the exact process recorded by the service child."""
+    if os.name != "nt" or pid <= 0:
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+    )
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    # PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    handle = kernel32.OpenProcess(0x00000001 | 0x00100000 | 0x00001000, False, pid)
+    if not handle:
+        return False
     try:
-        child.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        logger.warning("child did not stop in time; terminating process")
-        child.kill()
-        child.wait(timeout=10)
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)
+        ) or _filetime_value(created) != expected_created_at:
+            return False
+        if kernel32.WaitForSingleObject(handle, 0) != 0x00000102:
+            return True
+        if not kernel32.TerminateProcess(handle, 1):
+            return False
+        return kernel32.WaitForSingleObject(handle, 10000) == 0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _stop_child(child: subprocess.Popen, logger: logging.Logger, role: str) -> None:
+    service = None
+    owned_service = False
+    try:
+        service = json.loads(_process_record_path(role, "child").read_text(encoding="utf-8"))
+        launcher = json.loads(_process_record_path(role, "launcher").read_text(encoding="utf-8"))
+        if int(launcher["pid"]) == child.pid and int(service["pid"]) > 0:
+            owned_service = _service_process_matches_launcher(launcher, service)
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        service = None
+
+    if child.poll() is not None:
+        pass
+    else:
+        logger.info("requesting child shutdown")
+        child.terminate()
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            logger.warning("child did not stop in time; terminating process")
+            child.kill()
+            child.wait(timeout=10)
+
+    # A Microsoft Store launcher can leave the effective interpreter alive after
+    # the .venv\Scripts\python.exe intermediary exits. The saved parent chain
+    # and creation time restrict cleanup to the exact service process.
+    if owned_service and service:
+        try:
+            service_pid = int(service["pid"])
+            if service_pid != child.pid and _pid_is_running(service_pid, int(service["created_at"])):
+                if not _terminate_windows_process(service_pid, int(service["created_at"])):
+                    logger.warning("could not stop the recorded effective child process %s", service_pid)
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            pass
 
 
 def supervise(role: str) -> int:
@@ -248,11 +561,11 @@ def supervise(role: str) -> int:
         return 0
 
     child = None
-    pid_file = _pid_path(role)
-    child_pid_file = _child_pid_path(role)
     stop_file = _stop_path(role)
     stop_file.unlink(missing_ok=True)
-    pid_file.write_text(str(os.getpid()), encoding="ascii")
+    for process in ("supervisor", "launcher", "child"):
+        _remove_process_record(role, process)
+    _write_process_record(role, "supervisor", os.getpid(), parent_pid=os.getppid())
     signal.signal(signal.SIGTERM, lambda *_: STOP_EVENT.set())
     signal.signal(signal.SIGINT, lambda *_: STOP_EVENT.set())
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
@@ -273,12 +586,13 @@ def supervise(role: str) -> int:
                 STOP_EVENT.set()
                 break
             try:
-                command = _command(role)
+                target_command = _command(role)
             except RuntimeError as exc:
                 logger.error("startup refused: %s", sanitize_line(str(exc)))
                 return 1
             environment = _child_environment()
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            command = [target_command[0], str(Path(__file__).resolve()), "--run-child", role]
             try:
                 child = subprocess.Popen(command, cwd=PROJECT_ROOT / "arion_geo", env=environment,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -286,18 +600,39 @@ def supervise(role: str) -> int:
             except OSError as exc:
                 logger.error("child launch failed: %s", sanitize_line(str(exc)))
                 return 1
-            child_pid_file.write_text(str(child.pid), encoding="ascii")
-            logger.info("child started (pid %s)", child.pid)
+            try:
+                _write_process_record(
+                    role, "launcher", child.pid, parent_pid=os.getpid(), executable=target_command[0],
+                    created_at=_windows_process_created_at(child._handle) if os.name == "nt" else None,
+                )
+            except RuntimeError as exc:
+                logger.warning("could not confirm launcher process: %s", sanitize_line(str(exc)))
+            logger.info("child launcher started (pid %s)", child.pid)
             reader = threading.Thread(target=_read_child_output, args=(child, logger), daemon=True)
             reader.start()
             while child.poll() is None and not STOP_EVENT.wait(0.5):
                 if stop_file.exists():
                     STOP_EVENT.set()
             if STOP_EVENT.is_set():
-                _stop_child(child, logger)
+                _stop_child(child, logger, role)
                 break
             code = child.wait()
-            child_pid_file.unlink(missing_ok=True)
+            launcher_record = _read_process_record(role, "launcher", require_running=False)
+            # Some Store Python launchers exit after transferring execution to
+            # python3.12.exe. Keep supervising that recorded effective process.
+            while launcher_record and not STOP_EVENT.is_set():
+                service = _read_process_record(role, "child")
+                if not service or not _service_process_matches_launcher(launcher_record, service):
+                    break
+                if stop_file.exists():
+                    STOP_EVENT.set()
+                    break
+                STOP_EVENT.wait(0.5)
+            if STOP_EVENT.is_set():
+                _stop_child(child, logger, role)
+                break
+            _remove_process_record(role, "child")
+            _remove_process_record(role, "launcher", only_pid=child.pid)
             reader.join(timeout=2)
             child = None
             logger.warning("child exited with status %s; restart in %s seconds", code, delay)
@@ -305,9 +640,9 @@ def supervise(role: str) -> int:
             delay = min(delay * 2, 60)
     finally:
         if child is not None:
-            _stop_child(child, logger)
-        child_pid_file.unlink(missing_ok=True)
-        pid_file.unlink(missing_ok=True)
+            _stop_child(child, logger, role)
+        for process in ("child", "launcher", "supervisor"):
+            _remove_process_record(role, process)
         stop_file.unlink(missing_ok=True)
         logger.info("supervisor stopped")
         lock.close()
@@ -316,11 +651,14 @@ def supervise(role: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ARION Windows process supervisor")
+    parser.add_argument("--run-child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("role", choices=sorted(ROLES))
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--status", action="store_true")
     action.add_argument("--stop", action="store_true")
     args = parser.parse_args()
+    if args.run_child:
+        return _run_managed_child(args.role)
     if args.status:
         return _print_status(args.role)
     if args.stop:

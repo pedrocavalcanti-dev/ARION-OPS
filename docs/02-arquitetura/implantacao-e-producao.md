@@ -185,3 +185,11 @@ Restore é manual e destrutivo. Antes de restaurar: pare Web e Worker, crie e co
 - domínio/CSRF/HTTPS, WAF, rate limit, cache bypass, eventos de segurança e Mapbox testados no hostname;
 - smoke test de Login, Dashboard, Chamados, Cockpit, Mapa, Rankings, Base, Documentação e ARI;
 - backup externo e procedimento de restore documentados e ensaiados.
+
+## Identidade dos processos Web e Worker no Windows
+
+`status-arion.ps1` consulta o supervisor e os PIDs registrados para o launcher da `.venv` e para o processo Python efetivo. `var/run/<role>.pid` identifica o supervisor, `<role>.launcher.pid` identifica o processo iniciado pelo supervisor e `<role>.child.pid` identifica o processo que executa Waitress ou `integration_worker`. Arquivos JSON correspondentes guardam o horário de criação e o caminho do executável para validar a identidade.
+
+No Windows, a verificação usa `OpenProcess`, `WaitForSingleObject`, `GetProcessTimes` e `QueryFullProcessImageName`; a relação entre launcher e processo efetivo é conferida pela árvore nativa de processos. A comparação do horário de criação impede que um PID reutilizado seja aceito como o processo original. O mecanismo cobre o redirecionador Python da Microsoft Store e interpretadores Python convencionais, sem procurar por porta nem encerrar processos externos ao ARION.
+
+`start-arion.ps1` primeiro consulta o estado e não tenta criar uma segunda instância quando o supervisor já está ativo. O supervisor mantém o pedido de parada e o encerramento existente; se o launcher sair deixando o interpretador efetivo ativo, encerra somente o processo registrado com o mesmo PID e horário de criação. Os scripts usam diretamente `.venv\Scripts\python.exe`/`pythonw.exe` e não dependem da ativação do ambiente. Depois de atualizar esta correção, reinicie Web e Worker pelos scripts ARION para que os novos registros de identidade sejam criados. Nenhum banco, migration, `.env`, configuração OTRS/TLS, Brevo, Waitress, MySQL ou Cloudflared é alterado por essa correção.
