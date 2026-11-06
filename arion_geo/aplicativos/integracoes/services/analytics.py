@@ -1,7 +1,7 @@
 """Shared local-only querysets for operational analytics consumers."""
 from datetime import date
 
-from django.db.models import Count, Exists, F, OuterRef, Q
+from django.db.models import Case, Count, DateTimeField, Exists, F, OuterRef, Q, Value, When
 from django.db.models.functions import Coalesce
 
 from aplicativos.configuracoes.data_scope import DataScopeService
@@ -9,21 +9,78 @@ from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket, OTRSTicke
 from aplicativos.integracoes.otrs_queues import CANCELLATION_QUEUE_NAMES, NOC_QUEUE_NAME
 from aplicativos.integracoes.services.otrs_status import (
     BACKLOG_STATUSES, BUSINESS_OPEN_STATUSES, OPERATIONAL_VALID_STATUSES,
-    RESOLVED_STATUS, TERMINAL_STATUSES,
+    RESOLVED_STATUS, TERMINAL_STATUSES, normalize_business_status,
 )
+from .sync_common import normalized_name
 
 
 OPERATIONAL_RESOLUTION_FIELD = "operational_resolution_at"
+SOURCE_RESOLUTION_STATES = {"resolvido", "merged"}
+SOURCE_CLOSED_STATES = {"closed successful", "encerrado com sucesso", "encerrado com viabilidade"}
 
 
 def operational_resolution_expression(prefix=""):
-    """Resolve the operational end from ticketResolvido, falling back to terminal StateUpdate."""
-    return Coalesce(F(f"{prefix}resolved_at"), F(f"{prefix}terminal_state_at"))
+    """Resolve an effective resolution without mistaking a later close for it.
+
+    The source's explicit ``resolvido`` state can use the latest matching
+    StateUpdate for a reopened/current resolution cycle. In close-success
+    states, only the approved ``ticketResolvido`` date is safe: the terminal
+    StateUpdate can describe administrative closure instead.
+    """
+    resolved = F(f"{prefix}resolved_at")
+    terminal = F(f"{prefix}terminal_state_at")
+    current_cycle = Case(
+        When(**{f"{prefix}terminal_state_at__gt": resolved}, then=terminal),
+        default=Coalesce(resolved, terminal),
+        output_field=DateTimeField(),
+    )
+    resolved_status = Q(**{f"{prefix}business_status__in": (RESOLVED_STATUS, "CLOSED")})
+    explicit_resolution_state = Q()
+    explicit_closed_state = Q()
+    for state_name in SOURCE_RESOLUTION_STATES:
+        explicit_resolution_state |= Q(**{f"{prefix}external_state_name__iexact": state_name})
+    for state_name in SOURCE_CLOSED_STATES:
+        explicit_closed_state |= Q(**{f"{prefix}external_state_name__iexact": state_name})
+    return Case(
+        When(resolved_status & explicit_resolution_state, then=current_cycle),
+        When(resolved_status & explicit_closed_state, then=resolved),
+        When(resolved_status & Q(**{f"{prefix}resolved_at__isnull": False}), then=resolved),
+        When(resolved_status, then=terminal),
+        default=Value(None, output_field=DateTimeField()),
+        output_field=DateTimeField(),
+    )
 
 
 def operational_resolution_at(ticket):
     """Python equivalent of operational_resolution_expression for loaded tickets."""
-    return getattr(ticket, "resolved_at", None) or getattr(ticket, "terminal_state_at", None)
+    status = normalize_business_status(getattr(ticket, "business_status", "UNKNOWN"))
+    if status != RESOLVED_STATUS:
+        return None
+    terminal = getattr(ticket, "terminal_state_at", None)
+    resolved = getattr(ticket, "resolved_at", None)
+    state = normalized_name(getattr(ticket, "external_state_name", ""))
+    if state in SOURCE_CLOSED_STATES:
+        return resolved
+    if state in SOURCE_RESOLUTION_STATES:
+        dates = [value for value in (resolved, terminal) if value]
+        return max(dates) if dates else None
+    return resolved or terminal
+
+
+def operational_resolution_source(ticket):
+    """Describe which trustworthy OTRS source supplied the current resolution."""
+    resolved = getattr(ticket, "resolved_at", None)
+    terminal = getattr(ticket, "terminal_state_at", None)
+    state = normalized_name(getattr(ticket, "external_state_name", ""))
+    if normalize_business_status(getattr(ticket, "business_status", "UNKNOWN")) != RESOLVED_STATUS:
+        return ""
+    if state in SOURCE_CLOSED_STATES:
+        return "Dynamic Field ticketResolvido" if resolved else ""
+    if state in SOURCE_RESOLUTION_STATES and terminal and (not resolved or terminal > resolved):
+        return "ticket_history StateUpdate do estado atual"
+    if resolved:
+        return "Dynamic Field ticketResolvido"
+    return "ticket_history StateUpdate terminal" if terminal else ""
 
 
 class LinkQueryService:

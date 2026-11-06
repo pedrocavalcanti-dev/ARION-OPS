@@ -14,6 +14,15 @@
     </form>
   </section>
 
+  <section class="docs-popular" aria-label="Explorador visual de estruturas de dados">
+    <div class="docs-section-heading docs-section-heading--compact"><div><p class="docs-eyebrow">INTEGRAÇÕES E DADOS</p><h2>Explore os modelos e relacionamentos</h2></div></div>
+    <nav class="docs-popular-links" aria-label="Exploradores visuais">
+      <a href="{% url 'configuracoes:documentation-explorer' %}?source=otrs">Explorador OTRS<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></a>
+      <a href="{% url 'configuracoes:documentation-explorer' %}?source=cmdb">Explorador CMDB ServiceUp<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></a>
+      <a href="{% url 'configuracoes:documentation-explorer' %}?source=cross">Correlação Ticket, Link e Provider<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></a>
+    </nav>
+  </section>
+
   <section class="docs-home-categories" aria-labelledby="docs-categories-title">
     <div class="docs-section-heading"><div><p class="docs-eyebrow">EXPLORE POR ASSUNTO</p><h2 id="docs-categories-title">Encontre o que precisa</h2></div></div>
     <div class="docs-category-cards">

@@ -37,9 +37,11 @@ O código não lê offset de timezone da coluna OTRS, então não há prova inde
 
 ## Fallback operacional e estados
 
-Para tickets resolvidos, vários serviços usam resolved_at e depois terminal_state_at como data de fechamento operacional. Cancelamentos usam canceled_at e fallback para terminal_state_at em contextos que aceitam esse evento. Isso não altera source_created_at nem cria uma transição de estado ausente.
+Para uma resolução efetiva, a fonte preferencial é resolved_at, derivada de dynamic_field_value.value_date para ticketResolvido. Quando o estado externo atual é explicitamente resolvido ou merged, o serviço usa o último StateUpdate que corresponde ao estado atual; se ele for posterior ao Dynamic Field, isso identifica o ciclo atual após reabertura. Essa regra não altera source_created_at nem cria transição de estado ausente.
 
-terminal_state_at é obtida pelo maior create_time de StateUpdate para IDs terminais e só é aplicada quando state_id coincide com o estado atual. Se o ticket foi reaberto, a consulta atual não atribui a ele um terminal_at antigo. resolved_at do Dynamic Field é lido independentemente do estado atual e pode representar valor histórico após uma reabertura; indicadores devem exigir também status atual RESOLVED.
+terminal_state_at é obtida pelo maior create_time de StateUpdate para IDs terminais e só é aplicada quando state_id coincide com o estado atual. Se o estado atual continua resolvido, esse registro pode identificar uma nova entrada após reabertura. Se o OTRS já está em closed successful, encerrado com sucesso ou encerrado com viabilidade, o último StateUpdate pode ser o encerramento administrativo posterior: nesse caso ele não substitui ticketResolvido. Sem o Dynamic Field confiável, a interface mostra —. Para estado atual não resolvido, a coluna também mostra —, mesmo que o mirror conserve um valor histórico em resolved_at.
+
+O catálogo não possui uma data de encerramento administrativo separada. terminal_state_at é apresentado como **última transição terminal registrada**, nunca rotulado como Encerrado em. O estado bruto continua preservado em external_state_name.
 
 ## Período de criação não é período de resolução
 

@@ -293,7 +293,7 @@
 .cockpit-ticket-tools label:first-child { width:min(420px, 70%); }
 .cockpit-ticket-tools input, .cockpit-ticket-tools select { min-height:32px; padding:0 9px; border:1px solid var(--border-primary); border-radius:7px; background:var(--surface-primary); color:var(--text-primary); font:inherit; font-size:10px; }
 .cockpit-tickets .cockpit-table-wrap { max-height:560px; overflow:auto; }
-.cockpit-tickets table { min-width:1120px; }
+.cockpit-tickets table { min-width:1240px; }
 .cockpit-ticket-link { padding:0; border:0; background:none; color:var(--accent-teal); font:inherit; font-weight:600; cursor:pointer; }
 .cockpit-ticket-link:hover { text-decoration:underline; }
 .cockpit-ticket-source { display:block; margin-top:3px; }
@@ -482,12 +482,12 @@ button.cockpit-calendar-day:hover { border-color:var(--accent-teal); box-shadow:
 .cockpit-ticket-tools label:last-child { display:flex; align-items:center; gap:7px; white-space:nowrap; }
 .cockpit-ticket-tools select { width:auto; min-width:68px; }
 .cockpit-ticket-tools label:last-child span { color:var(--text-muted); font-size:9px; }
-.cockpit-tickets table { min-width:980px; table-layout:auto; }
+.cockpit-tickets table { min-width:1240px; table-layout:auto; }
 .cockpit-tickets th,.cockpit-tickets td { white-space:nowrap; }
-.cockpit-tickets th:nth-child(2),.cockpit-tickets th:nth-child(3),.cockpit-tickets td:nth-child(2),.cockpit-tickets td:nth-child(3) { font-variant-numeric:tabular-nums; }
+.cockpit-tickets th:nth-child(2),.cockpit-tickets th:nth-child(3),.cockpit-tickets th:nth-child(4),.cockpit-tickets td:nth-child(2),.cockpit-tickets td:nth-child(3),.cockpit-tickets td:nth-child(4) { font-variant-numeric:tabular-nums; }
 .cockpit-tickets th:nth-child(n+4),.cockpit-tickets td:nth-child(n+4) { text-align:left; font-variant-numeric:normal; }
-.cockpit-tickets th:nth-child(8),.cockpit-tickets td:nth-child(8) { text-align:center; }
-.cockpit-tickets th:nth-child(5),.cockpit-tickets td:nth-child(5) { max-width:155px; overflow:hidden; text-overflow:ellipsis; }
+.cockpit-tickets th:nth-child(9),.cockpit-tickets td:nth-child(9) { text-align:center; }
+.cockpit-tickets th:nth-child(6),.cockpit-tickets td:nth-child(6) { max-width:155px; overflow:hidden; text-overflow:ellipsis; }
 .cockpit-tickets tbody tr:hover { background:color-mix(in srgb,var(--accent-teal) 4%,var(--surface-primary)); }
 .cockpit-provider-ranking li,.cockpit-horizontal-list li { transition:background 120ms ease; }
 .cockpit-provider-ranking li:hover,.cockpit-horizontal-list li:hover { background:color-mix(in srgb,var(--accent-teal) 5%,var(--surface-primary)); }

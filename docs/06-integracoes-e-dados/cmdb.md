@@ -17,6 +17,9 @@ Esta seção descreve a integração que o ARION OPS implementa para ler ConfigI
 | Áreas consumidoras operacionais | 8 | Base, Chamados, Dashboard, Cockpit, Rankings, Mapa, Qualidade e Relatórios. |
 | Fluxos agendados de sync CMDB | 1 | Um FULL de ambas as classes pelo integration_worker a cada 10 minutos. |
 | Pendências de validação externa | 6 | Contrato vigente, envelopes reais, tipos dinâmicos, limites, paginação e comportamento TLS da instância. |
+| Campos no explorador visual | 65 | Whitelists mapeadas, incluindo atributos derivados e metadados da integração |
+| Operações/entidades externas | 4 | Search, Get e duas classes ConfigItem; não são tabelas SQL locais |
+| Modelos/fields do espelho no explorador | 2 / 74 | Modelos Django atuais e campos concretos introspectados |
 
 Os totais descrevem inventários explícitos desta documentação e não pretendem medir todo o código Python do produto. O exame foi local: nenhuma chamada à ServiceUp, importação, escrita de mirror ou consulta a produção foi feita nesta tarefa. O método HTTP, os caminhos relativos, os payloads que o cliente envia, os campos que ele lê e suas regras de validação estão confirmados no código. A forma exata da resposta externa depende da configuração GenericInterface e só pode ser confirmada contra um contrato autorizado.
 
@@ -59,6 +62,14 @@ As operações recebem os identificadores documentais CMDB-API001 (ConfigItemSea
 - [20 · Limitações e cobertura](cmdb-limitacoes.md)
 
 O índice do portal, a busca e a navegação anterior/próxima usam a lista autorizada em configuracoes.documentation.DOCUMENTS. O conteúdo destas páginas continua sendo Markdown versionado, renderizado pelo mesmo portal interno usado pela seção [OTRS](otrs.md); RBAC, tema e estilos permanecem centralizados.
+
+## Explorador visual e diagramas
+
+Os atalhos do portal abrem **Explorador CMDB ServiceUp** e **Correlação OTRS + CMDB** no mesmo módulo Documentação. No catálogo, Search e Get são operações, Links de internet e Operadoras são classes ConfigItem, e ConfigItemID, Name, Number e CIXMLData são estrutura JSON. Nenhum desses itens é descrito como tabela SQL da ServiceUp. Os 65 campos refletem as whitelists documentadas de sincronização; a interface separa os atributos externos conhecidos dos valores derivados/legados e dos campos do espelho local.
+
+CMDBLinkMirror e CMDBOperatorMirror são lidos do registry Django, incluindo tipos, nulabilidade, PK/FK e colunas locais. O diagrama representa Search → Get → resposta JSON → validação/transformação → modelos do espelho e a resolução Link → Provider. O modo cruzado mostra a associação OTRS ticket/link_relation/ConfigItemID, o modelo local OTRSTicketConfigItem, o Link e o Provider. Cardinalidade e multiplicação são informadas como lógicas quando não são constraints SQL.
+
+O gerador do catálogo está em arion_geo/aplicativos/configuracoes/documentation_explorer.py. O dicionário CMDB em Markdown continua sendo a fonte para mapeamentos externos; os campos do espelho vêm da introspecção dos modelos, sem copiar manualmente seus tipos para um catálogo paralelo. Relações gráficas são definições explícitas e versionadas no gerador, sujeitas a confirmação pelo código de sync e pelo [documento de relacionamentos](cmdb/relacionamentos.md). A interface funciona sem conexão à ServiceUp ou OTRS e mostra estrutura parcial, não uma captura atual dos endpoints.
 
 ## Implementação principal
 

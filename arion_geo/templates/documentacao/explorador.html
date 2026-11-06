@@ -1,0 +1,54 @@
+{% extends "documentacao/base_documentacao.html" %}
+{% load static %}
+{% block title %}Explorador visual de dados · ARION OPS{% endblock %}
+{% block docs_extra_head %}<link rel="stylesheet" href="{% static 'css/documentacao-explorador.css' %}">{% endblock %}
+{% block docs_content %}
+<section class="dx-page" data-data-explorer data-source="{{ source }}" aria-labelledby="dx-title">
+  <header class="dx-heading">
+    <div><nav class="docs-breadcrumb" aria-label="Breadcrumb"><a href="{% url 'configuracoes:documentation' %}">Documentação</a><span aria-hidden="true">›</span><span>Integrações e Dados</span><span aria-hidden="true">›</span><span aria-current="page">Explorador visual</span></nav>
+      <p class="docs-eyebrow">INTEGRAÇÕES E DADOS</p><h1 id="dx-title">Explorador de estruturas</h1>
+      <p>Catálogo versionado para acompanhar campos, espelhos locais e relações documentadas.</p>
+    </div>
+    <div class="dx-summary" data-explorer-summary aria-live="polite"></div>
+  </header>
+  <nav class="dx-source-tabs" aria-label="Fonte explorada">
+    <a href="{% url 'configuracoes:documentation-explorer' %}?source=otrs"{% if source == 'otrs' %} aria-current="page"{% endif %}>OTRS</a>
+    <a href="{% url 'configuracoes:documentation-explorer' %}?source=cmdb"{% if source == 'cmdb' %} aria-current="page"{% endif %}>CMDB ServiceUp</a>
+    <a href="{% url 'configuracoes:documentation-explorer' %}?source=cross"{% if source == 'cross' %} aria-current="page"{% endif %}>Correlação OTRS + CMDB</a>
+  </nav>
+  <p class="dx-safety-note"><strong>Somente metadados:</strong> esta tela não consulta instâncias OTRS ou ServiceUp, não executa SQL e não exibe registros operacionais. O catálogo distingue estrutura parcial, campo mapeado e modelo local.</p>
+  {% if source != 'cross' %}
+  <nav class="dx-view-tabs" aria-label="Visualização"><button type="button" data-explorer-view="catalog" aria-pressed="true">Catálogo e dicionário</button><button type="button" data-explorer-view="diagram" aria-pressed="false">Diagrama de relacionamentos</button></nav>
+  {% endif %}
+  <div class="dx-catalog" data-catalog-view{% if source == 'cross' %} hidden{% endif %}>
+    <aside class="dx-sidebar" aria-label="Itens catalogados">
+      <label class="dx-search"><span>Buscar tabela, entidade ou campo</span><input type="search" data-item-search placeholder="Ex.: ticket_history, ConfigItemID" autocomplete="off"></label>
+      <label class="dx-filter"><span>Categoria</span><select data-item-category><option value="">Todas as categorias</option></select></label>
+      <p class="dx-result-count" data-item-count aria-live="polite"></p>
+      <div class="dx-item-list" data-item-list></div>
+    </aside>
+    <section class="dx-record" aria-live="polite">
+      <div class="dx-empty" data-record-empty hidden>Selecione um item para consultar os campos e relacionamentos documentados.</div>
+      <div data-record-content hidden>
+        <header class="dx-record-heading"><div><p class="dx-eyebrow" data-record-type></p><h2 data-record-name></h2><p data-record-description></p></div><a data-record-reference href="#">Abrir documentação técnica</a></header>
+        <dl class="dx-record-meta"><div><dt>Origem</dt><dd data-record-origin></dd></div><div><dt>Finalidade / uso</dt><dd data-record-purpose></dd></div><div><dt>Estrutura</dt><dd data-record-validation></dd></div><div><dt>Confiança</dt><dd data-record-confidence></dd></div></dl>
+        <div class="dx-field-tools"><label><span>Pesquisar campos</span><input type="search" data-field-search placeholder="Nome, tipo ou descrição"></label><span data-field-count aria-live="polite"></span></div>
+        <div class="dx-field-table-wrap"><table class="dx-field-table"><thead><tr><th><button type="button" data-sort-field="name">Campo <span aria-hidden="true">↕</span></button></th><th><button type="button" data-sort-field="type">Tipo <span aria-hidden="true">↕</span></button></th><th>Chave</th><th>Nulo</th><th>Descrição e utilização</th></tr></thead><tbody data-field-rows></tbody></table></div>
+        <p class="dx-no-fields" data-no-fields hidden>Nenhum campo corresponde à busca.</p>
+        <div class="dx-record-links" data-record-links></div>
+      </div>
+    </section>
+    <aside class="dx-field-detail" aria-label="Detalhes do campo"><p class="dx-eyebrow">DETALHE DO CAMPO</p><div data-field-detail-empty>Selecione uma linha da tabela para ver origem, transformação, relação local e referência.</div><dl data-field-detail hidden></dl></aside>
+  </div>
+  <section class="dx-diagram-view" data-diagram-view{% if source != 'cross' %} hidden{% endif %} aria-label="Diagrama interativo">
+    <header class="dx-diagram-heading"><div><p class="dx-eyebrow">MAPEAMENTO VISUAL</p><h2 data-diagram-title></h2><p>Selecione uma tabela, entidade ou conexão. Arraste para mover; use os controles para ajustar o zoom.</p></div>
+      <div class="dx-diagram-controls"><label>Domínio<select data-diagram-domain><option value="">Todos</option></select></label><label class="dx-check"><input type="checkbox" data-diagram-detail> Mostrar campos principais</label><button type="button" data-zoom-out aria-label="Diminuir zoom">−</button><output data-zoom-value>100%</output><button type="button" data-zoom-in aria-label="Aumentar zoom">+</button><button type="button" data-diagram-reset>Centralizar</button></div>
+    </header>
+    <div class="dx-diagram-shell"><svg class="dx-diagram" data-diagram role="img" aria-label="Diagrama interativo dos relacionamentos"><defs><marker id="dx-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8z"></path></marker></defs><g data-diagram-world></g></svg></div>
+    <aside class="dx-relation-detail" data-relation-detail aria-live="polite"><strong>Detalhes da relação</strong><span>Selecione uma conexão para ver campos, cardinalidade, consulta e deduplicação.</span></aside>
+  </section>
+  <nav class="dx-reference-links" data-source-links aria-label="Documentação técnica existente"></nav>
+  {{ explorer|json_script:"data-explorer-catalog" }}
+</section>
+{% endblock %}
+{% block docs_extra_js %}<script src="{% arion_js 'js/documentacao/explorador.js' %}" defer></script>{% endblock %}

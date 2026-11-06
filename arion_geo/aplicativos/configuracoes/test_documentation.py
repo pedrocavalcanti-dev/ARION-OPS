@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from .documentation import DOCS_ROOT, DOCUMENTS, DocumentationService, _document_match, render_markdown
+from .documentation_explorer import DocumentationExplorer
 from .models import GroupDataScope, UserPreference
 
 
@@ -47,6 +48,50 @@ class DocumentationPortalTests(TestCase):
         self.assertEqual(releases.status_code, 200)
         self.assertNotContains(releases, reverse("configuracoes:documentation-page", kwargs={"slug": "cmdb"}))
         self.assertNotContains(releases, 'class="docs-search docs-search--header"')
+
+    def test_visual_explorer_is_inside_documentation_and_keeps_portal_access_control(self):
+        url = reverse("configuracoes:documentation-explorer")
+        self.assertEqual(self.client.get(url).status_code, 302)
+        self.client.force_login(self.regular_user)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+        self.client.force_login(self.admin)
+        for source, expected in (
+            ("otrs", ("OTRS", "ticket_history", "Explorador OTRS")),
+            ("cmdb", ("CMDB ServiceUp", "CMDBLinkMirror", "Campo")),
+            ("cross", ("Correlação OTRS", "Provedor", "ConfigItemID")),
+        ):
+            with self.subTest(source=source):
+                response = self.client.get(url, {"source": source})
+                self.assertEqual(response.status_code, 200)
+                for term in expected:
+                    self.assertContains(response, term)
+                self.assertContains(response, "Somente metadados")
+        home = self.client.get(reverse("configuracoes:documentation"))
+        self.assertContains(home, url)
+
+    def test_visual_catalog_uses_documented_source_counts_and_all_diagram_edges_resolve(self):
+        catalog = DocumentationExplorer.build()
+        self.assertEqual((catalog["otrs"]["external_count"], catalog["otrs"]["external_fields"]), (21, 80))
+        self.assertEqual((catalog["otrs"]["local_count"], catalog["otrs"]["local_fields"]), (3, 55))
+        self.assertEqual((catalog["cmdb"]["external_count"], catalog["cmdb"]["mapped_fields"]), (4, 65))
+        self.assertEqual((catalog["cmdb"]["local_count"], catalog["cmdb"]["local_fields"]), (2, 74))
+        for source in ("otrs", "cmdb"):
+            for link in catalog[source]["links"]:
+                with self.subTest(source=source, slug=link["slug"]):
+                    self.assertIn(link["slug"], DOCUMENTS)
+        self.assertEqual(len(catalog["diagrams"]["cross"]["nodes"]), 10)
+        for name, diagram in catalog["diagrams"].items():
+            node_ids = {item["id"] for item in diagram["nodes"]}
+            for relation in diagram["edges"]:
+                with self.subTest(diagram=name, relation=relation["label"]):
+                    self.assertIn(relation["source"], node_ids)
+                    self.assertIn(relation["target"], node_ids)
+                    self.assertTrue(relation["confidence"])
+                    self.assertTrue(relation["deduplication"])
+        all_fields = [field for item in catalog["otrs"]["items"] + catalog["cmdb"]["items"] for field in item.get("fields", [])]
+        self.assertIn("a_body", {field["name"] for field in all_fields})
+        self.assertIn("source_config_item_id", {field["name"] for field in all_fields})
 
     def test_releases_page_uses_the_single_catalog_and_appears_in_documentation_navigation(self):
         self.client.force_login(self.admin)

@@ -32,6 +32,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 from aplicativos.auditoria.services import AuditService
 from .documentation import DocumentationService
+from .documentation_explorer import DocumentationExplorer
 from config.releases import release_catalog
 
 logger = logging.getLogger(__name__)
@@ -418,6 +419,26 @@ def documentation_page(request, slug):
         "active_category": document["category"],
         "previous_document": navigation[current_index - 1] if current_index > 0 else None,
         "next_document": navigation[current_index + 1] if current_index + 1 < len(navigation) else None,
+    })
+
+
+@login_required
+@access_required("manage_groups")
+def documentation_explorer(request):
+    source = request.GET.get("source", "otrs").strip().casefold()
+    if source not in {"otrs", "cmdb", "cross"}:
+        source = "otrs"
+    try:
+        explorer = DocumentationExplorer.build()
+    except (OSError, LookupError, ValueError):
+        logger.exception("Falha ao montar o catálogo do explorador documental")
+        explorer = {"otrs": {"items": []}, "cmdb": {"items": []}, "diagrams": {}}
+    return render(request, "documentacao/explorador.html", {
+        "explorer": explorer,
+        "source": source,
+        "categories": DocumentationService.categories(),
+        "navigation": DocumentationService.navigation(),
+        "active_category": "OTRS" if source == "otrs" else "CMDB ServiceUp",
     })
 
 

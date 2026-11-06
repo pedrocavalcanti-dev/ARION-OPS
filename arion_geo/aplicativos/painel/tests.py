@@ -1067,6 +1067,8 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(resolved["value"], 2)
         self.assertEqual({row["dimension"] for row in resolved["detail"]}, {"Resolvido"})
         self.assertEqual(canceled["value"], 1)
+        self.assertEqual(canceled["tickets"][0]["resolved_at"], "—")
+        self.assertNotEqual(canceled["tickets"][0]["canceled_at"], "—")
 
     def test_operational_state_universe_and_explicit_cancel_unknown_queries(self):
         states = ("OPEN", "PENDING", "SCHEDULED", "RESOLVED", "CLOSED", "CANCELED", "UNKNOWN")
@@ -1145,6 +1147,87 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(resolved_day["tickets"][0]["base_date"], "10/10/2026 12:00")
         self.assertTrue(any("ticketResolvido" in value for value in resolved_day["tickets"][0]["evidence"]))
         self.assertEqual(terminal_day["value"], 0)
+
+    def test_cockpit_shows_current_resolution_cycle_and_keeps_admin_close_separate(self):
+        resolved = self._ticket(8134, "RESOLVED", False, 10)
+        resolved.external_state_name = "resolvido"
+        resolved.source_created_at = datetime(2026, 10, 10, 8, tzinfo=datetime_timezone.utc)
+        resolved.resolved_at = datetime(2026, 10, 10, 15, tzinfo=datetime_timezone.utc)
+        resolved.terminal_state_at = datetime(2026, 10, 10, 16, tzinfo=datetime_timezone.utc)
+        resolved.save()
+        OTRSTicketConfigItem.objects.create(
+            ticket=resolved, config_item_id=self.link.source_config_item_id,
+            cmdb_link=self.link, relation_type="Cycle-A", relation_state="Valid",
+        )
+        OTRSTicketConfigItem.objects.create(
+            ticket=resolved, config_item_id=self.other_link.source_config_item_id,
+            cmdb_link=self.other_link, relation_type="Cycle-B", relation_state="Valid",
+        )
+
+        closed = self._ticket(8135, "CLOSED", False, 10)
+        closed.external_state_name = "closed successful"
+        closed.source_created_at = datetime(2026, 10, 10, 8, tzinfo=datetime_timezone.utc)
+        closed.resolved_at = datetime(2026, 10, 10, 15, tzinfo=datetime_timezone.utc)
+        closed.terminal_state_at = datetime(2026, 10, 11, 18, tzinfo=datetime_timezone.utc)
+        closed.save()
+
+        missing_close_date = self._ticket(8136, "CLOSED", False, 10)
+        missing_close_date.external_state_name = "encerrado com sucesso"
+        missing_close_date.resolved_at = None
+        missing_close_date.save()
+
+        reopened = self._ticket(8137, "OPEN", True, 10)
+        reopened.external_state_name = "new"
+        reopened.resolved_at = datetime(2026, 10, 9, 15, tzinfo=datetime_timezone.utc)
+        reopened.save()
+
+        service = AnalyticsQueryService()
+        results = service.query({
+            "metric": "closed_tickets", "start": "2026-10-10", "end": "2026-10-11",
+            "group_by": "status", "filters": {},
+        }, user=self.user, include_all_rows=True)
+        tickets = {row["ticket"]: row for row in results["tickets"]}
+        self.assertEqual(results["value"], 2)
+        self.assertEqual(len(tickets), 2)
+        self.assertEqual(tickets["A-8134"]["base_date"], "10/10/2026 13:00")
+        self.assertEqual(tickets["A-8134"]["resolved_at"], "10/10/2026 13:00")
+        self.assertIn("StateUpdate do estado atual", tickets["A-8134"]["resolved_at_source"])
+        self.assertEqual(tickets["A-8135"]["resolved_at"], "10/10/2026 12:00")
+        self.assertEqual(tickets["A-8135"]["terminal_at"], "11/10/2026 15:00")
+        self.assertEqual(tickets["A-8135"]["resolved_at_source"], "Dynamic Field ticketResolvido")
+        self.assertEqual(len(tickets["A-8134"]["links"]), 2)
+
+        created = service.query({
+            "metric": "tickets", "start": "2026-10-10", "end": "2026-10-10",
+            "group_by": "status", "filters": {},
+        }, user=self.user, include_all_rows=True)
+        by_number = {row["ticket"]: row for row in created["tickets"]}
+        self.assertEqual(by_number["A-8136"]["resolved_at"], "—")
+        self.assertEqual(by_number["A-8137"]["resolved_at"], "—")
+
+        payload = {
+            "metric": "closed_tickets", "start": "2026-10-10", "end": "2026-10-11",
+            "group_by": "status", "filters": {},
+        }
+        csv_response = self.client.post(
+            reverse("analytics-export"), data=json.dumps({**payload, "format": "csv"}),
+            content_type="application/json",
+        )
+        csv_text = csv_response.content.decode("utf-8-sig")
+        self.assertEqual(csv_response.status_code, 200)
+        self.assertIn("resolved_at", csv_text.splitlines()[0])
+        self.assertIn("10/10/2026 13:00", csv_text)
+        self.assertIn("10/10/2026 12:00", csv_text)
+        xlsx_response = self.client.post(
+            reverse("analytics-export"), data=json.dumps({**payload, "format": "xlsx"}),
+            content_type="application/json",
+        )
+        self.assertEqual(xlsx_response.status_code, 200)
+        workbook = __import__("openpyxl").load_workbook(BytesIO(xlsx_response.content), read_only=True)
+        rows = list(workbook["Tickets"].values)
+        self.assertIn("resolved_at", rows[0])
+        self.assertIn("10/10/2026 13:00", rows[1])
+        self.assertIn("10/10/2026 12:00", rows[2])
 
     def test_resolution_month_changes_without_moving_created_ticket_month(self):
         resolved_january = self._ticket(8132, "CLOSED", False, 10)

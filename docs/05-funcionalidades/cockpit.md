@@ -48,7 +48,11 @@ Combina Suporte e Cancelamentos e deduplica tickets pelo identificador externo. 
 | Links afetados | Links CMDB distintos relacionados aos tickets do recorte. Um ticket pode se relacionar a mais de um link. |
 | Links reincidentes | Links distintos que atendem à regra de recorrência sobre tickets distintos no período. Não representa o estoque atual de links afetados. |
 
-A data operacional de resolução usa `resolved_at` e fallback `terminal_state_at`. Para cancelamentos, usa `canceled_at` e, quando necessário, `terminal_state_at`. Datas ausentes ou anteriores à criação não são inventadas nem usadas para duração.
+A evidência apresenta separadamente base_date, created_at (ticket.create_time no OTRS) e resolved_at (a resolução operacional efetiva) no fuso configurado para o ARION, em dd/mm/aaaa hh:mm. A busca, paginação e filtros continuam aplicados ao mesmo queryset e o período analítico não é substituído por essas colunas informativas. CSV e XLSX exportam as duas datas reais junto da data-base.
+
+Para a resolução, o serviço prefere ticketResolvido (resolved_at). Se o estado externo atual for exatamente resolvido ou merged, compara o último StateUpdate compatível com o estado atual para selecionar o ciclo de resolução mais recente após reabertura. Em closed successful, encerrado com sucesso e encerrado com viabilidade, a data terminal pode representar encerramento administrativo posterior e não é usada como fallback: se ticketResolvido não existir, a coluna mostra —. Para estados que não estejam resolvidos também se mostra —, evitando que um timestamp conservado de ciclo anterior pareça a resolução atual.
+
+terminal_at continua disponível no detalhe do ticket como última transição terminal observada; não há campo separado confiável de encerramento administrativo no espelho e ele não é apresentado como Encerrado em. Cancelamentos permanecem em canceled_at e não entram na coluna de resolução. Datas ausentes ou anteriores à criação não são inventadas nem usadas para duração.
 
 A dimensão Provedor pode incluir o mesmo ticket em mais de um grupo quando ele tiver vínculos com provedores diferentes. O total geral continua contando o ticket uma vez. O ranking mostra provedores identificados; tickets sem provedor permanecem no resultado e são apresentados na qualidade dos vínculos.
 

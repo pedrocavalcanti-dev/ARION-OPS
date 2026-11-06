@@ -19,7 +19,7 @@ from aplicativos.integracoes.otrs_queues import COCKPIT_QUEUE_NAMES, queue_signa
 from aplicativos.integracoes.services.analytics import (
     BACKLOG_STATUSES, BUSINESS_OPEN_STATUSES, OPERATIONAL_RESOLUTION_FIELD, LinkQueryService,
     PeriodService, TicketQueryService, count_affected_links,
-    operational_resolution_expression,
+    operational_resolution_at, operational_resolution_expression, operational_resolution_source,
 )
 from aplicativos.integracoes.services.otrs_status import (
     OPERATIONAL_VALID_STATUSES, RESOLVED_STATUS,
@@ -1097,12 +1097,12 @@ class AnalyticsQueryService:
         clients = sorted({item.get("client") for item in relations if item.get("client")})
         customer_project = ", ".join(projects or clients) or ticket.customer_id
         terminal_status = ticket_status in TERMINAL_STATUSES
+        resolution_at = operational_resolution_at(ticket)
+        resolution_source = operational_resolution_source(ticket)
         if ticket_status == "CANCELED":
             closed_at = ticket.canceled_at or ticket.terminal_state_at or ticket.resolved_at
-        elif terminal_status:
-            closed_at = ticket.resolved_at or ticket.terminal_state_at or ticket.canceled_at
         else:
-            closed_at = None
+            closed_at = resolution_at if terminal_status else None
         age_end = closed_at or timezone.now()
         age_hours = max(0, round((age_end - ticket.source_created_at).total_seconds() / 3600, 1)) if ticket.source_created_at else None
         age_label = ""
@@ -1129,10 +1129,10 @@ class AnalyticsQueryService:
             evidence.append("M\u00e9trica espec\u00edfica de cancelamentos")
         elif metric in {"resolved_tickets", "closed_tickets", "resolved_closed_tickets"}:
             evidence.append(f"Data de resolu\u00e7\u00e3o operacional e estado OTRS correspondente: {status}")
-            if ticket.resolved_at:
-                evidence.append("Data usada: ticketResolvido")
-            elif ticket.terminal_state_at:
-                evidence.append("Fallback usado: StateUpdate terminal, pois ticketResolvido n\u00e3o tem data")
+            if resolution_source:
+                evidence.append(f"Data usada: {resolution_source}")
+            else:
+                evidence.append("Data de resolução indisponível com confiança para o estado atual")
         if ticket_status in cls.OPERATIONAL_VALID_STATES:
             evidence.append("Estado operacional v\u00e1lido")
         for key, value in filters.items():
@@ -1155,7 +1155,8 @@ class AnalyticsQueryService:
                 "age_hours": age_hours, "age_label": age_label,
                 "closed_at": stamp(closed_at), "otrs_url": cls._otrs_ticket_url(ticket),
                 "created_at": stamp(ticket.source_created_at), "changed_at": stamp(ticket.source_changed_at),
-                "terminal_at": stamp(ticket.terminal_state_at), "resolved_at": stamp(ticket.resolved_at),
+                "terminal_at": stamp(ticket.terminal_state_at), "resolved_at": stamp(resolution_at),
+                "resolved_at_source": resolution_source,
                 "canceled_at": stamp(ticket.canceled_at), "status": status, "status_code": ticket_status,
                 "source_state": ticket.external_state_name, "reason": reason,
                 "closing_code_raw": ticket.closing_code_raw,
