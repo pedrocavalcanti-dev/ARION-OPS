@@ -229,7 +229,7 @@ class AnalyticsQueryService:
     OPERATIONAL_VALID_STATES = OPERATIONAL_VALID_STATUSES
 
     METRICS = {
-        "tickets": "Tickets criados",
+        "tickets": "Tickets criados no período",
         "open_tickets": "Em atendimento",
         "pending_tickets": "Pendentes",
         "scheduled_tickets": "Agendados",
@@ -244,7 +244,7 @@ class AnalyticsQueryService:
     DIMENSIONS = {
         "provider": "Provedor",
         "uf": "UF",
-        "status": "Status",
+        "status": "Status atual",
         "source_state": "Status de origem",
         "priority": "Prioridade",
         "termination_reason": "Motivo de encerramento",
@@ -589,13 +589,17 @@ class AnalyticsQueryService:
             if observed_end <= start_at:
                 return {}
             key_case = _period_case(field, buckets)
-            return {
-                (item["bucket"], item["_operational_origin"], normalize_business_status(item["business_status"]),
-                 item["responsibility_normalized"]): item["total"]
-                for item in event_rows.annotate(bucket=key_case).exclude(bucket__isnull=True)
-                .values("bucket", "_operational_origin", "business_status", "responsibility_normalized")
-                .annotate(total=Count("pk", distinct=True))
-            }
+            grouped = {}
+            for item in event_rows.annotate(bucket=key_case).exclude(bucket__isnull=True).values(
+                "bucket", "_operational_origin", "business_status", "responsibility_normalized",
+            ).annotate(total=Count("pk", distinct=True)):
+                key = (
+                    item["bucket"], item["_operational_origin"],
+                    normalize_business_status(item["business_status"]),
+                    item["responsibility_normalized"],
+                )
+                grouped[key] = grouped.get(key, 0) + item["total"]
+            return grouped
 
         entries = flow_ledger.filter(source_created_at__gte=start_at, source_created_at__lt=observed_end)
         entry_groups = aggregate_event(entries, "source_created_at")
@@ -728,8 +732,6 @@ class AnalyticsQueryService:
         # Current mirror rows are not a complete event population, so a net
         # historical percentage would imply coverage the source does not prove.
         variation_percent = None
-        final_label = "Backlog no último snapshot"
-
         def kpi(label, value, unit="tickets", *, stage=None, title=None, help_text=None):
             result = {"label": label, "value": value if value is not None else "\u2014", "unit": unit}
             if stage:
@@ -740,12 +742,28 @@ class AnalyticsQueryService:
                 result["help_text"] = help_text
             return result
 
+        def observation_time(point):
+            return timezone.localtime(point["captured_at"]).strftime("%d/%m/%Y %H:%M")
+
+        if len(observed_points) == 1:
+            point = observed_points[0]
+            backlog_kpis = [kpi(
+                "Backlog observado", point["value"], f"Em {observation_time(point)}",
+            )]
+        elif observed_points:
+            backlog_kpis = [
+                kpi("Backlog mais antigo", backlog_initial, f"Em {observation_time(observed_points[0])}"),
+                kpi("Backlog mais recente", backlog_final, f"Em {observation_time(observed_points[-1])}"),
+            ]
+        else:
+            backlog_kpis = []
+
         flow_primary = [
-            kpi("Backlog no primeiro snapshot", backlog_initial, "tickets observados"),
-            kpi("Novos", entries_total, "tickets criados no período"),
-            kpi("Resolvidos", closed_total, "categoria operacional RESOLVED"),
+            *backlog_kpis[:1],
+            kpi("Novos no período", entries_total, "tickets criados"),
+            kpi("Resolvidos no período", closed_total, "tickets com data efetiva de resolução"),
             *([kpi("Cancelados", canceled_total, "tickets cancelados no período")] if include_cancelled or metric == "canceled_tickets" else []),
-            kpi(final_label, backlog_final, "tickets observados"),
+            *backlog_kpis[1:],
         ]
         if scope == "cancellation":
             primary = [kpi(label, stage_counts[key], stage=key,
@@ -757,28 +775,24 @@ class AnalyticsQueryService:
                     title=cls._stage_title("UNKNOWN", ""),
                 ))
             secondary = [
-                kpi("Backlog no primeiro snapshot", backlog_initial, "tickets observados"),
-                kpi("Novos", entries_total, "tickets criados no período"),
-                kpi("Resolvidos", closed_total, "categoria operacional RESOLVED"),
+                *backlog_kpis,
+                kpi("Novos no período", entries_total, "tickets criados"),
+                kpi("Resolvidos no período", closed_total, "tickets com data efetiva de resolução"),
                 *([kpi("Cancelados", canceled_total, "tickets cancelados no período")] if include_cancelled or metric == "canceled_tickets" else []),
-                kpi(final_label, backlog_final, "tickets observados"),
-                kpi("Saldo dos eventos visíveis", balance, "tickets", help_text=(
-                    "Diferença entre tickets novos, resolvidos e cancelados incluídos que ainda "
-                    "estão representados no recorte atual do mirror. Não é variação comprovada do backlog."
-                )),
                 kpi("Tempo médio de resolução", average_hours, "horas"),
                 kpi("Tickets acima de 24h", older_than_day),
             ]
         else:
             primary = flow_primary
             secondary = [
-                kpi("Saldo dos eventos visíveis", balance, "tickets", help_text=(
-                    "Diferença entre tickets novos, resolvidos e cancelados incluídos que ainda "
-                    "estão representados no recorte atual do mirror. Não é variação comprovada do backlog."
-                )),
                 kpi("Tempo médio de resolução", average_hours, "horas"),
                 kpi("Tickets acima de 24h", older_than_day),
             ]
+            if scope == "support":
+                secondary.insert(0, kpi(
+                    "Backlog atual", total_active, "tickets em atendimento ou pendentes",
+                    title="Estoque atual do recorte selecionado.",
+                ))
             if scope == "general":
                 secondary.extend((
                     kpi("Suporte ativo", current_support),
@@ -813,6 +827,10 @@ class AnalyticsQueryService:
             "backlog": {
                 "available": history_available,
                 "history_start": observed_points[0]["captured_at"].date().isoformat() if observed_points else None,
+                "first_observed_at": (
+                    timezone.localtime(observed_points[0]["captured_at"]).isoformat()
+                    if observed_points else None
+                ),
                 "earliest_observed_created_at": history_start.isoformat() if history_start else None,
                 "date_fields_complete": bool(history_meta.get("date_fields_complete")),
                 "observation_count": len(observed_points),
@@ -1212,10 +1230,14 @@ class AnalyticsQueryService:
                                 if not complementary and dimension == group else None})
             if not entries:
                 return None
-            title = ("Ranking de provedores" if dimension == "provider" else "Ranking de UFs") if dimension in {"provider", "uf"} else f"Distribui\u00e7\u00e3o por {cls.DIMENSIONS[dimension].lower()}"
+            if dimension == "status" and metric == "tickets":
+                title = "Status atual dos tickets criados"
+                subtitle = "Tickets criados no per\u00edodo, agrupados pelo status atual"
+            else:
+                title = ("Ranking de provedores" if dimension == "provider" else "Ranking de UFs") if dimension in {"provider", "uf"} else f"Distribui\u00e7\u00e3o por {cls.DIMENSIONS[dimension].lower()}"
+                subtitle = ("Participa\u00e7\u00e3o sobre tickets com provedor identificado" if dimension == "provider"
+                            else cls.METRICS[metric])
             chart_type = "ranking" if dimension in {"provider", "uf"} else "compact_distribution" if dimension == "status" else "horizontal_bar"
-            subtitle = ("Participa\u00e7\u00e3o sobre tickets com provedor identificado" if dimension == "provider"
-                        else cls.METRICS[metric])
             spec_key = "provider-ranking" if dimension == "provider" else "uf-ranking" if dimension == "uf" else f"dimension-{dimension}"
             return {"key": spec_key, "type": chart_type, "title": title,
                     "subtitle": subtitle, "dimension": dimension, "metric": metric,
@@ -1497,14 +1519,12 @@ class AnalyticsQueryService:
                 excluded.append("improcedentes")
             note = " Registros exclu\u00eddos: " + "; ".join(excluded) + "."
         if metric == "tickets":
-            if scope != "support":
-                return "Data de cria\u00e7\u00e3o; inclui estados operacionais v\u00e1lidos e cancelados conforme a op\u00e7\u00e3o. Tickets ativos sem etapa reconhecida permanecem no recorte." + note
-            return "Data de cria\u00e7\u00e3o; inclui estados operacionais v\u00e1lidos, cancelados e improcedentes por padr\u00e3o, conforme a sem\u00e2ntica da m\u00e9trica." + note
+            return "Data de cria\u00e7\u00e3o no per\u00edodo; a distribui\u00e7\u00e3o mostra o status atual dos tickets distintos no recorte." + note
         if metric in {"open_tickets", "pending_tickets", "scheduled_tickets"}:
             status = cls.METRIC_STATUS[metric]
             return f"Data de cria\u00e7\u00e3o no per\u00edodo; tickets atualmente no estado {status}. CANCELED e UNKNOWN ficam de fora." + note
         if metric in {"resolved_tickets", "closed_tickets", "resolved_closed_tickets"}:
-            return "Data de resolu\u00e7\u00e3o operacional no per\u00edodo; estados operacionais RESOLVED, incluindo estados OTRS brutos Resolvido e Encerrado, sem CANCELED." + note
+            return "Data efetiva de resolu\u00e7\u00e3o no per\u00edodo; conta tickets distintos com status atual Resolvido e data v\u00e1lida. Pode incluir tickets criados antes do per\u00edodo." + note
         if metric == "canceled_tickets":
             return "Data de cancelamento no per\u00edodo; estado CANCELED, em m\u00e9trica espec\u00edfica." + note
         if metric == "backlog":

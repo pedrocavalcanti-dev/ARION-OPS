@@ -193,6 +193,28 @@ class MirrorAnalyticsTests(TestCase):
         )
         return capture_daily_operational_snapshot(run, COCKPIT_QUEUE_NAMES)
 
+    def test_single_real_backlog_observation_is_shown_with_its_capture_time(self):
+        self._ticket(1001, "OPEN", True, 5)
+        self._full_snapshot(datetime(2026, 10, 6, 12, tzinfo=datetime_timezone.utc))
+
+        result = AnalyticsQueryService().query({
+            "scope": "support", "metric": "tickets", "group_by": "status",
+            "start": "2026-10-01", "end": "2026-10-10", "filters": {},
+        }, user=self.user)
+        operational = result["operational"]
+        backlog_kpis = [item for item in operational["primary_kpis"] if item["label"].startswith("Backlog")]
+
+        self.assertTrue(operational["backlog"]["available"])
+        self.assertEqual(operational["backlog"]["observation_count"], 1)
+        self.assertTrue(operational["backlog"]["first_observed_at"].startswith("2026-10-06T09:00:00"))
+        self.assertEqual(len(backlog_kpis), 1)
+        self.assertEqual(backlog_kpis[0]["label"], "Backlog observado")
+        self.assertEqual(backlog_kpis[0]["unit"], "Em 06/10/2026 09:00")
+        current_backlog = next(
+            (item for item in operational["secondary_kpis"] if item["label"] == "Backlog atual"),
+        )
+        self.assertEqual(current_backlog["value"], 1)
+
     def test_dashboard_renders_real_snapshot_and_period(self):
         ticket = self._ticket(101, "OPEN", True, 5)
         OTRSTicketConfigItem.objects.create(ticket=ticket, config_item_id="analytics-ci-1", cmdb_link=self.link, relation_type="DependsOn", relation_state="Valid")
@@ -1079,15 +1101,20 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(OTRSOperationalConfigItemSnapshot.objects.count(), 12)
 
         filters = {"provider": "Operadora Analytics", "uf": "SP", "project": "Projeto A"}
-        weekly = AnalyticsQueryService().query({
+        weekly_result = AnalyticsQueryService().query({
             "scope": "support", "metric": "tickets", "start": "2026-10-01",
             "end": "2026-10-30", "filters": filters,
-        }, user=self.user)["operational"]
+        }, user=self.user)
+        weekly = weekly_result["operational"]
         observed = [row for row in weekly["series"] if row["backlog"] is not None]
         self.assertTrue(weekly["backlog"]["available"])
         self.assertEqual([row["backlog"] for row in observed], [1, 1])
         self.assertEqual(weekly["backlog"]["observation_count"], 2)
         self.assertTrue(all(row["backlog_observed_label"] for row in observed))
+        backlog_kpi_labels = {item["label"] for item in weekly["primary_kpis"] if item["label"].startswith("Backlog")}
+        self.assertEqual(backlog_kpi_labels, {"Backlog mais antigo", "Backlog mais recente"})
+        self.assertTrue(all("Em " in item["unit"] for item in weekly["primary_kpis"] if item["label"].startswith("Backlog")))
+        self.assertTrue(weekly["backlog"]["first_observed_at"].startswith("2026-10-06T09:00:00"))
 
         monthly = AnalyticsQueryService().query({
             "scope": "support", "metric": "tickets", "start": "2026-09-01",
@@ -1168,6 +1195,87 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(canceled["value"], 1)
         self.assertEqual(canceled["tickets"][0]["resolved_at"], "—")
         self.assertNotEqual(canceled["tickets"][0]["canceled_at"], "—")
+
+    def test_created_status_and_resolved_period_metrics_use_distinct_ticket_populations(self):
+        created_at = datetime(2026, 10, 10, 12, tzinfo=datetime_timezone.utc)
+        resolved_at = datetime(2026, 10, 15, 12, tzinfo=datetime_timezone.utc)
+        tickets = []
+
+        for index, status in enumerate(("RESOLVED", "CLOSED")):
+            ticket = self._ticket(8400 + index, status, False, 10)
+            ticket.source_created_at = created_at
+            ticket.resolved_at = resolved_at
+            ticket.terminal_state_at = resolved_at
+            ticket.save(update_fields=("source_created_at", "resolved_at", "terminal_state_at"))
+            tickets.append(ticket)
+
+        for index in range(16):
+            ticket = self._ticket(8410 + index, "CLOSED" if index % 2 else "RESOLVED", False, 10)
+            ticket.source_created_at = datetime(2026, 9, 30, 12, tzinfo=datetime_timezone.utc)
+            ticket.resolved_at = resolved_at
+            ticket.terminal_state_at = resolved_at
+            ticket.save(update_fields=("source_created_at", "resolved_at", "terminal_state_at"))
+            tickets.append(ticket)
+
+        for index in range(4):
+            ticket = self._ticket(8430 + index, "CLOSED", False, 10)
+            ticket.external_state_name = "closed successful"
+            ticket.source_created_at = created_at
+            ticket.resolved_at = None
+            ticket.terminal_state_at = resolved_at
+            ticket.save(update_fields=("external_state_name", "source_created_at", "resolved_at", "terminal_state_at"))
+            tickets.append(ticket)
+
+        for index, ticket in enumerate(tickets):
+            OTRSTicketConfigItem.objects.create(
+                ticket=ticket, config_item_id=self.link.source_config_item_id,
+                cmdb_link=self.link, relation_type=f"metric-{ticket.pk}", relation_state="Valid",
+            )
+            if index == 0:
+                OTRSTicketConfigItem.objects.create(
+                    ticket=ticket, config_item_id=self.other_link.source_config_item_id,
+                    cmdb_link=self.other_link, relation_type=f"metric-extra-{ticket.pk}",
+                    relation_state="Valid",
+                )
+
+        base = {
+            "scope": "support", "group_by": "status", "start": "2026-10-01",
+            "end": "2026-10-31", "filters": {"provider": self.operator.name},
+            "include_cancelled": False,
+        }
+        service = AnalyticsQueryService()
+        created = service.query({**base, "metric": "tickets"}, user=self.user, include_all_rows=True)
+        resolved = service.query(
+            {**base, "metric": "resolved_closed_tickets"}, user=self.user, include_all_rows=True,
+        )
+
+        self.assertEqual(created["value"], 6)
+        self.assertEqual(created["ticket_result_total"], 6)
+        self.assertEqual(created["period_status_counts"], {"RESOLVED": 6})
+        self.assertEqual({row["dimension"]: row["value"] for row in created["detail"]}, {"Resolvido": 6})
+        self.assertEqual(created["group_by_label"], "Status atual")
+        self.assertEqual(resolved["value"], 18)
+        self.assertEqual(resolved["ticket_result_total"], 18)
+        self.assertEqual(resolved["period_status_counts"], {"RESOLVED": 18})
+        self.assertEqual(resolved["operational"]["period"]["closed"], 18)
+        self.assertEqual(resolved["operational"]["period"]["balance"], -12)
+        self.assertEqual(resolved["metric_label"], "Resolvidos no período")
+        self.assertNotIn("Encerrado", resolved["metric_semantics"])
+        status_chart = next(spec for spec in created["chart_specs"] if spec.get("dimension") == "status")
+        self.assertEqual(status_chart["title"], "Status atual dos tickets criados")
+        self.assertEqual(status_chart["details"][0]["value"], 6)
+
+    def test_cockpit_omits_unobserved_backlog_kpis(self):
+        result = AnalyticsQueryService().query({
+            "scope": "support", "metric": "tickets", "group_by": "status",
+            "start": "2026-10-01", "end": "2026-10-31", "filters": {},
+        }, user=self.user)
+        self.assertFalse(result["operational"]["backlog"]["available"])
+        self.assertFalse(any("backlog" in item["label"].casefold() for item in result["operational"]["primary_kpis"]))
+        current_backlog = next(
+            (item for item in result["operational"]["secondary_kpis"] if item["label"] == "Backlog atual"),
+        )
+        self.assertEqual(current_backlog["value"], 0)
 
     def test_operational_state_universe_and_explicit_cancel_unknown_queries(self):
         states = ("OPEN", "PENDING", "SCHEDULED", "RESOLVED", "CLOSED", "CANCELED", "UNKNOWN")
@@ -2190,14 +2298,19 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn("class=\"cockpit-ops-bar-value\"", operational_render)
         self.assertIn("value > 0 && showFlowBarLabels ? `<span class=\"cockpit-ops-bar-value\"", operational_render)
         self.assertIn('const originMode = general && queryState.chart_origin === "origin"', operational_render)
-        self.assertIn('const entryDefs = originMode ? entryOriginDefs : [["entries", "Novos", "entries"]]', operational_render)
-        self.assertIn('const closedDefs = originMode ? closedOriginDefs : [["closed", "Resolvidos", "closed"]]', operational_render)
+        self.assertIn('const entryDefs = originMode ? entryOriginDefs : [["entries", "Novos no período", "entries"]]', operational_render)
+        self.assertIn('const closedDefs = originMode ? closedOriginDefs : [["closed", "Resolvidos no período", "closed"]]', operational_render)
         self.assertIn("mode === \"backlog\" && points.filter(Boolean).length <= 8", operational_render)
         self.assertIn("mode === \"backlog\" && lastBacklogIndex >= 0 ? [lastBacklogIndex]", operational_render)
-        self.assertIn('definitions = mode === "created" ? [[entriesKey, "Novos"', operational_render)
-        self.assertIn('mode === "created" ? `<small class="entries">Novos:', operational_render)
-        self.assertIn('mode === "closed" ? `<small class="closed">Resolvidos:', operational_render)
+        self.assertIn('definitions = mode === "created" ? [[entriesKey, "Novos no período"', operational_render)
+        self.assertIn('mode === "created" ? `<small class="entries">Novos no período:', operational_render)
+        self.assertIn('mode === "closed" ? `<small class="closed">Resolvidos no período:', operational_render)
         self.assertIn("const visualHeight = grain === \"hour\" ? 260 : 268", operational_render)
+        self.assertIn('button.hidden = button.dataset.chartView === "backlog" && !backlogAvailable', operational_render)
+        self.assertNotIn("history.message", operational_render)
+        self.assertNotIn("history.flow_message", operational_render)
+        self.assertNotIn("Saldo dos eventos visíveis", script)
+        self.assertNotIn("snapshots de backlog no horário observado", template)
 
     def test_cockpit_quick_queries_keep_context_and_load_operational_analytics(self):
         script = (Path(settings.BASE_DIR.parent) / "frontend_src" / "js" / "painel" / "cockpit.js").read_text(encoding="utf-8")

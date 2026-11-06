@@ -8,8 +8,8 @@
   const DEFAULT_START = page.dataset.defaultStart;
   const DEFAULT_END = page.dataset.defaultEnd;
   const DEFAULTS = { scope: "support", metric: "tickets", start: DEFAULT_START, end: DEFAULT_END, compare_to: "", selected_month: "", group_by: "provider", chart_view: "all", chart_origin: "consolidated", include_cancelled: true, include_improcedente: true, detail_page: 1, ticket_page: 1, ticket_page_size: 25, ticket_search: "", filters: Object.fromEntries(FILTER_KEYS.map(key => [key, "all"])) };
-  const METRICS = { tickets: "Tickets criados", open_tickets: "Em atendimento no per\u00edodo", pending_tickets: "Pendentes no per\u00edodo", scheduled_tickets: "Agendados no per\u00edodo", resolved_tickets: "Resolvidos no per\u00edodo", closed_tickets: "Resolvidos no per\u00edodo", resolved_closed_tickets: "Resolvidos no per\u00edodo", canceled_tickets: "Cancelados no per\u00edodo", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
-  const DIMENSIONS = { provider: "Provedor", uf: "UF", status: "Status", source_state: "Status de origem", sla: "SLA", priority: "Prioridade", termination_reason: "Motivo de encerramento", cancellation_stage: "Etapa do cancelamento", operational_origin: "Origem", project: "Projeto / cliente", month: "Per\u00edodo" };
+  const METRICS = { tickets: "Tickets criados no período", open_tickets: "Em atendimento no período", pending_tickets: "Pendentes no período", scheduled_tickets: "Agendados no período", resolved_tickets: "Resolvidos no período", closed_tickets: "Resolvidos no período", resolved_closed_tickets: "Resolvidos no período", canceled_tickets: "Cancelados no período", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
+  const DIMENSIONS = { provider: "Provedor", uf: "UF", status: "Status atual", source_state: "Status de origem", sla: "SLA", priority: "Prioridade", termination_reason: "Motivo de encerramento", cancellation_stage: "Etapa do cancelamento", operational_origin: "Origem", project: "Projeto / cliente", month: "Per\u00edodo" };
   const FILTER_LABELS = { ...DIMENSIONS, service: "Servi\u00e7o", stage: "Etapa", origin: "Origem", responsibility: "Proced\u00eancia", responsible: "Respons\u00e1vel", queue: "Fila", age_bucket: "Aging" };
   const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   const STATE_CODES = new Set(["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]);
@@ -266,11 +266,11 @@
     page.querySelector("[data-kpis]").innerHTML = (items || []).map(item => {
       const value = sourcePending && item.stage ? "—"
         : typeof item.value === "number" ? number.format(item.value) : escapeHTML(item.value);
-      const finalBacklog = /^backlog (atual|final|ao fim do período)$/i.test(item.label || "");
+      const finalBacklog = /^backlog (final|ao fim do período)$/i.test(item.label || "");
       const label = finalBacklog ? "Backlog final" : item.label;
       const note = sourcePending && item.stage ? "Dados ainda não sincronizados" : (item.unit || "tickets");
       const action = item.stage ? `data-kpi-stage="${escapeHTML(item.stage)}" role="button" tabindex="0" aria-label="Filtrar tickets na etapa ${escapeHTML(item.label)}"` : "";
-      const title = finalBacklog ? "Estoque no final do período selecionado." : item.title || "Indicador calculado no espelho local do OTRS.";
+      const title = finalBacklog ? "Estoque no final do período selecionado." : item.title || "Indicador calculado conforme o período e os filtros selecionados.";
       return `<article class="kpi-card dash-card cockpit-operational-kpi${item.stage ? " is-drillable" : ""}" ${action} title="${escapeHTML(title)}"><span class="kpi-label">${escapeHTML(label)}</span><strong class="kpi-value">${value}</strong><small class="kpi-note">${escapeHTML(note)}</small></article>`;
     }).join("");
   }
@@ -297,18 +297,13 @@
     const container = page.querySelector("[data-secondary-kpis]");
     container.hidden = !items?.length;
     container.innerHTML = (items || []).map(item => {
-      const isNet = item.label === "Saldo dos eventos visíveis" && typeof item.value === "number";
       const isAverage = item.label === "Tempo médio de resolução";
       const isOlderThanDay = item.label === "Tickets acima de 24h";
       const label = isOlderThanDay ? "Acima de 24h" : item.label;
       let value = item.value == null ? "—" : typeof item.value === "number" ? number.format(item.value) : escapeHTML(item.value);
       let note = item.unit || "tickets";
       let title = item.help_text || "";
-      if (isNet) {
-        const amount = number.format(Math.abs(item.value));
-        value = item.value > 0 ? `↑ +${amount}` : item.value < 0 ? `↓ ${amount}` : "0";
-        note = item.value > 0 ? `${amount} tickets a mais no saldo do fluxo` : item.value < 0 ? `${amount} tickets a menos no saldo do fluxo` : "Novos e Resolvidos em equilíbrio";
-      } else if (isAverage) {
+      if (isAverage) {
         note = "resolução";
         if (typeof item.value === "number") {
           title = `${number.format(item.value)} horas`;
@@ -326,9 +321,17 @@
   }
   function renderOperationalChart(data) {
     const operational = data.operational || {}, rows = operational.series || [];
-    const mode = queryState.chart_view || "all", general = data.scope === "general";
+    let mode = queryState.chart_view || "all";
+    const general = data.scope === "general";
     const originMode = general && queryState.chart_origin === "origin";
     const history = operational.backlog || {}, backlogAvailable = history.available === true;
+    if (!backlogAvailable && mode === "backlog") {
+      mode = "all";
+      queryState.chart_view = "all";
+    }
+    page.querySelectorAll("[data-chart-view]").forEach(button => {
+      button.hidden = button.dataset.chartView === "backlog" && !backlogAvailable;
+    });
     const originControl = page.querySelector("[data-chart-origin-control]");
     if (originControl) {
       originControl.hidden = !general;
@@ -337,10 +340,10 @@
       });
     }
     const subtitle = {
-      all: "Novos e Resolvidos por intervalo; snapshots de backlog no horário observado.",
-      created: general && originMode ? "Entradas por intervalo, divididas por origem." : "Tickets novos em cada intervalo do per\u00edodo.",
+      all: "Tickets novos e resolvidos no período; backlog quando disponível.",
+      created: general && originMode ? "Entradas por intervalo, divididas por origem." : "Tickets criados em cada intervalo do per\u00edodo.",
       closed: general && originMode ? "Resolu\u00e7\u00f5es por intervalo, divididas por origem." : "Tickets resolvidos em cada intervalo do per\u00edodo.",
-      backlog: "Snapshots FULL do estoque; cada ponto informa a data e hora observadas.",
+      backlog: "Backlog observado nas datas e hor\u00e1rios dispon\u00edveis.",
     }[mode];
     page.querySelector("[data-operational-subtitle]").textContent = subtitle;
     page.querySelectorAll("[data-chart-view]").forEach(button => {
@@ -350,9 +353,7 @@
     if (!rows.length) {
       return `<article class="cockpit-ops-chart" data-mode="${mode}">${chartNote("Nenhum ticket encontrado neste per\u00edodo.")}</article>`;
     }
-    if (mode === "backlog" && !backlogAvailable) {
-      return `<article class="cockpit-ops-chart" data-mode="backlog">${chartNote(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</article>`;
-    }
+
 
     let definitions;
     if (general) {
@@ -364,19 +365,19 @@
         ["support_closed", "Resolvidos · Suporte", "support-closed"],
         ["cancellation_closed", "Resolvidos · Cancelamentos", "cancellation-closed"],
       ];
-      const entryDefs = originMode ? entryOriginDefs : [["entries", "Novos", "entries"]];
-      const closedDefs = originMode ? closedOriginDefs : [["closed", "Resolvidos", "closed"]];
+      const entryDefs = originMode ? entryOriginDefs : [["entries", "Novos no período", "entries"]];
+      const closedDefs = originMode ? closedOriginDefs : [["closed", "Resolvidos no período", "closed"]];
       definitions = mode === "created" ? entryDefs
         : mode === "closed" ? closedDefs
           : mode === "backlog" ? [] : [...entryDefs, ...closedDefs];
     } else {
       const entriesKey = data.scope === "cancellation" ? "cancellation_entries" : "entries";
       const closedKey = data.scope === "cancellation" ? "cancellation_closed" : "closed";
-      const closedDefs = [[closedKey, "Resolvidos", "closed"]];
-      definitions = mode === "created" ? [[entriesKey, "Novos", "entries"]]
+      const closedDefs = [[closedKey, "Resolvidos no período", "closed"]];
+      definitions = mode === "created" ? [[entriesKey, "Novos no período", "entries"]]
         : mode === "closed" ? closedDefs
           : mode === "backlog" ? []
-            : [[entriesKey, "Novos", "entries"], ...closedDefs];
+            : [[entriesKey, "Novos no período", "entries"], ...closedDefs];
     }
     const flowMax = Math.max(0, ...rows.flatMap(row => definitions.map(([key]) => Number(row[key] || 0))));
     const flowScaleMax = flowMax ? flowMax / .84 : 0;
@@ -439,39 +440,37 @@
         const groupStart = general && originMode && mode === "all" && grain !== "hour" && barIndex === 2 ? " is-group-start" : "";
         return `<span class="cockpit-ops-bar-item${groupStart}" style="--bar-height:${height}%;--value-lift:${valueLift}px" aria-hidden="true">${value > 0 && showFlowBarLabels ? `<span class="cockpit-ops-bar-value">${number.format(value)}</span>` : ""}<i class="cockpit-ops-bar ${cls}"></i></span>`;
       }).join("");
-      const net = Number(row.balance || 0), netLabel = `${net > 0 ? "+" : ""}${number.format(net)}`;
-      const rowBacklog = row.backlog !== null && row.backlog !== undefined ? number.format(row.backlog) : "\u2014";
+      const rowBacklog = row.backlog !== null && row.backlog !== undefined ? number.format(row.backlog) : "";
       const entryOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_entries)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_entries)}</small>` : "";
       const closedOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_closed)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_closed)}</small>` : "";
       const backlogTooltip = row.backlog !== null && row.backlog !== undefined
-        ? `<small>Backlog observado: ${rowBacklog}</small><small>Snapshot FULL: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small>`
-        : `<small>Sem snapshot FULL neste intervalo.</small>`;
+        ? `<small>Backlog registrado: ${rowBacklog}</small><small>Em: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small>`
+        : "";
       const tooltipLines = mode === "all"
-        ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}<small>Saldo dos eventos visíveis: ${escapeHTML(netLabel)}</small>${backlogAvailable ? backlogTooltip : `<small>${escapeHTML(history.message || "Backlog hist\u00f3rico indispon\u00edvel para este intervalo.")}</small>`}`
-        : mode === "created" ? `<small class="entries">Novos: ${number.format(row.entries)}</small>${entryOriginDetail}`
-          : mode === "closed" ? `<small class="closed">Resolvidos: ${number.format(row.closed)}</small>${closedOriginDetail}`
+        ? `<small class="entries">Novos no período: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos no período: ${number.format(row.closed)}</small>${closedOriginDetail}${backlogAvailable ? backlogTooltip : ""}`
+        : mode === "created" ? `<small class="entries">Novos no período: ${number.format(row.entries)}</small>${entryOriginDetail}`
+          : mode === "closed" ? `<small class="closed">Resolvidos no período: ${number.format(row.closed)}</small>${closedOriginDetail}`
             : backlogTooltip;
       const originAccessible = general
-        ? mode === "all" ? ` Suporte: ${number.format(row.support_entries)} novos, ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_entries)} novos, ${number.format(row.cancellation_closed)} resolvidos.`
+        ? mode === "all" ? ` Suporte: ${number.format(row.support_entries)} novos, ${number.format(row.support_closed)} resolvidos no período. Cancelamentos: ${number.format(row.cancellation_entries)} novos, ${number.format(row.cancellation_closed)} resolvidos no período.`
           : mode === "created" ? ` Suporte: ${number.format(row.support_entries)} novos. Cancelamentos: ${number.format(row.cancellation_entries)} novos.`
-            : mode === "closed" ? ` Suporte: ${number.format(row.support_closed)} resolvidos. Cancelamentos: ${number.format(row.cancellation_closed)} resolvidos.` : ""
+            : mode === "closed" ? ` Suporte: ${number.format(row.support_closed)} resolvidos no período. Cancelamentos: ${number.format(row.cancellation_closed)} resolvidos no período.` : ""
         : "";
       const accessibleBacklog = row.backlog !== null && row.backlog !== undefined
-        ? ` Backlog observado: ${rowBacklog} em ${row.backlog_observed_label || "data indisponível"}.`
-        : " Sem snapshot de backlog neste intervalo.";
+        ? ` Backlog registrado: ${rowBacklog} em ${row.backlog_observed_label || "data indisponível"}.`
+        : "";
       const accessible = mode === "all"
-        ? `${row.label}. Novos: ${number.format(row.entries)}. Resolvidos: ${number.format(row.closed)}. Saldo dos eventos visíveis: ${netLabel}.${backlogAvailable ? accessibleBacklog : " Backlog histórico indisponível."}${originAccessible}`
-        : mode === "created" ? `${row.label}. Novos: ${number.format(row.entries)}.${originAccessible}`
-          : mode === "closed" ? `${row.label}. Resolvidos: ${number.format(row.closed)}.${originAccessible}`
+        ? `${row.label}. Novos no período: ${number.format(row.entries)}. Resolvidos no período: ${number.format(row.closed)}.${accessibleBacklog}${originAccessible}`
+        : mode === "created" ? `${row.label}. Novos no período: ${number.format(row.entries)}.${originAccessible}`
+          : mode === "closed" ? `${row.label}. Resolvidos no período: ${number.format(row.closed)}.${originAccessible}`
             : `${row.label}.${accessibleBacklog}`;
       const label = index % labelStep === 0 || (grain !== "hour" && index === rows.length - 1) ? row.label : "";
       return `<button type="button" class="cockpit-ops-point" data-chart-point aria-label="${escapeHTML(accessible)}"><span class="cockpit-ops-bars">${bars}</span><span class="cockpit-ops-x-label">${escapeHTML(label ? shortLabel(label) : "")}</span><span class="cockpit-point-tooltip" role="tooltip"><strong>${escapeHTML(row.label)}</strong>${tooltipLines}</span></button>`;
     }).join("");
     const legendItems = definitions.map(([, label, cls]) => `<span><i class="${cls}"></i>${escapeHTML(label)}</span>`);
-    if (lineVisible) legendItems.push('<span><i class="backlog-line-key"></i>Backlog (snapshot FULL)</span>');
-    const note = mode !== "backlog" && history.flow_message
-      ? history.flow_message
-      : !hasFlow && mode !== "backlog" ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "";
+    if (lineVisible) legendItems.push('<span><i class="backlog-line-key"></i>Backlog observado</span>');
+    const note = !hasFlow && mode !== "backlog"
+      ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "";
     return `<article class="cockpit-ops-chart" data-mode="${mode}" data-grain="${escapeHTML(grain)}" style="--ops-plot-height:${visualHeight}px"><div class="cockpit-ops-legend" aria-label="S\u00e9ries do gr\u00e1fico">${legendItems.join("")}</div>${chartNote(note)}<div class="cockpit-ops-chart-frame"><div class="cockpit-ops-axis cockpit-ops-axis-left" aria-hidden="true">${makeAxis(flowTicks)}</div><div class="cockpit-ops-plot-area"><div class="cockpit-ops-grid-lines" aria-hidden="true"></div>${svg}<div class="cockpit-ops-point-grid" style="--series-count:${rows.length}" role="group" aria-label="Pontos do per\u00edodo">${pointsHTML}</div></div><div class="cockpit-ops-axis cockpit-ops-axis-right" aria-hidden="true">${makeAxis(backlogTicks)}</div></div></article>`;
   }
 
@@ -500,10 +499,10 @@
     dimensionGrid.innerHTML = dimensions.length ? dimensions.map(renderDimension).join("") : '<p class="cockpit-empty">Não há dimensões complementares relevantes para esta consulta.</p>';
     renderCalendar(data.temporal);
     const base = page.querySelector("[data-period-semantics]");
-    const baseDescription = data.metric === "canceled_tickets" ? "Período baseado no cancelamento dos tickets." : data.metric === "backlog" ? "Snapshot atual de tickets OPEN e PENDING." : ["resolved_tickets", "closed_tickets", "resolved_closed_tickets"].includes(data.metric) ? "Período baseado na resolução dos tickets." : "Período baseado na criação dos tickets.";
+    const baseDescription = data.metric === "canceled_tickets" ? "Período baseado no cancelamento dos tickets." : data.metric === "backlog" ? "Backlog atual de tickets em atendimento ou pendentes." : ["resolved_tickets", "closed_tickets", "resolved_closed_tickets"].includes(data.metric) ? "Período baseado na data efetiva de resolução; pode incluir tickets criados antes do início selecionado." : "Período baseado na criação dos tickets; o status exibido é o atual.";
     base.title = baseDescription;
     base.setAttribute("aria-label", baseDescription);
-    const metricTitles = { tickets: "Tickets criados", open_tickets: "Tickets em atendimento", pending_tickets: "Tickets pendentes", scheduled_tickets: "Tickets agendados", resolved_tickets: "Tickets resolvidos", closed_tickets: "Tickets resolvidos", resolved_closed_tickets: "Tickets resolvidos", canceled_tickets: "Tickets cancelados", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog" };
+    const metricTitles = { tickets: "Tickets criados no período", open_tickets: "Tickets em atendimento", pending_tickets: "Tickets pendentes", scheduled_tickets: "Tickets agendados", resolved_tickets: "Tickets resolvidos no período", closed_tickets: "Tickets resolvidos no período", resolved_closed_tickets: "Tickets resolvidos no período", canceled_tickets: "Tickets cancelados", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog" };
     const facets = [
       ["provider", "provedor"], ["termination_reason", "motivo"], ["stage", "etapa"], ["origin", "origem"], ["uf", "UF"],
     ];
@@ -622,13 +621,13 @@
     const quality = data.provider_quality || {}, qualityNote = page.querySelector("[data-provider-quality]");
     if (queryState.group_by === "provider" && quality.unresolved) {
       const causes = quality.unresolved_causes || {};
-      qualityNote.textContent = `${number.format(quality.unresolved)} tickets sem provedor identificado; cobertura ${number.format(quality.coverage_percent)}%. Causas: sem relação ${number.format(causes.no_config_item || 0)}, sem espelho ${number.format(causes.missing_mirror || 0)}, link inválido ${number.format(causes.invalid_link || 0)}, link sem provedor ${number.format(causes.link_without_provider || 0)}.`;
+      qualityNote.textContent = `${number.format(quality.unresolved)} tickets sem provedor identificado; cobertura ${number.format(quality.coverage_percent)}%. Causas: sem relação ${number.format(causes.no_config_item || 0)}, dados CMDB ausentes ${number.format(causes.missing_mirror || 0)}, link inválido ${number.format(causes.invalid_link || 0)}, link sem provedor ${number.format(causes.link_without_provider || 0)}.`;
     } else qualityNote.textContent = "";
     renderPagination(data);
   }
   function renderTickets(data) {
     const records = data.tickets || [], body = page.querySelector("[data-ticket-body]");
-    const sourceTag = row => `<span class="cockpit-source-tag" title="${escapeHTML(row.source === "OTRS + CMDB" ? "Ticket OTRS com vínculo CMDB resolvido" : "Dados do espelho OTRS")}">${row.source === "OTRS + CMDB" ? "OTRS + CMDB" : "OTRS"}</span>`;
+    const sourceTag = row => `<span class="cockpit-source-tag" title="${escapeHTML(row.source === "OTRS + CMDB" ? "Ticket OTRS com vínculo CMDB resolvido" : "Ticket OTRS sincronizado")}">${row.source === "OTRS + CMDB" ? "OTRS + CMDB" : "OTRS"}</span>`;
     body.innerHTML = records.length ? records.map(row => `<tr data-ticket-row="${row.id}"><td><button type="button" class="cockpit-ticket-link" data-ticket-open="${row.id}">${escapeHTML(row.ticket)}</button><span class="cockpit-ticket-source">${sourceTag(row)}</span></td><td>${escapeHTML(row.base_date)}</td><td>${escapeHTML(row.created_at)}</td><td>${escapeHTML(row.resolved_at)}</td><td>${escapeHTML(row.status)}</td><td>${escapeHTML(row.reason)}</td><td>${escapeHTML(row.provider)}</td><td>${escapeHTML(row.uf)}</td><td>${escapeHTML(row.priority)}</td><td>${escapeHTML(row.sla)}</td></tr>`).join("") : '<tr><td colspan="10">Nenhum ticket corresponde a esta consulta.</td></tr>';
     const search = page.querySelector("[data-ticket-search]");
     if (search.value !== (data.ticket_search || "")) search.value = data.ticket_search || "";
@@ -732,7 +731,7 @@
     unassigned: { metric: "backlog", group_by: "provider", label: "Sem respons\u00e1vel", filters: { responsible: "unassigned" } },
     open: { metric: "open_tickets", group_by: "provider", label: "Em atendimento" },
     pending: { metric: "pending_tickets", group_by: "provider", label: "Pendentes" },
-    resolved: { metric: "resolved_closed_tickets", group_by: "provider", label: "Resolvidos" },
+    resolved: { metric: "resolved_closed_tickets", group_by: "provider", label: "Resolvidos no período" },
   };
   function presetState(key) {
     const preset = PRESETS[key]; if (!preset) return;

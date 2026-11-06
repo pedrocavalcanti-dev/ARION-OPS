@@ -236,8 +236,8 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         width, height = content_width, 74 * mm
         left, right, bottom, top = 30, width - 30, 22, height - 26
         plot_width, plot_height = right - left, top - bottom
-        definitions = [("entries", "Novos", colors.HexColor("#287c83")),
-                       ("closed", "Resolvidos", colors.HexColor("#b45d68"))]
+        definitions = [("entries", "Novos no período", colors.HexColor("#287c83")),
+                       ("closed", "Resolvidos no período", colors.HexColor("#b45d68"))]
         flow_max = max(1, *(int(row.get(key) or 0) for row in rows for key, _label, _color in definitions))
         backlog_values = [row.get("backlog") for row in rows if row.get("backlog") is not None]
         backlog_low = min(backlog_values, default=0)
@@ -250,8 +250,9 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         drawing.add(Line(left, bottom, right, bottom, strokeColor=line, strokeWidth=.5))
         drawing.add(String(1, bottom - 1, "0", fontName="ArionVera", fontSize=5.5, fillColor=muted))
         drawing.add(String(1, top - 3, fmt(flow_max), fontName="ArionVera", fontSize=5.5, fillColor=muted))
-        drawing.add(String(right + 2, bottom - 1, fmt(backlog_low), fontName="ArionVera", fontSize=5.5, fillColor=muted))
-        drawing.add(String(right + 2, top - 3, fmt(backlog_high), fontName="ArionVera", fontSize=5.5, fillColor=muted))
+        if backlog_values:
+            drawing.add(String(right + 2, bottom - 1, fmt(backlog_low), fontName="ArionVera", fontSize=5.5, fillColor=muted))
+            drawing.add(String(right + 2, top - 3, fmt(backlog_high), fontName="ArionVera", fontSize=5.5, fillColor=muted))
         points = []
         label_stride = max(1, (len(rows) + 11) // 12)
         for index, row in enumerate(rows):
@@ -285,9 +286,10 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         for _key, label, color in definitions:
             drawing.add(Rect(legend_x, legend_y, 6, 6, fillColor=color, strokeColor=None))
             drawing.add(String(legend_x + 8, legend_y, label, fontName="ArionVera", fontSize=6, fillColor=muted))
-            legend_x += 52 if label == "Resolvidos" else 43
-        drawing.add(Line(legend_x, legend_y + 3, legend_x + 10, legend_y + 3, strokeColor=colors.HexColor("#356aa0"), strokeWidth=1.3))
-        drawing.add(String(legend_x + 13, legend_y, "Backlog", fontName="ArionVera", fontSize=6, fillColor=muted))
+            legend_x += 88 if label == "Resolvidos no período" else 43
+        if backlog_values:
+            drawing.add(Line(legend_x, legend_y + 3, legend_x + 10, legend_y + 3, strokeColor=colors.HexColor("#356aa0"), strokeWidth=1.3))
+            drawing.add(String(legend_x + 13, legend_y, "Backlog observado", fontName="ArionVera", fontSize=6, fillColor=muted))
         return drawing
 
     def monthly_calendar(spec):
@@ -419,20 +421,32 @@ def _pdf_report(generated, generated_by, result, filter_rows):
         story.append(flow_chart)
     flow_period = operational.get("period", {})
     flow_rows = [
-        [para("Backlog inicial"), para(fmt(flow_period.get("backlog_initial")), "ArionRight")],
-        [para("Novos"), para(fmt(flow_period.get("entries", 0)), "ArionRight")],
-        [para("Resolvidos"), para(fmt(flow_period.get("closed", 0)), "ArionRight")],
+        [para("Novos no período"), para(fmt(flow_period.get("entries", 0)), "ArionRight")],
+        [para("Resolvidos no período"), para(fmt(flow_period.get("closed", 0)), "ArionRight")],
     ]
     if operational.get("include_cancelled") or result["metric"] == "canceled_tickets":
         flow_rows.append([para("Cancelados"), para(fmt(flow_period.get("canceled", 0)), "ArionRight")])
-    flow_rows.extend([
-        [para("Varia\u00e7\u00e3o l\u00edquida do fluxo"), para(fmt(flow_period.get("balance", 0)), "ArionRight")],
-        [para("Backlog final / snapshot atual"), para(fmt(flow_period.get("backlog_final")), "ArionRight")],
-    ])
+    backlog_history = operational.get("backlog", {})
+    if backlog_history.get("available"):
+        from django.utils import timezone
+
+        def captured_label(value):
+            if not value:
+                return ""
+            return timezone.localtime(datetime.fromisoformat(value)).strftime("%d/%m/%Y %H:%M")
+
+        if backlog_history.get("observation_count") == 1:
+            label = captured_label(backlog_history.get("last_observed_at"))
+            flow_rows.insert(0, [para(f"Backlog observado · {label}"), para(fmt(flow_period.get("backlog_final")), "ArionRight")])
+        else:
+            first_label = captured_label(backlog_history.get("first_observed_at"))
+            last_label = captured_label(backlog_history.get("last_observed_at"))
+            flow_rows.insert(0, [para(f"Backlog mais antigo · {first_label}"), para(fmt(flow_period.get("backlog_initial")), "ArionRight")])
+            flow_rows.append([para(f"Backlog mais recente · {last_label}"), para(fmt(flow_period.get("backlog_final")), "ArionRight")])
     story.append(table([[para("Fluxo"), para("Valor", "ArionRight")], *flow_rows],
                        [content_width - 34 * mm, 34 * mm]))
-    story.append(para("Aging do estoque atual - Snapshot atual", "ArionSection"))
-    story.append(para("O aging considera somente tickets ativos; op\u00e7\u00f5es de cancelados ou improcedentes n\u00e3o alteram este snapshot.", "ArionSmall"))
+    story.append(para("Aging do estoque atual", "ArionSection"))
+    story.append(para("O aging considera somente tickets ativos; a sele\u00e7\u00e3o de cancelados ou improcedentes n\u00e3o altera este total.", "ArionSmall"))
     aging_rows = [[para("Faixa"), para("Suporte", "ArionRight"), para("Cancelamentos", "ArionRight"), para("Total", "ArionRight")]]
     aging_rows.extend([
         [para(item.get("label", "")), para(fmt(item.get("support", 0)), "ArionRight"),
