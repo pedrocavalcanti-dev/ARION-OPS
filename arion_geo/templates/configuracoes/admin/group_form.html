@@ -1,12 +1,69 @@
 {% extends "configuracoes/base.html" %}
+{% load static %}
 {% block title %}{% if group %}Editar grupo{% else %}Novo grupo{% endif %} · ARION OPS{% endblock %}
 {% block settings_title %}{% if group %}Editar grupo de acesso{% else %}Novo grupo de acesso{% endif %}{% endblock %}
-{% block settings_description %}Selecione as permissões e revise o acesso por módulo.{% endblock %}
+{% block settings_description %}Revise os acessos por módulo e mantenha o escopo de dados alinhado ao perfil.{% endblock %}
+{% block extra_js %}{{ block.super }}<script src="{% arion_js 'js/configuracoes/group-access.js' %}" defer></script>{% endblock %}
 {% block settings_content %}
-<section class="settings-section"><form method="post" class="settings-form group-form">{% csrf_token %}{% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
-  <section class="group-form-block"><h2>Identidade</h2><div class="settings-field"><label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label><div class="settings-field-control">{{ form.name }}{% if form.name.errors %}<div class="field-errors">{{ form.name.errors }}</div>{% endif %}</div></div></section>
-  <section class="group-form-block"><h2>Permissões por módulo</h2><div class="permission-modules" data-permission-modules>{% for module, rows in permission_groups.items %}<details class="permission-module" open><summary><span>{{ module }}</span><small>{{ rows|length }} permissões</small></summary><div class="permission-module-options">{% for row in rows %}<label class="permission-choice"><input type="checkbox" name="permissions" value="{{ row.permission.pk }}"{% if row.selected %} checked{% endif %}><span>{{ row.label }}</span></label>{% endfor %}</div></details>{% endfor %}</div></section>
-  <section class="group-form-block"><h2>Escopo de dados</h2>{% if group and scope %}<p class="scope-help">{% if scope.mode == "all" %}Todos os dados{% else %}Personalizado · {{ scope.allowed_operators.count }} operadoras · {{ scope.allowed_projects.count }} projetos{% endif %}</p>{% if perms.configuracoes.manage_data_scopes %}<a class="settings-text-link" href="{% url 'configuracoes:scope-edit' group.pk %}">Editar escopo</a>{% endif %}{% elif group %}<p class="scope-help">Sem configuração. O grupo permanece sem acesso a dados até o escopo ser definido.</p>{% if perms.configuracoes.manage_data_scopes %}<a class="settings-text-link" href="{% url 'configuracoes:scope-edit' group.pk %}">Configurar escopo</a>{% endif %}{% else %}<p class="scope-help">Depois de criar o grupo, configure um escopo de dados restritivo na seção Escopos de dados.</p>{% endif %}</section>
-  <div class="settings-form-actions"><a class="settings-button settings-button--secondary" href="{% url 'configuracoes:groups' %}">Cancelar</a><button class="settings-button" type="submit">Salvar grupo</button></div>
-</form></section>
+<section class="settings-section">
+  <form method="post" class="settings-form group-form" data-group-access-form data-has-errors="{% if form.errors %}true{% else %}false{% endif %}">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
+
+    <section class="group-form-block" aria-labelledby="group-identity-title">
+      <h2 id="group-identity-title">Identidade</h2>
+      <div class="settings-field">
+        <label for="{{ form.name.id_for_label }}">{{ form.name.label }}</label>
+        <div class="settings-field-control">{{ form.name }}{% if form.name.errors %}<div class="field-errors">{{ form.name.errors }}</div>{% endif %}</div>
+      </div>
+    </section>
+
+    <section class="group-form-block" aria-labelledby="group-permissions-title">
+      <div class="group-permissions-heading">
+        <div><h2 id="group-permissions-title">Permissões por módulo</h2><p>As alterações só entram em vigor depois de salvar este perfil.</p></div>
+        <strong class="group-permission-summary" role="status" aria-live="polite"><span data-permission-selected-count>{{ selected_permission_count }}</span> de {{ permission_count }} selecionadas</strong>
+      </div>
+      <div class="permission-toolbar">
+        <label class="permission-search"><span>Buscar permissão</span><input type="search" data-permission-search placeholder="Digite o nome de um acesso" autocomplete="off"></label>
+        <div class="permission-toolbar-actions"><button type="button" data-permission-expand>Expandir módulos</button><button type="button" data-permission-collapse>Recolher módulos</button></div>
+      </div>
+      <p class="permission-empty" data-permission-empty hidden>Nenhuma permissão corresponde à busca.</p>
+      <div class="permission-modules" data-permission-modules>
+        {% for module, rows in permission_groups.items %}
+        <details class="permission-module" data-permission-module>
+          <summary><span>{{ module }}</span><small><span data-module-selected-count>0</span> de {{ rows|length }} selecionadas</small></summary>
+          <div class="permission-module-options">
+            {% for row in rows %}
+            <label class="permission-choice" data-permission-choice data-permission-search-text="{{ module|lower }} {{ row.label|lower }}">
+              <input type="checkbox" name="permissions" value="{{ row.permission.pk }}"{% if row.selected %} checked{% endif %} aria-label="{{ row.label }}">
+              <span>{{ row.label }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+      <p class="permission-unsaved" data-permission-unsaved role="status" hidden>Há alterações ainda não salvas.</p>
+    </section>
+
+    <section class="group-form-block" aria-labelledby="group-scope-title">
+      <h2 id="group-scope-title">Escopo de dados</h2>
+      {% if group and scope %}
+        <p class="scope-help">{% if scope.mode == "all" %}Todos os dados{% else %}Personalizado · {{ scope.allowed_operators.count }} operadoras · {{ scope.allowed_projects.count }} projetos{% endif %}</p>
+        {% if perms.configuracoes.manage_data_scopes %}<a class="settings-text-link" href="{% url 'configuracoes:scope-edit' group.pk %}">Editar escopo</a>{% endif %}
+      {% elif group %}
+        <p class="scope-help">Sem configuração. O grupo permanece sem acesso a dados até o escopo ser definido.</p>
+        {% if perms.configuracoes.manage_data_scopes %}<a class="settings-text-link" href="{% url 'configuracoes:scope-edit' group.pk %}">Configurar escopo</a>{% endif %}
+      {% else %}
+        <p class="scope-help">Depois de criar o grupo, configure um escopo de dados restritivo na seção Escopos de dados.</p>
+      {% endif %}
+    </section>
+
+    <div class="settings-form-actions">
+      <a class="settings-button settings-button--secondary" href="{% url 'configuracoes:groups' %}">Cancelar</a>
+      <button class="settings-button" type="submit" data-permission-save>Salvar grupo</button>
+    </div>
+    <p class="permission-save-status" data-permission-save-status role="status" aria-live="polite" hidden>Salvando alterações…</p>
+  </form>
+</section>
 {% endblock %}

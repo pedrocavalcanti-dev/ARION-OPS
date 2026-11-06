@@ -495,7 +495,7 @@
       .slice(0,8);
     target.innerHTML=names.map(name=>`<div class="panel-reason-row"><span>${esc(name)}</span><b>${number.format(links[name]||0)} links · ${number.format(tickets[name]||0)} tickets</b></div>`).join("")||'<p class="panel-empty">Sem registros neste recorte.</p>';
   }
-  const statusLabels={OPEN:"Aberto",PENDING:"Pendente",SCHEDULED:"Agendado",RESOLVED:"Resolvido",CLOSED:"Fechado"};
+  const statusLabels={OPEN:"Aberto",PENDING:"Pendente",SCHEDULED:"Agendado",RESOLVED:"Resolvido",CLOSED:"Resolvido"};
   async function loadState(code, tab=state.ufTab, pageNumber=state.ticketPage) {
     if (!data) return;
     const allowedTabs=["overview","tickets","projects","providers","reasons","recurrence"];

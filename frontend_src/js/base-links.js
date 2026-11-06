@@ -5,7 +5,7 @@
   if (!drawer || !content) return;
   const esc = value => String(value ?? "").replace(/[&<>\"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const dateLabel = value => { if (!value) return "Data não informada"; const date = new Date(value); return Number.isNaN(date.valueOf()) ? String(value) : new Intl.DateTimeFormat("pt-BR", {dateStyle:"short",timeStyle:"short",timeZone:"America/Sao_Paulo"}).format(date); };
-  const statusLabel = value => ({OPEN:"Aberto",PENDING:"Pendente",SCHEDULED:"Agendado",RESOLVED:"Resolvido",CLOSED:"Encerrado"}[value] || value || "Não informado");
+  const statusLabel = value => ({OPEN:"Aberto",PENDING:"Pendente",SCHEDULED:"Agendado",RESOLVED:"Resolvido",CLOSED:"Resolvido"}[value] || value || "Não informado");
   const val = (label, text, empty = "Não informado") => `<div><span>${esc(label)}</span><b>${esc(text || empty)}</b></div>`;
   const section = (title, fields) => `<section class="drawer-section"><h3>${esc(title)}</h3><div class="drawer-fields">${fields}</div></section>`;
   let drawerContext = null;

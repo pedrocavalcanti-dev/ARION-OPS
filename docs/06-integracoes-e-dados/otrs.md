@@ -58,8 +58,12 @@ Zero em uma métrica significa que a sincronização FULL requerida foi aplicada
 
 ## Histórico de filas e etapas
 
-O OTRS mantém eventos `Move` e `StateUpdate` em `ticket_history`. Eles mostram mudanças reais de fila e estado, mas ainda não são persistidos no mirror como uma sequência por ticket. Por isso, o Cockpit não calcula duração histórica por etapa e não substitui a data de criação por uma data de entrada em fila que não esteja materializada no espelho. A lista atual usa o estado e a fila do snapshot; `CLOSED` fica fora do estoque.
+O OTRS mantém eventos `Move` e `StateUpdate` em `ticket_history`. Eles mostram mudanças reais de fila e estado, mas ainda não são persistidos no mirror como uma sequência por ticket. Por isso, o Cockpit não calcula duração histórica por etapa e não substitui a data de criação por uma data de entrada em fila que não esteja materializada no espelho. A lista atual usa o estado e a fila do snapshot; resoluções e fechamentos ficam fora do backlog `OPEN`/`PENDING`.
 
-## Estado oficial e término operacional
+## Estado bruto e categoria operacional
 
-`business_status` preserva o estado oficial atual do OTRS, inclusive `CLOSED`; o mirror não converte `CLOSED` para `RESOLVED`. Para análises de término operacional, `resolved_at` (Dynamic Field `ticketResolvido.value_date`) é a data principal. Se estiver ausente, o ARION pode usar `terminal_state_at`, derivado do `StateUpdate` compatível com o estado terminal atual. Os dois campos continuam disponíveis separadamente para reconciliação e diagnóstico. Se ambos estiverem ausentes, métricas por data terminal e duração final não inventam uma data atual. `CANCELED` e `canceled_at` mantêm a política própria de cancelamento.
+`external_state_name` preserva o nome bruto recebido do OTRS para rastreabilidade. `business_status` é a categoria derivada usada pelas consultas operacionais: estados OTRS Resolvido e Encerrado são exibidos e contados como `RESOLVED`, incluindo compatibilidade com linhas locais antigas ainda em `CLOSED` antes da migration `0014_normalize_closed_operational_status`. O espelho e os relatórios não alteram `resolved_at`, `terminal_state_at`, `canceled_at` nem o nome bruto da origem. Não se fabricam datas de resolução nem se converte a data posterior de fechamento em resolução.
+
+Para análises de término operacional, `resolved_at` (Dynamic Field `ticketResolvido.value_date`) é a data principal. Se estiver ausente, o ARION pode usar `terminal_state_at`, derivado do `StateUpdate` compatível com o estado terminal atual. Os dois campos continuam disponíveis separadamente para reconciliação e diagnóstico. Se ambos estiverem ausentes, métricas por data terminal e duração final não inventam uma data atual. `CANCELED` e `canceled_at` mantêm a política própria de cancelamento.
+
+O backlog operacional atual inclui somente `OPEN` e `PENDING`. `SCHEDULED`, `RESOLVED`, `CANCELED`, `UNKNOWN` e improcedentes ficam fora; a classificação ativa de filas pode continuar exibindo Agendado separadamente sem incluí-lo no estoque de backlog.

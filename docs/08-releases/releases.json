@@ -3,9 +3,9 @@
   "releases": [
     {
       "version": "1.3.1",
-      "released_at": "2026-11-05",
+      "released_at": "2026-11-06",
       "title": "ARION OPS 1.3.1 — Refinamentos de Qualidade, Estabilidade e Correlações",
-      "summary": "Atualização incremental da versão 1.3.0 focada na estabilização do módulo Qualidade Operacional, integridade de schema e migrations, correlação robusta OQ → TQ → OTRS via QID, integração com Brevo SMTP e refinamentos visuais de usabilidade.",
+      "summary": "Atualização incremental 1.3.1 com estabilização OTRS/TLS e Brevo, normalização dos estados operacionais, ranking de desempenho, paginação de Chamados, segurança de acessos e melhorias na Central de Integrações.",
       "sections": [
         {
           "category": "Qualidade Operacional",
@@ -35,6 +35,32 @@
             "QIDs internos protegidos e apresentados de forma amigável ao operador.",
             "Preservação de RBAC, Data Scope e proteção CSRF em todas as ações de atualização e gestão de tratativas.",
             "Preservação estrita da TQ-2026-000002 e seu vínculo com o ticket OTRS 2026110536000319."
+          ]
+        },
+        {
+          "category": "Integrações e operação",
+          "items": [
+            "Conexões OTRS remotas exigem TLS e o cliente é compartilhado por Web e Worker, que recebem a configuração local da mesma forma; falhas externas mostram mensagens sanitizadas e preservam o snapshot anterior.",
+            "Brevo SMTP usa STARTTLS e o teste verifica autenticação sem enviar mensagem. Credenciais permanecem protegidas e mascaradas na interface.",
+            "Estados locais Encerrado e Resolvido são consolidados como RESOLVED para as métricas operacionais; o estado bruto permanece disponível e backlog atual considera apenas OPEN/PENDING.",
+            "Supervisor Windows controla Web e Worker separadamente, carrega o .env local e informa saúde do processo sem imprimir segredos."
+          ]
+        },
+        {
+          "category": "Rankings e Chamados",
+          "items": [
+            "Rankings separam Melhores provedores, Precisam de atenção e Mais links. O Score Operacional comparativo pondera duração acima de 24h (30%), duração média de resolução (25%), chamados por 100 links (20%), reincidência (15%) e backlog por 100 links (10%); amostras insuficientes não recebem nota e não há estimativa de SLA.",
+            "A tela de Chamados abre com 50 registros por página, mantém as opções existentes e usa paginação no backend junto dos filtros e da ordenação.",
+            "Agregações de provedores reutilizam links CMDB já escopados e a resposta HTML deixa de serializar tickets destinados somente à exportação."
+          ]
+        },
+        {
+          "category": "Acessos e experiência",
+          "items": [
+            "A Visão geral pessoal pode ser aberta por qualquer usuário autenticado. A Dashboard gerencial continua protegida por view_dashboard e KPIs executivos ficam ocultos quando essa permissão não existe.",
+            "A Central de Integrações foi reorganizada em cartões de conexão e um diagnóstico recolhível, com situação, teste, sincronização, registros, estado do worker, mensagens seguras e indicação de ação.",
+            "Totais operacionais do diagnóstico de integrações aplicam Data Scope antes das consultas agregadas; o formulário de grupos tem busca, módulos recolhíveis, resumo de permissões e aviso de alterações não salvas.",
+            "Páginas gerenciais e operacionais permanecem responsivas nos temas claro e escuro, com a identidade verde ARION."
           ]
         }
       ]

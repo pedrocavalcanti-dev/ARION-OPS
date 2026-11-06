@@ -391,6 +391,12 @@ class OTRSTicket(models.Model):
     def __str__(self):
         return self.ticket_number
 
+    @property
+    def operational_status_label(self):
+        from aplicativos.integracoes.services.otrs_status import business_status_label
+
+        return business_status_label(self.business_status)
+
 
 class OTRSTicketConfigItem(models.Model):
     ticket = models.ForeignKey(OTRSTicket, on_delete=models.CASCADE, related_name="config_items")

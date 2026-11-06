@@ -19,6 +19,10 @@ M --> Q[Query local limitada]
 
 Django permite múltiplos grupos. Permissions funcionais concedidas pelos grupos seguem Django Auth. Para dados, scopes CUSTOM de cada grupo são acumulados com interseção AND. Um grupo com ALL não remove restrição CUSTOM de outro.
 
+### Formulário de permissões
+
+O formulário de grupos permite buscar por rótulo, expandir ou recolher módulos e consultar a contagem de permissões selecionadas. Mudanças locais são sinalizadas antes de sair e durante o salvamento. A lista continua derivada de `managed_permissions()` e toda alteração passa pelas validações da view e de `AccessGroupForm`; o navegador não concede acessos automaticamente.
+
 ## `GroupDataScope`
 
 OneToOne com Group, modo `ALL`/`CUSTOM`, M2M `allowed_operators` e `allowed_projects`. Os catálogos de escopo são dimensões administrativas e não significam automaticamente Provider/ISP.

@@ -5,6 +5,8 @@ from django.db.models import Q
 class DataScopeService:
     """Resolve operational data access through a user's access group(s)."""
 
+    _USER_SCOPE_CACHE = "_arion_resolved_data_scopes"
+
     @staticmethod
     def get_scope(user):
         if not user.is_authenticated or user.is_superuser:
@@ -95,6 +97,8 @@ class DataScopeService:
     def _scopes_for_user(user):
         if not user.is_authenticated or user.is_superuser:
             return []
+        if hasattr(user, DataScopeService._USER_SCOPE_CACHE):
+            return list(getattr(user, DataScopeService._USER_SCOPE_CACHE))
         groups = user.groups.all().prefetch_related("data_scope__allowed_operators", "data_scope__allowed_projects")
         scopes = []
         for group in groups:
@@ -102,5 +106,7 @@ class DataScopeService:
                 scopes.append(group.data_scope)
             except GroupDataScope.DoesNotExist:
                 # Missing configuration is always restrictive.
-                return []
+                scopes = []
+                break
+        setattr(user, DataScopeService._USER_SCOPE_CACHE, tuple(scopes))
         return scopes

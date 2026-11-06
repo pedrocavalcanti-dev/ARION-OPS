@@ -16,7 +16,7 @@ from django.utils import timezone
 
 from aplicativos.auditoria.models import AuditEvent
 from .forms import OTRSConfigurationForm
-from .models import ExternalAPIHealthCheck, ExternalAPIIntegration, Integration, IntegrationRun, IntegrationSyncState
+from .models import CMDBLinkMirror, ExternalAPIHealthCheck, ExternalAPIIntegration, Integration, IntegrationRun, IntegrationSyncState, OTRSTicket
 from .clients.brevo_smtp import SMTPResult
 from .services.errors import (
     OTRSAuthenticationError,
@@ -63,6 +63,28 @@ class IntegrationPermissionTests(TestCase):
         self.assertEqual(self.client.post(reverse("configuracoes:integracoes:arion-test"), {
             "engine": "sqlite", "database": "arion.sqlite3",
         }).status_code, 403)
+
+
+    def test_integration_overview_counts_respect_data_scope(self):
+        CMDBLinkMirror.objects.create(
+            source_config_item_id="integration-out-of-scope",
+            contracting_client="Operadora restrita", legacy_project="Projeto restrito",
+        )
+        user = get_user_model().objects.create_user(username="integration-scoped-viewer", password="safe-password-2")
+        content_type = ContentType.objects.get(app_label="configuracoes", model="groupdatascope")
+        permission = Permission.objects.get(content_type=content_type, codename="view_integrations")
+        group = Group.objects.create(name="Scoped Integration Viewer")
+        group.permissions.add(permission)
+        user.groups.add(group)
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("configuracoes:integrations"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["cmdb_links"], 0)
+        self.assertEqual(response.context["cmdb_operators"], 0)
+        self.assertEqual(response.context["otrs_tickets"], 0)
+        self.assertEqual(response.context["quality_confirmed_links"], 0)
 
 
 class IntegrationConfigurationTests(TestCase):
@@ -180,21 +202,23 @@ class IntegrationConfigurationTests(TestCase):
 
     @patch("aplicativos.integracoes.services.arion_database.get_secret_protector")
     @patch("aplicativos.integracoes.services.arion_database.config_path")
-    def test_arion_mysql_config_encrypts_secret_and_test_does_not_save_it(self, database_config_path, get_protector):
+    def test_arion_mysql_config_reads_secret_from_environment_and_test_does_not_save_it(self, database_config_path, get_protector):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_file = Path(temp_dir) / "var" / "database-config.json"
             database_config_path.return_value = config_file
             get_protector.return_value = self.protector
-            saved = self.client.post(reverse("configuracoes:integracoes:arion-save"), {
-                "host": "127.0.0.1", "port": "3306", "database": "arion_geo",
-                "user": "arion", "password": "private-db-password", "timeout": "10",
-            })
+            with patch.dict("os.environ", {"DATABASE_PASSWORD": "private-db-password"}):
+                saved = self.client.post(reverse("configuracoes:integracoes:arion-save"), {
+                    "host": "127.0.0.1", "port": "3306", "database": "arion_geo",
+                    "user": "arion", "timeout": "10",
+                })
             self.assertEqual(saved.status_code, 302)
             raw = config_file.read_text(encoding="utf-8")
             self.assertNotIn("private-db-password", raw)
-            self.assertIn(self.protector.protect("private-db-password"), raw)
+            self.assertIn('"password_source": "environment"', raw)
 
-            with patch("aplicativos.integracoes.views.password_for_connection_test", return_value="private-db-password") as password, \
+            with patch.dict("os.environ", {"DATABASE_PASSWORD": "private-db-password"}), \
+                 patch("aplicativos.integracoes.views.password_for_connection_test", return_value="private-db-password") as password, \
                  patch("aplicativos.integracoes.views.test_mysql_connection", return_value={"database": "arion_geo", "version": "8.4.2"}) as test_connection:
                 response = self.client.post(reverse("configuracoes:integracoes:arion-test"), {
                     "host": "127.0.0.1", "port": "3306", "database": "arion_geo",
@@ -418,6 +442,7 @@ class IntegrationConfigurationTests(TestCase):
         self.assertEqual(client.username, "new-user")
         self.assertEqual(client.password, "replacement")
 
+    @override_settings(OTRS_LEGACY_NO_TLS_HOST="200.174.198.133")
     @patch("aplicativos.integracoes.views.get_secret_protector")
     def test_save_otrs_configuration_preserves_allow_insecure_remote_and_databases(self, get_protector):
         get_protector.return_value = self.protector
@@ -476,6 +501,14 @@ class IntegrationConfigurationTests(TestCase):
         self.assertTrue(AuditEvent.objects.filter(action="INTEGRATION_ENABLED").exists())
 
     def test_home_and_detail_pages_render_without_exposing_database_path(self):
+        Integration.objects.update_or_create(
+            key=Integration.Key.OTRS,
+            defaults={
+                "name": "OTRS MySQL", "kind": "MySQL", "username": "readonly",
+                "secret_ciphertext": "DO-NOT-RENDER-INTEGRATION-SECRET",
+                "config": {"host": "db.example", "database": "otrs"},
+            },
+        )
         home = self.client.get(reverse("configuracoes:integrations"))
         self.assertEqual(home.status_code, 200)
         self.assertContains(home, "NOC - ATACADO")
@@ -486,6 +519,11 @@ class IntegrationConfigurationTests(TestCase):
         self.assertContains(home, "CMDB ServiceUp")
         self.assertContains(home, "Banco Arion")
         self.assertContains(home, "Espelhos operacionais locais")
+        self.assertContains(home, "Registros processados")
+        self.assertContains(home, "Configura")
+        self.assertContains(home, "Diagn")
+        self.assertNotContains(home, "DO-NOT-RENDER-INTEGRATION-SECRET")
+        self.assertNotContains(home, "db.example")
         self.assertNotContains(home, "FONTE ATUAL")
         self.assertNotContains(home, "Base CMDB XLSX")
         self.assertNotContains(home, "Desktop\\ARION-ATACADO-GEO")
@@ -496,6 +534,24 @@ class IntegrationConfigurationTests(TestCase):
             with self.subTest(route=name):
                 response = self.client.get(reverse(name))
                 self.assertEqual(response.status_code, 200)
+
+    def test_integration_overview_backlog_excludes_scheduled_tickets(self):
+        for external_id, status in ((9101, "OPEN"), (9102, "PENDING"), (9103, "SCHEDULED")):
+            OTRSTicket.objects.create(
+                external_id=external_id,
+                ticket_number=f"2026{external_id}",
+                queue_external_id=1,
+                queue_name="NOC - ATACADO",
+                external_state_id=external_id,
+                external_state_name=status,
+                business_status=status,
+            )
+
+        response = self.client.get(reverse("configuracoes:integrations"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["otrs_tickets"], 3)
+        self.assertEqual(response.context["otrs_open"], 2)
 
     @patch("aplicativos.integracoes.views._otrs_client")
     @patch("aplicativos.integracoes.views.get_secret_protector")

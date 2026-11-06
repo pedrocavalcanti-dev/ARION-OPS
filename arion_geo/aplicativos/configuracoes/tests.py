@@ -134,7 +134,7 @@ class AccountSettingsTests(TestCase):
         self.assertContains(response, "Plataforma Operacional — NOC Atacado")
         self.assertContains(response, "Concepção e desenvolvimento")
         self.assertContains(response, "Pedro Cavalcanti")
-        self.assertContains(response, "Versão 1.3.0")
+        self.assertContains(response, "Versão 1.3.1")
         self.assertContains(response, "Django · MySQL · JavaScript · ECharts · Mapbox")
         self.assertContains(response, "Controle de acesso · Data Scope · auditoria · espelhos locais OTRS/CMDB")
         self.assertContains(response, "ARION Serviços de Telecomunicações")
@@ -327,6 +327,11 @@ class AccessControlTests(TestCase):
         self.assertContains(response, "Administração")
         self.assertContains(response, "Gerenciar usuários")
         self.assertNotContains(response, "configuracoes.manage_users")
+        self.assertContains(response, "data-permission-search")
+        self.assertContains(response, "data-permission-expand")
+        self.assertContains(response, "data-permission-collapse")
+        self.assertContains(response, "data-permission-selected-count")
+        self.assertContains(response, "js/configuracoes/group-access.js")
 
     def test_system_admin_permission_set_cannot_be_removed_from_last_admin_group(self):
         self.client.force_login(self.admin)
@@ -337,6 +342,8 @@ class AccessControlTests(TestCase):
         group.refresh_from_db()
         self.assertTrue(group.permissions.filter(codename="manage_users").exists())
         self.assertContains(response, "último perfil de sistema ativo")
+        self.assertContains(response, 'data-has-errors="true"')
+        self.assertContains(response, "data-permission-unsaved")
 
     def test_last_active_system_administrator_cannot_be_deactivated(self):
         self.assertTrue(is_system_admin(self.admin))
@@ -394,7 +401,7 @@ class DataScopeIntegrationTests(TestCase):
 
     def test_scope_is_applied_before_cockpit_filters_and_options(self):
         from aplicativos.integracoes.models import OTRSTicket, OTRSTicketConfigItem
-        ticket = OTRSTicket.objects.create(external_id=9101, ticket_number="SCOPE-9101", queue_external_id=107, queue_name="NOC - ATACADO", external_state_id=1, external_state_name="em atendimento", business_status="OPEN", is_business_open=True, is_present_in_queue=True, source_created_at=timezone.now())
+        ticket = OTRSTicket.objects.create(external_id=9101, ticket_number="SCOPE-9101", queue_external_id=107, queue_name="NOC - ATACADO", external_state_id=1, external_state_name="em atendimento", business_status="OPEN", is_business_open=True, is_present_in_queue=True, source_created_at=timezone.now().replace(year=2026, month=10, day=15))
         OTRSTicketConfigItem.objects.create(ticket=ticket, config_item_id="scope-1", cmdb_link=self.links[0], relation_type="DependsOn", relation_state="Valid")
         response = self.client.post(reverse("analytics-query"), data=json.dumps({"metric": "links_affected", "group_by": "operator", "period_from": "2026-10", "period_to": "2026-10", "period": "2026-10", "filters": {}}), content_type="application/json")
         self.assertEqual(response.status_code, 200)

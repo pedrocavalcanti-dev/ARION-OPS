@@ -41,7 +41,7 @@
       ? '<ul class="drawer-data-list">' + rows.map(item => {
           const extras = [];
           if (item.links_affected != null) extras.push(num(item.links_affected) + " " + unit(item.links_affected, "link afetado", "links afetados"));
-          if (item.over_24h != null && item.over_24h) extras.push(num(item.over_24h) + " >24h");
+          if (item.over_24h != null && item.over_24h) extras.push(num(item.over_24h) + " resolvidos >24h");
           if (item.procedentes != null) extras.push(num(item.procedentes) + " procedentes");
           if (item.improcedentes != null) extras.push(num(item.improcedentes) + " improcedentes");
           return '<li><div class="drawer-dimension-copy"><strong>' + escapeHtml(item[label]) + '</strong>' + (extras.length ? '<small class="drawer-dimension-meta">' + extras.map(value => '<span>' + escapeHtml(value) + '</span>').join("") + '</small>' : "") + '</div><b>' + num(item[amount]) + ' chamados</b></li>';
@@ -60,17 +60,17 @@
   }
 
   function historyChart(items = []) {
-    if (!items.length) return '<p class="drawer-empty-note">Sem hist\u00f3rico suficiente para esta compara\u00e7\u00e3o.</p>';
-    const max = Math.max(1, ...items.map(item => Number(item.score) || 0));
+    const available = items.filter(item => item.score != null);
+    if (!available.length) return '<p class="drawer-empty-note">Sem historico comparativo suficiente.</p>';
     const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-    return '<div class="history-bars" role="list" aria-label="Evolu\u00e7\u00e3o mensal do \u00cdndice ARION">' + items.map((item, index) => {
+    return '<div class="history-bars" role="list" aria-label="Evolucao mensal do score operacional">' + available.map((item, index) => {
       const value = Number(item.score) || 0;
-      const previous = index ? Number(items[index - 1].score) || 0 : value;
-      const trend = index === 0 ? "base" : value > previous + 2 ? "worse" : value < previous - 2 ? "better" : "stable";
-      const trendLabel = trend === "worse" ? "\u2191 Piorou" : trend === "better" ? "\u2193 Melhorou" : trend === "stable" ? "\u2192 Est\u00e1vel" : "Base";
+      const previous = index ? Number(available[index - 1].score) || 0 : value;
+      const trend = index === 0 ? "base" : value > previous + 2 ? "better" : value < previous - 2 ? "worse" : "stable";
+      const trendLabel = trend === "better" ? "Melhorou" : trend === "worse" ? "Piorou" : trend === "stable" ? "Estavel" : "Base";
       const month = Number(item.month.split("-")[1]);
-      const height = Math.max(4, value / max * 100);
-      const label = (names[month - 1] || item.month) + " \u00b7 " + score(value) + " pontos \u00b7 " + trendLabel;
+      const height = Math.max(4, value);
+      const label = (names[month - 1] || item.month) + " - " + score(value) + " pontos - " + trendLabel;
       return '<div role="listitem" aria-label="' + escapeHtml(label) + '"><b>' + score(value) + '</b><span class="history-trend history-trend--' + trend + '">' + trendLabel + '</span><div class="history-bar-track" aria-hidden="true"><i style="height:' + height + '%"></i></div><small>' + (names[month - 1] || item.month) + '</small></div>';
     }).join("") + '</div>';
   }
@@ -83,10 +83,10 @@
     const review = data.review
       ? '<p class="responsibility-review">Revisar responsabilidade \u00b7 incid\u00eancia alta de Improcedentes no recorte.</p>'
       : "";
-    return '<section class="drawer-section responsibility-section"><header><h3>Responsabilidade dos chamados</h3><small title="A proced\u00eancia vem do fechamento do chamado no OTRS. Nesta vers\u00e3o \u00e9 exibida para an\u00e1lise e ainda n\u00e3o altera o \u00cdndice ARION V2.">ORIGEM: OTRS \u00b7 INFORMATIVO</small></header>' +
+    return '<section class="drawer-section responsibility-section"><header><h3>Responsabilidade dos chamados</h3><small title="A proced\u00eancia vem do fechamento do chamado no OTRS. Nesta vers\u00e3o \u00e9 exibida para an\u00e1lise e n\u00e3o altera o score operacional.">ORIGEM: OTRS \u00b7 INFORMATIVO</small></header>' +
       '<div class="responsibility-kpis"><div><span>Procedentes</span><b>' + num(data.procedentes) + '</b></div><div><span>Improcedentes</span><b>' + num(data.improcedentes) + '</b></div><div><span>Indeterminados</span><b>' + num(data.indeterminados) + '</b></div><div><span>Taxa de proced\u00eancia</span><b>' + pct(data.procedure_rate) + '</b></div></div>' +
       '<div class="responsibility-bar" role="img" aria-label="' + num(data.procedentes) + ' procedentes, ' + num(data.improcedentes) + ' improcedentes, ' + num(data.indeterminados) + ' indeterminados"><i class="responsibility-bar--procedente" style="width:' + positive + '%"></i><i class="responsibility-bar--improcedente" style="width:' + negative + '%"></i><i class="responsibility-bar--unknown" style="width:' + unknown + '%"></i></div>' +
-      '<small class="aging-disclaimer">A taxa de proced\u00eancia usa somente classifica\u00e7\u00f5es conhecidas. A categoria n\u00e3o determina culpa nem altera o \u00cdndice V2.</small>' + review + '</section>';
+      '<small class="aging-disclaimer">A taxa de proced\u00eancia usa somente classifica\u00e7\u00f5es conhecidas. A categoria n\u00e3o determina culpa nem altera o score operacional.</small>' + review + '</section>';
   }
 
   function linkRows(items = []) {
@@ -97,7 +97,7 @@
       url.searchParams.set("config_item_id", item.config_item_id);
       const badges = [];
       if (item.recurrent) badges.push('<span class="is-recurrent">Reincidente</span>');
-      if (Number(item.over_24h) > 0) badges.push('<span class="is-aged">' + num(item.over_24h) + ' acima de 24h</span>');
+      if (Number(item.over_24h) > 0) badges.push('<span class="is-aged">' + num(item.over_24h) + ' resolvidos &gt;24h</span>');
       if (!badges.length) badges.push('<span>Sem reincid\u00eancia</span>');
       return '<article><div class="drawer-link-main"><a href="' + escapeHtml(url.toString()) + '">' + escapeHtml(item.name) + '</a><small>' + escapeHtml(item.state || "UF n\u00e3o informada") + ' \u00b7 CI ' + escapeHtml(item.config_item_id) + '</small></div><span class="drawer-link-count">' + num(item.tickets) + ' ' + unit(item.tickets, "chamado", "chamados") + '</span><div class="drawer-link-badges">' + badges.join("") + '</div><small class="drawer-link-responsibility">' + num(item.procedentes) + ' procedentes \u00b7 ' + num(item.improcedentes) + ' improcedentes</small></article>';
     }).join("") + '</div>';
@@ -122,7 +122,7 @@
         (item.ticket_page > 1 ? '<button type="button" class="ranking-button ranking-button--quiet" data-ticket-page="' + (item.ticket_page - 1) + '">Anterior</button>' : "") +
         (item.ticket_page < item.ticket_pages ? '<button type="button" class="ranking-button ranking-button--quiet" data-ticket-page="' + (item.ticket_page + 1) + '">Pr\u00f3xima</button>' : "") + '</div>';
     }
-    return '<section class="drawer-section drawer-tickets-section"><header><h3>Chamados que comp\u00f5em a an\u00e1lise</h3><small>' + num(item.ticket_records_total) + ' ' + unit(item.ticket_records_total, "chamado", "chamados") + '</small></header><div class="ticket-table-scroll"><table class="drawer-ticket-table"><thead><tr><th>Chamado</th><th>Data</th><th>Cliente</th><th>Projeto</th><th>UF</th><th>Status</th><th>Motivo</th><th>Responsabilidade</th><th>&gt;24h</th><th>Link</th></tr></thead><tbody>' + body + '</tbody></table></div><div class="ticket-page-actions">' + controls + '</div></section>';
+    return '<section class="drawer-section drawer-tickets-section"><header><h3>Chamados que comp\u00f5em a an\u00e1lise</h3><small>' + num(item.ticket_records_total) + ' ' + unit(item.ticket_records_total, "chamado", "chamados") + '</small></header><div class="ticket-table-scroll"><table class="drawer-ticket-table"><thead><tr><th>Chamado</th><th>Data</th><th>Cliente</th><th>Projeto</th><th>UF</th><th>Status</th><th>Motivo</th><th>Responsabilidade</th><th>Dura\u00e7\u00e3o &gt;24h</th><th>Link</th></tr></thead><tbody>' + body + '</tbody></table></div><div class="ticket-page-actions">' + controls + '</div></section>';
   }
 
   function renderDetail(item) {
@@ -137,38 +137,44 @@
     cockpit.searchParams.set("provider", item.name);
     const responsibility = item.responsibility || {};
     const overviewMetric = (label, value) => '<div><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>';
-    const summary = '<section class="drawer-score-summary"><div class="drawer-score-main"><span title="Indicador auxiliar baseado nos dados operacionais disponíveis. Os critérios definitivos serão definidos com a operação.">Indicador operacional</span><strong>' + score(item.risk_score) + '<small>/100</small></strong><em class="risk-pill risk-pill--' + escapeHtml(item.risk_class) + '">' + escapeHtml(item.risk_label) + '</em></div><div class="drawer-overview">' +
+    const scoreValue = item.operational_score == null ? "\u2014" : score(item.operational_score);
+    const scoreLabel = item.operational_score_label || "Sem amostra suficiente";
+    const summary = '<section class="drawer-score-summary"><div class="drawer-score-main"><span title="Indice relativo aos provedores comparaveis no recorte selecionado.">Score operacional comparativo</span><strong>' + scoreValue + '<small>/100</small></strong><em class="risk-pill risk-pill--' + escapeHtml(item.operational_score_class || "no-occurrences") + '">' + escapeHtml(scoreLabel) + '</em></div><div class="drawer-overview">' +
       overviewMetric("Links na CMDB", num(item.links_total) + " " + unit(item.links_total, "link", "links")) +
-      overviewMetric("Chamados", num(item.tickets)) +
-      overviewMetric("Chamados / 100 links CMDB", item.tickets_per_100_active_links == null ? "—" : decimal.format(item.tickets_per_100_active_links)) +
-      overviewMetric("Tempo médio de resolução", item.avg_resolution_display || "—") +
-      overviewMetric("Links afetados", num(item.links_affected)) +
-      overviewMetric("Reincidentes", num(item.recurrent_links)) +
-      overviewMetric("ARION >24h", num(item.tickets_over_24h)) +
-      overviewMetric("Backlog", num(item.backlog_current)) + '</div></section>';
-    const sample = item.sample_small ? '<p class="small-sample"><span aria-hidden="true">!</span> Amostra pequena \u00b7 ' + num(item.links_total) + ' ' + unit(item.links_total, "link", "links") + '. A exposi\u00e7\u00e3o segue vis\u00edvel no c\u00e1lculo.</p>' : "";
-    const componentRow = (label, value, max, detail, note = "") => {
-      const points = Math.max(0, Math.min(max, Number(value) || 0));
+      overviewMetric("Chamados criados no periodo", num(item.tickets)) +
+      overviewMetric("Chamados / 100 links", item.tickets_per_100_active_links == null ? "\u2014" : decimal.format(item.tickets_per_100_active_links)) +
+      overviewMetric("Resolucoes >24h no periodo", num(item.tickets_over_24h) + " / " + num(item.resolution_tickets)) +
+      overviewMetric("Tempo medio de resolucao", item.avg_resolution_display || "\u2014") +
+      overviewMetric("Reincidencia", pct(item.recurrent_rate)) +
+      overviewMetric("Backlog atual OPEN/PENDING", num(item.backlog_current)) +
+      overviewMetric("Backlog atual >24h", num(item.aged_open)) + '</div></section>';
+    const sample = item.operational_score == null
+      ? '<p class="small-sample"><span aria-hidden="true">!</span> ' + escapeHtml(item.operational_score_reason || "Amostra ou comparacao insuficiente para calcular score.") + '</p>'
+      : (item.sample_small ? '<p class="small-sample"><span aria-hidden="true">!</span> Amostra pequena; o provedor permanece visivel em Mais links e nao recebe nota.</p>' : "");
+    const componentRow = (label, key, max, detail) => {
+      const points = Math.max(0, Math.min(max, Number((item.performance_components || {})[key]) || 0));
+      const percentile = (item.performance_percentiles || {})[key];
       const width = max ? Math.max(0, Math.min(100, points / max * 100)) : 0;
+      const note = percentile == null ? "" : "Percentil comparativo " + decimal.format(percentile);
       return '<article><div><h4>' + label + '</h4><b>' + score(points) + ' / ' + max + '</b></div><div class="component-track" role="progressbar" aria-label="' + label + '" aria-valuemin="0" aria-valuemax="' + max + '" aria-valuenow="' + points.toFixed(1) + '"><i style="width:' + width.toFixed(1) + '%"></i></div><p>' + escapeHtml(detail) + '</p>' + (note ? '<small>' + escapeHtml(note) + '</small>' : '') + '</article>';
     };
-    const components = '<section class="drawer-section"><h3>Risco atual · componentes do indicador</h3><div class="drawer-components drawer-components--v2">' +
-      componentRow("Impacto no NOC", item.impact_noc_score, 30, num(item.tickets) + " chamados \u00b7 " + num(item.links_affected) + " links afetados", "Volume e links afetados normalizados pelo P95 do conjunto filtrado.") +
-      componentRow("Base afetada", item.affected_base_score, 20, num(item.links_affected) + " de " + num(item.links_total) + " links \u00b7 " + decimal.format(item.affected_rate * 100) + "%") +
-      componentRow("Reincid\u00eancia", item.recurrent_score, 20, num(item.recurrent_links) + " de " + num(item.links_affected) + " links afetados \u00b7 " + decimal.format(item.recurrent_rate * 100) + "%") +
-      componentRow("ARION >24h", item.over_24h_score, 20, num(item.tickets_over_24h) + " de " + num(item.eligible_tickets) + " chamados avali\u00e1veis \u00b7 " + decimal.format(item.over_24h_rate * 100) + "%") +
-      componentRow("Backlog atual", item.backlog_score, 10, num(item.backlog_current) + " " + unit(item.backlog_current, "chamado", "chamados")) +
-      '</div><small class="aging-disclaimer">Os cinco componentes e a fórmula vigente permanecem inalterados. Links representam o snapshot atual completo da CMDB; chamados seguem o período selecionado. Este indicador é uma leitura auxiliar, e seus critérios definitivos serão definidos com a operação. O limite de 24h não representa necessariamente o SLA contratual.</small></section>';
+    const components = '<section class="drawer-section"><h3>Score operacional - composicao</h3><div class="drawer-components drawer-components--v2">' +
+      componentRow("Resolucoes >24h", "over_24h_rate", 30, num(item.tickets_over_24h) + " de " + num(item.resolution_tickets) + " resolvidos - " + pct(item.over_24h_rate)) +
+      componentRow("Tempo medio de resolucao", "avg_resolution_hours", 25, item.avg_resolution_display || "Sem duracao avaliavel") +
+      componentRow("Incidencia / 100 links", "tickets_per_100_links", 20, decimal.format(item.tickets_per_100_active_links || 0) + " chamados por 100 links CMDB") +
+      componentRow("Taxa de reincidencia", "recurrent_rate", 15, num(item.recurrent_links) + " de " + num(item.links_affected) + " links afetados - " + pct(item.recurrent_rate)) +
+      componentRow("Backlog atual / 100 links", "backlog_per_100_links", 10, decimal.format(item.backlog_per_100_links || 0) + " chamados OPEN/PENDING por 100 links") +
+      '</div><small class="aging-disclaimer">Cada contribuicao e o peso multiplicado por (100 menos o percentil do provedor no recorte). Maior score significa melhor desempenho relativo. Backlog e resolucoes usam periodos distintos; 24h nao e SLA contratual.</small></section>';
     const cockpitLink = '<footer class="drawer-actions"><a class="ranking-button ranking-button--primary" href="' + escapeHtml(base.toString()) + '">Ver links na Base</a><a class="ranking-button ranking-button--quiet" href="' + escapeHtml(cockpit.toString()) + '">Analisar no Cockpit</a></footer>';
     content.innerHTML = summary + sample + components + responsibilitySection(responsibility) +
-      '<section class="drawer-section"><h3>Evolu\u00e7\u00e3o do indicador operacional \u00b7 3 meses</h3>' + historyChart(item.history) + '</section>' +
+      '<section class="drawer-section"><h3>Evolu\u00e7\u00e3o do score operacional \u00b7 3 meses</h3>' + historyChart(item.history) + '</section>' +
       listSection("Projetos com mais ocorr\u00eancias", item.projects_top) +
       listSection("Clientes com mais ocorr\u00eancias", item.clients_top) +
       stateList(item.ufs_top) +
       listSection("Motivos normalizados", item.reasons_top) +
       '<section class="drawer-section"><h3>Links mais problem\u00e1ticos</h3>' + linkRows(item.problematic_links) + '</section>' +
       ticketTable(item) +
-      '<section class="drawer-section"><h3>Chamados ARION &gt;24h</h3>' + simpleTicketList(item.over_24h_tickets) + '</section>' +
+      '<section class="drawer-section"><h3>Resolvidos com dura\u00e7\u00e3o &gt;24h</h3>' + simpleTicketList(item.over_24h_tickets) + '</section>' +
       '<section class="drawer-section"><h3>Backlog atual</h3>' + simpleTicketList(item.backlog_tickets) + '</section>' +
       cockpitLink +
       '<p class="drawer-readonly-note">Fonte: espelhos locais OTRS/CMDB \u00b7 consulta somente leitura \u00b7 disponibilidade n\u00e3o calculada.</p>';
@@ -176,7 +182,7 @@
 
   function simpleTicketList(items = []) {
     if (!items.length) return '<p class="drawer-empty-note">Nenhum chamado neste grupo.</p>';
-    return '<div class="drawer-ticket-list">' + items.slice(0, 50).map(item => '<article><div><strong>' + escapeHtml(item.number) + '</strong><span>' + escapeHtml(item.status) + (item.priority ? ' \u00b7 ' + escapeHtml(item.priority) : '') + '</span></div><p>' + escapeHtml(item.title || "Sem t\u00edtulo") + '</p><small>' + escapeHtml(item.created_at) + (item.operational_end_at ? ' \u00b7 fim operacional ' + escapeHtml(item.operational_end_at) : '') + (item.terminal_at ? ' \u00b7 terminal OTRS ' + escapeHtml(item.terminal_at) : '') + (item.reason ? ' \u00b7 ' + escapeHtml(item.reason) : '') + '</small>' + (item.over_24h ? '<em>ARION &gt;24h</em>' : '') + '</article>').join("") + '</div>';
+    return '<div class="drawer-ticket-list">' + items.slice(0, 50).map(item => '<article><div><strong>' + escapeHtml(item.number) + '</strong><span>' + escapeHtml(item.status) + (item.priority ? ' \u00b7 ' + escapeHtml(item.priority) : '') + '</span></div><p>' + escapeHtml(item.title || "Sem t\u00edtulo") + '</p><small>' + escapeHtml(item.created_at) + (item.operational_end_at ? ' \u00b7 fim operacional ' + escapeHtml(item.operational_end_at) : '') + (item.terminal_at ? ' \u00b7 terminal OTRS ' + escapeHtml(item.terminal_at) : '') + (item.reason ? ' \u00b7 ' + escapeHtml(item.reason) : '') + '</small>' + (item.over_24h ? '<em>Dura\u00e7\u00e3o &gt;24h</em>' : '') + '</article>').join("") + '</div>';
   }
 
   function showTicket(ticket) {
@@ -184,7 +190,7 @@
     ticketTitle.textContent = ticket.number || "Chamado";
     const links = (ticket.links || []).map(link => '<li><strong>' + escapeHtml(link.name) + '</strong><span>CI ' + escapeHtml(link.config_item_id) + ' \u00b7 ' + escapeHtml(link.project || "Projeto n\u00e3o identificado") + ' \u00b7 ' + escapeHtml(link.city ? link.city + " / " + (link.state || "UF n\u00e3o informada") : link.state || "UF n\u00e3o informada") + '</span></li>').join("");
     const why = (ticket.why || []).map(reason => '<li>' + escapeHtml(reason) + '</li>').join("");
-    ticketContent.innerHTML = '<section class="ticket-modal-section"><h3>Dados do chamado</h3><dl><div><dt>N\u00famero</dt><dd>' + escapeHtml(ticket.number) + '</dd></div><div><dt>T\u00edtulo OTRS</dt><dd>' + escapeHtml(ticket.title || "Sem t\u00edtulo") + '</dd></div><div><dt>Cliente can\u00f4nico</dt><dd>' + escapeHtml(ticket.client || "\u2014") + '</dd></div><div><dt>Projeto can\u00f4nico</dt><dd>' + escapeHtml(ticket.project || "\u2014") + '</dd></div><div><dt>Provedor / ISP</dt><dd>' + escapeHtml(ticket.provider || "\u2014") + '</dd></div><div><dt>Cidade / UF</dt><dd>' + escapeHtml(ticket.city ? ticket.city + " / " + (ticket.state || "UF n\u00e3o informada") : ticket.state || "\u2014") + '</dd></div><div><dt>Status</dt><dd>' + escapeHtml(ticket.status || "\u2014") + '</dd></div><div><dt>Prioridade</dt><dd>' + escapeHtml(ticket.priority || "\u2014") + '</dd></div><div><dt>Criado em</dt><dd>' + escapeHtml(ticket.created_at || "\u2014") + '</dd></div><div><dt>Resolvido em</dt><dd>' + escapeHtml(ticket.resolved_at || "\u2014") + '</dd></div><div><dt>Terminal StateUpdate OTRS em</dt><dd>' + escapeHtml(ticket.terminal_at || "\u2014") + '</dd></div><div><dt>T\u00e9rmino operacional usado</dt><dd>' + escapeHtml(ticket.operational_end_at || "\u2014") + '</dd></div><div><dt>Origem do t\u00e9rmino operacional</dt><dd>' + escapeHtml(ticket.operational_end_source || "\u2014") + '</dd></div><div><dt>Dura\u00e7\u00e3o (horas)</dt><dd>' + (ticket.duration_hours == null ? "\u2014" : decimal.format(ticket.duration_hours)) + '</dd></div><div><dt>ARION &gt;24h</dt><dd>' + (ticket.over_24h ? "Sim" : "N\u00e3o") + '</dd></div><div><dt>C\u00f3digo / motivo de fechamento</dt><dd>' + escapeHtml(ticket.closing_code_raw || "\u2014") + (ticket.reason ? " \u00b7 " + escapeHtml(ticket.reason) : "") + '</dd></div><div><dt>Responsabilidade</dt><dd>' + escapeHtml(ticket.responsibility_class || "INDETERMINADO") + (ticket.responsibility_raw ? ' \u00b7 valor raw: ' + escapeHtml(ticket.responsibility_raw) : '') + '</dd></div></dl></section>' +
+    ticketContent.innerHTML = '<section class="ticket-modal-section"><h3>Dados do chamado</h3><dl><div><dt>N\u00famero</dt><dd>' + escapeHtml(ticket.number) + '</dd></div><div><dt>T\u00edtulo OTRS</dt><dd>' + escapeHtml(ticket.title || "Sem t\u00edtulo") + '</dd></div><div><dt>Cliente can\u00f4nico</dt><dd>' + escapeHtml(ticket.client || "\u2014") + '</dd></div><div><dt>Projeto can\u00f4nico</dt><dd>' + escapeHtml(ticket.project || "\u2014") + '</dd></div><div><dt>Provedor / ISP</dt><dd>' + escapeHtml(ticket.provider || "\u2014") + '</dd></div><div><dt>Cidade / UF</dt><dd>' + escapeHtml(ticket.city ? ticket.city + " / " + (ticket.state || "UF n\u00e3o informada") : ticket.state || "\u2014") + '</dd></div><div><dt>Status</dt><dd>' + escapeHtml(ticket.status || "\u2014") + '</dd></div><div><dt>Prioridade</dt><dd>' + escapeHtml(ticket.priority || "\u2014") + '</dd></div><div><dt>Criado em</dt><dd>' + escapeHtml(ticket.created_at || "\u2014") + '</dd></div><div><dt>Resolvido em</dt><dd>' + escapeHtml(ticket.resolved_at || "\u2014") + '</dd></div><div><dt>Terminal StateUpdate OTRS em</dt><dd>' + escapeHtml(ticket.terminal_at || "\u2014") + '</dd></div><div><dt>T\u00e9rmino operacional usado</dt><dd>' + escapeHtml(ticket.operational_end_at || "\u2014") + '</dd></div><div><dt>Origem do t\u00e9rmino operacional</dt><dd>' + escapeHtml(ticket.operational_end_source || "\u2014") + '</dd></div><div><dt>Dura\u00e7\u00e3o (horas)</dt><dd>' + (ticket.duration_hours == null ? "\u2014" : decimal.format(ticket.duration_hours)) + '</dd></div><div><dt>Dura\u00e7\u00e3o operacional &gt;24h</dt><dd>' + (ticket.over_24h ? "Sim" : "N\u00e3o") + '</dd></div><div><dt>C\u00f3digo / motivo de fechamento</dt><dd>' + escapeHtml(ticket.closing_code_raw || "\u2014") + (ticket.reason ? " \u00b7 " + escapeHtml(ticket.reason) : "") + '</dd></div><div><dt>Responsabilidade</dt><dd>' + escapeHtml(ticket.responsibility_class || "INDETERMINADO") + (ticket.responsibility_raw ? ' \u00b7 valor raw: ' + escapeHtml(ticket.responsibility_raw) : '') + '</dd></div></dl></section>' +
       '<section class="ticket-modal-section"><h3>Links relacionados</h3><ul class="ticket-modal-links">' + (links || '<li>Sem links no espelho local.</li>') + '</ul></section>' +
       '<section class="ticket-modal-section"><h3>Por que este chamado participa desta an\u00e1lise?</h3><ul class="ticket-why-list">' + why + '</ul></section>' +
       '<p class="drawer-readonly-note">Apenas campos operacionais espelhados. Artigos, notas internas e dados de contato n\u00e3o s\u00e3o exibidos.</p>';
@@ -226,7 +232,7 @@
       if (!response.ok) throw new Error(item.error || "Falha ao consultar o provedor.");
       if (String(providerId) !== activeProvider) return;
       title.textContent = item.name;
-      subtitle.textContent = num(item.links_total) + " " + unit(item.links_total, "link", "links") + " \u00b7 " + score(item.risk_score) + " / 100 \u00b7 " + item.risk_label;
+      subtitle.textContent = num(item.links_total) + " " + unit(item.links_total, "link", "links") + " \u00b7 " + (item.operational_score == null ? "Sem score" : score(item.operational_score)) + " / 100 \u00b7 " + (item.operational_score_label || item.operational_score_reason);
       renderDetail(item);
     } catch (_) {
       if (String(providerId) !== activeProvider) return;

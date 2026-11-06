@@ -15,6 +15,9 @@ from aplicativos.configuracoes.permissions import access_required
 from aplicativos.integracoes.models import IntegrationSyncState, OTRSTicketConfigItem
 from aplicativos.integracoes.services.analytics import LinkQueryService, TicketQueryService
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
+from aplicativos.integracoes.services.otrs_status import (
+    business_status_label, normalize_business_status,
+)
 from aplicativos.integracoes.services.semantics import provider_label
 
 from .forms import (
@@ -182,6 +185,7 @@ def detail(request, external_id):
     state_choices = TicketTracking.InternalStatus.choices
     default_status = TicketTracking.InternalStatus.OPEN
     status_labels = dict(state_choices)
+    business_status = normalize_business_status(ticket.business_status)
     initial = {
         "internal_status": tracking.internal_status if tracking else default_status,
         "assigned_to": tracking.assigned_to_id if tracking else None,
@@ -199,9 +203,9 @@ def detail(request, external_id):
             "title": ticket.title,
             "queue": ticket.queue_name,
             "external_state": ticket.external_state_name,
-            "business_status": ticket.business_status,
-            "operational": ticket.business_status in ACTIVE_STATES,
-            "status_label": STATUS_LABELS.get(ticket.business_status, ticket.business_status),
+            "business_status": business_status,
+            "operational": business_status in ACTIVE_STATES,
+            "status_label": business_status_label(business_status),
             "priority": ticket.priority_name or "Não informada",
             "created_at": timezone.localtime(ticket.source_created_at).isoformat() if ticket.source_created_at else None,
             "age_label": format_age(age) if age is not None else "Sem data de criação",

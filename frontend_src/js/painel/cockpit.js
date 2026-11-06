@@ -8,7 +8,7 @@
   const DEFAULT_START = page.dataset.defaultStart;
   const DEFAULT_END = page.dataset.defaultEnd;
   const DEFAULTS = { scope: "support", metric: "tickets", start: DEFAULT_START, end: DEFAULT_END, compare_to: "", selected_month: "", group_by: "provider", chart_view: "all", chart_origin: "consolidated", include_cancelled: true, include_improcedente: true, detail_page: 1, ticket_page: 1, ticket_page_size: 25, ticket_search: "", filters: Object.fromEntries(FILTER_KEYS.map(key => [key, "all"])) };
-  const METRICS = { tickets: "Tickets criados", open_tickets: "Em atendimento no per\u00edodo", pending_tickets: "Pendentes no per\u00edodo", scheduled_tickets: "Agendados no per\u00edodo", resolved_tickets: "Resolvidos no per\u00edodo", closed_tickets: "Resolvidos no per\u00edodo", resolved_closed_tickets: "Resolvidos + Encerrados", canceled_tickets: "Cancelados no per\u00edodo", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
+  const METRICS = { tickets: "Tickets criados", open_tickets: "Em atendimento no per\u00edodo", pending_tickets: "Pendentes no per\u00edodo", scheduled_tickets: "Agendados no per\u00edodo", resolved_tickets: "Resolvidos no per\u00edodo", closed_tickets: "Resolvidos no per\u00edodo", resolved_closed_tickets: "Resolvidos no per\u00edodo", canceled_tickets: "Cancelados no per\u00edodo", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
   const DIMENSIONS = { provider: "Provedor", uf: "UF", status: "Status", source_state: "Situa\u00e7\u00e3o OTRS", sla: "SLA", priority: "Prioridade", termination_reason: "Motivo de encerramento", cancellation_stage: "Etapa do cancelamento", operational_origin: "Origem", project: "Projeto / cliente", month: "Per\u00edodo" };
   const FILTER_LABELS = { ...DIMENSIONS, service: "Servi\u00e7o", stage: "Etapa", origin: "Origem", responsibility: "Proced\u00eancia", responsible: "Respons\u00e1vel", queue: "Fila", age_bucket: "Aging" };
   const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
@@ -500,10 +500,10 @@
     dimensionGrid.innerHTML = dimensions.length ? dimensions.map(renderDimension).join("") : '<p class="cockpit-empty">Não há dimensões complementares relevantes para esta consulta.</p>';
     renderCalendar(data.temporal);
     const base = page.querySelector("[data-period-semantics]");
-    const baseDescription = data.metric === "canceled_tickets" ? "Período baseado no cancelamento dos tickets." : data.metric === "backlog" ? "Snapshot atual do estoque de tickets ativos." : ["resolved_tickets", "closed_tickets", "resolved_closed_tickets"].includes(data.metric) ? "Período baseado na resolução dos tickets." : "Período baseado na criação dos tickets.";
+    const baseDescription = data.metric === "canceled_tickets" ? "Período baseado no cancelamento dos tickets." : data.metric === "backlog" ? "Snapshot atual de tickets OPEN e PENDING." : ["resolved_tickets", "closed_tickets", "resolved_closed_tickets"].includes(data.metric) ? "Período baseado na resolução dos tickets." : "Período baseado na criação dos tickets.";
     base.title = baseDescription;
     base.setAttribute("aria-label", baseDescription);
-    const metricTitles = { tickets: "Tickets criados", open_tickets: "Tickets em atendimento", pending_tickets: "Tickets pendentes", scheduled_tickets: "Tickets agendados", resolved_tickets: "Tickets resolvidos", closed_tickets: "Tickets encerrados", resolved_closed_tickets: "Tickets resolvidos e encerrados", canceled_tickets: "Tickets cancelados", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog" };
+    const metricTitles = { tickets: "Tickets criados", open_tickets: "Tickets em atendimento", pending_tickets: "Tickets pendentes", scheduled_tickets: "Tickets agendados", resolved_tickets: "Tickets resolvidos", closed_tickets: "Tickets resolvidos", resolved_closed_tickets: "Tickets resolvidos", canceled_tickets: "Tickets cancelados", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog" };
     const facets = [
       ["provider", "provedor"], ["termination_reason", "motivo"], ["stage", "etapa"], ["origin", "origem"], ["uf", "UF"],
     ];

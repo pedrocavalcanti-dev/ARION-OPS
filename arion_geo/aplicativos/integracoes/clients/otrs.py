@@ -377,13 +377,24 @@ class OTRSReadOnlyClient:
     def _build_ssl_context(self):
         if not self.is_loopback_host:
             if not self.use_tls:
-                if (
-                    not self.allow_insecure_remote
-                    or not self.legacy_no_tls_host
-                    or self.host.casefold() != self.legacy_no_tls_host
-                ):
+                legacy_host_match = bool(
+                    self.legacy_no_tls_host
+                    and self.host.casefold() == self.legacy_no_tls_host
+                )
+                if not self.allow_insecure_remote or not self.legacy_no_tls_host or not legacy_host_match:
+                    if not self.allow_insecure_remote:
+                        error_code = "tls_legacy_opt_in_required"
+                    elif not self.legacy_no_tls_host:
+                        error_code = "tls_legacy_host_unconfigured"
+                    else:
+                        error_code = "tls_legacy_host_mismatch"
+                    logger.error(
+                        "OTRS TLS policy rejected connection tls_enabled=false insecure_remote_opt_in=%s "
+                        "legacy_host_configured=%s legacy_host_match=%s",
+                        self.allow_insecure_remote, bool(self.legacy_no_tls_host), legacy_host_match,
+                    )
                     raise OTRSTLSRequiredError(
-                        error_code="tls_policy_required",
+                        error_code=error_code,
                         technical_detail=(
                             "Transporte sem TLS exige opt-in explícito e correspondência ao host legado autorizado; "
                             "habilite TLS verificado ou utilize o túnel local configurado."
@@ -395,7 +406,7 @@ class OTRSReadOnlyClient:
                 return None
             if not self.ssl_verify:
                 raise OTRSTLSRequiredError(
-                    error_code="tls_policy_required",
+                    error_code="tls_verification_required",
                     technical_detail=(
                         "Política TLS obrigatória para host remoto (ssl_verify=False); "
                         "habilite TLS com verificação de certificado ou conecte via túnel local em 127.0.0.1."

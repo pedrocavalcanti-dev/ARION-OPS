@@ -30,7 +30,7 @@ Este índice é a referência para localizar campos pelo nome, model, tipo, orig
 | `queue_name` | OTRSTicket | `CharField(250)` | {{badge:OTRS}} | Nome da fila de origem. | Não |
 | `external_state_id` | OTRSTicket | `PositiveIntegerField` | {{badge:OTRS}} | ID do estado atual da origem. | Índice simples |
 | `external_state_name` / `external_state_type` | OTRSTicket | `CharField` | {{badge:OTRS}} | Nome e tipo fonte mantidos junto do status normalizado. | Não |
-| `business_status` | OTRSTicket | `CharField(16)` | {{badge:DERIVADO}} | OPEN, PENDING, SCHEDULED, RESOLVED, CLOSED, CANCELED ou UNKNOWN. | Índice simples e composto |
+| `business_status` | OTRSTicket | `CharField(16)` | {{badge:DERIVADO}} | OPEN, PENDING, SCHEDULED, RESOLVED, CANCELED ou UNKNOWN. CLOSED é aceito somente para leitura compatível de linhas legadas e normalizado pela migration 0014. | Índice simples e composto |
 | `is_business_open` | OTRSTicket | `BooleanField` | {{badge:DERIVADO}} | Verdadeiro para OPEN/PENDING/SCHEDULED. | Índice simples |
 | `source_created_at` | OTRSTicket | `DateTimeField` | {{badge:OTRS}} | `ticket.create_time`; coorte de criação. | Índice simples e composto |
 | `source_changed_at` | OTRSTicket | `DateTimeField` | {{badge:OTRS}} | `ticket.change_time`; cursor incremental. | Índice simples |
@@ -90,7 +90,7 @@ As relações, os tipos de coluna e as constraints completas estão em [Banco de
 ## Glossário operacional de contagens
 
 - **Tickets**: quantidade de IDs de chamados distintos no universo, estados, período e filtros definidos pela métrica em questão.
-- **Tickets ativos agora / backlog**: tickets presentes no snapshot e com `business_status` em `OPEN`, `PENDING` ou `SCHEDULED`, dentro da fila e do contexto da análise. Dashboard, Chamados e Ranking usam a operação `NOC - ATACADO`; Cockpit também permite Cancelamentos e Geral. Em Cancelamentos/Geral, tickets ativos sem etapa reconhecida são mostrados separadamente como `UNKNOWN`.
+- **Tickets ativos agora**: tickets presentes no snapshot e com `business_status` em `OPEN`, `PENDING` ou `SCHEDULED`, dentro da fila e do contexto da análise. **Backlog e aging** contam somente `OPEN` e `PENDING`. Dashboard, Chamados e Ranking usam a operação `NOC - ATACADO`; Cockpit também permite Cancelamentos e Geral. Em Cancelamentos/Geral, tickets ativos sem etapa reconhecida são mostrados separadamente como `UNKNOWN`.
 - **Backlog histórico no Cockpit**: série reconstruída por `backlog anterior + novos - encerrados`, disponível apenas quando os timestamps do mirror permitem reconstrução e reconciliação; não substitui o snapshot atual nem representa ciclos completos de reabertura.
 - **Links afetados**: quantidade distinta de Links CMDB locais presentes que têm ao menos uma relação Ticket–ConfigItem válida no conjunto de Tickets contado. Ticket sem CI ou CI sem Link local continua podendo contar como Ticket, mas não produz Link afetado.
 - **Links reincidentes**: quantidade distinta de Links que satisfazem a regra de reincidência do recorte, normalmente pelo menos dois Tickets distintos; não é sinônimo de Links afetados.

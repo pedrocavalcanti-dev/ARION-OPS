@@ -221,7 +221,17 @@ def group_edit(request, pk=None):
             messages.success(request, "Perfil de acesso salvo.")
             return redirect("configuracoes:group-edit", pk=saved.pk)
     scope = getattr(group, "data_scope", None) if group else None
-    return render(request, "configuracoes/admin/group_form.html", _admin_context(request, "groups", form=form, group=group, scope=scope, permission_groups=form.grouped_permissions()))
+    permission_groups = form.grouped_permissions()
+    permission_count = sum(len(rows) for rows in permission_groups.values())
+    selected_permission_count = sum(
+        row["selected"] for rows in permission_groups.values() for row in rows
+    )
+    return render(request, "configuracoes/admin/group_form.html", _admin_context(
+        request, "groups", form=form, group=group, scope=scope,
+        permission_groups=permission_groups,
+        permission_count=permission_count,
+        selected_permission_count=selected_permission_count,
+    ))
 
 
 @login_required

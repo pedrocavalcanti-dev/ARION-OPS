@@ -59,7 +59,7 @@ O processo `integration_worker` lê o OTRS via conexão MySQL somente leitura e 
 
 ## Status e universos analíticos
 
-Os estados normalizados de tickets são `OPEN`, `PENDING`, `SCHEDULED`, `RESOLVED`, `CLOSED`, `CANCELED` e `UNKNOWN`. O backlog atual compreende `OPEN + PENDING + SCHEDULED` no universo analisado; em Cancelamentos/Geral, tickets ativos sem classificação de etapa permanecem visíveis como `UNKNOWN` para reconciliação. O universo geral válido para métricas de performance considera `RESOLVED` e `CLOSED`, excluindo `CANCELED` e `UNKNOWN`.
+Os estados operacionais normalizados são `OPEN`, `PENDING`, `SCHEDULED`, `RESOLVED`, `CANCELED` e `UNKNOWN`. `CLOSED` existe apenas como alias aceito para linhas locais legadas e é tratado como `RESOLVED`; o estado bruto do OTRS permanece separado. Tickets ativos podem incluir `SCHEDULED`, mas o backlog e o aging atuais incluem somente `OPEN` e `PENDING`. Em Cancelamentos/Geral, tickets ativos sem classificação de etapa permanecem visíveis como `UNKNOWN` para investigação, fora do backlog. Métricas de resolução usam somente `RESOLVED`, incluindo o alias legado, e excluem `CANCELED` e `UNKNOWN`.
 
 Recortes de volume por período utilizam `source_created_at`; análises de término operacional e duração utilizam `resolved_at`, com `terminal_state_at` apenas como fallback quando a data de resolução não está preenchida. O Cockpit reconstrói séries históricas de backlog apenas quando o espelho possui datas suficientes e reconciliáveis com o estoque atual, sem fabricar transições históricas de fila não materializadas.
 

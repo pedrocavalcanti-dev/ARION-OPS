@@ -11,8 +11,12 @@ from django.utils import timezone
 
 from aplicativos.integracoes.models import OTRSTicketConfigItem
 from aplicativos.integracoes.services.analytics import (
-    BUSINESS_OPEN_STATUSES, LinkQueryService, TicketQueryService,
+    BACKLOG_STATUSES, LinkQueryService, TicketQueryService,
     operational_resolution_at,
+)
+from aplicativos.integracoes.services.otrs_status import (
+    RESOLVED_STATUS, business_status_query, business_statuses_query,
+    normalize_business_status,
 )
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
 from aplicativos.integracoes.services.semantics import provider_label
@@ -21,8 +25,8 @@ from aplicativos.painel.services.provider_logos import provider_logo
 
 
 VALID_STATES = AnalyticsQueryService.OPERATIONAL_VALID_STATES
-BACKLOG_STATES = BUSINESS_OPEN_STATUSES
-TERMINAL_STATES = ("RESOLVED", "CLOSED")
+BACKLOG_STATES = BACKLOG_STATUSES
+TERMINAL_STATES = (RESOLVED_STATUS,)
 SMALL_SAMPLE_LINK_THRESHOLD = 5
 BEST_RANKING_MIN_LINKS = 5
 BEST_RANKING_MIN_TICKETS = 3
@@ -52,6 +56,15 @@ RANKING_WEIGHTS = {
     "over_24h": 0.20,
     "backlog_current": 0.10,
 }
+OPERATIONAL_SCORE_WEIGHTS = {
+    "over_24h_rate": 0.30,
+    "avg_resolution_hours": 0.25,
+    "tickets_per_100_links": 0.20,
+    "recurrent_rate": 0.15,
+    "backlog_per_100_links": 0.10,
+}
+OPERATIONAL_SCORE_MIN_LINKS = 5
+OPERATIONAL_SCORE_MIN_RESOLUTIONS = 3
 
 PRIORITY_GROUPS = {
     "high": {"alto", "high"},
@@ -101,6 +114,18 @@ def _score_band(score, *, no_occurrences=False):
     if score >= 20:
         return "Baixo", "low-attention"
     return "Muito baixo", "good"
+
+
+def _performance_band(score):
+    if score >= 80:
+        return "Bom", "good"
+    if score >= 60:
+        return "Adequado", "low-attention"
+    if score >= 40:
+        return "Atenção", "attention"
+    if score >= 20:
+        return "Alerta", "high"
+    return "Crítico", "critical"
 
 
 def _percentile_scores(items, key):
@@ -198,14 +223,70 @@ def _apply_scores(rows, *, normalization_rows=None):
         row["risk_label"], row["risk_class"] = _score_band(
             row["risk_score"], no_occurrences=row["no_occurrence"],
         )
+    _apply_operational_scores(rows, reference_rows)
     return rows
+
+
+def _apply_operational_scores(rows, reference_rows):
+    """Build a comparative performance score from measured rates, never ticket volume alone."""
+    candidates = [
+        row for row in reference_rows
+        if row.get("links_total", 0) >= OPERATIONAL_SCORE_MIN_LINKS
+        and row.get("resolution_tickets", 0) >= OPERATIONAL_SCORE_MIN_RESOLUTIONS
+        and row.get("avg_resolution_hours") is not None
+        and row.get("created_date_missing_tickets", 0) == 0
+    ]
+    for row in rows:
+        label = "Sem amostra suficiente"
+        if row.get("links_total", 0) < OPERATIONAL_SCORE_MIN_LINKS:
+            reason = f"Amostra de links abaixo do mínimo de {OPERATIONAL_SCORE_MIN_LINKS}."
+        elif row.get("resolution_tickets", 0) < OPERATIONAL_SCORE_MIN_RESOLUTIONS:
+            reason = f"Menos de {OPERATIONAL_SCORE_MIN_RESOLUTIONS} resoluções avaliáveis no período."
+        elif row.get("created_date_missing_tickets", 0):
+            reason = "Há chamados relacionados sem data de criação; incidência e reincidência ficam indeterminadas."
+            label = "Dados insuficientes"
+        else:
+            reason = "Comparação indisponível neste recorte."
+        row.update({
+            "operational_score": None,
+            "operational_score_reason": reason,
+            "operational_score_label": label,
+            "operational_score_class": "no-occurrences",
+            "performance_components": {},
+            "performance_percentiles": {},
+            "best_eligible": False,
+        })
+    if len(candidates) < 2:
+        for row in rows:
+            if (row.get("links_total", 0) >= OPERATIONAL_SCORE_MIN_LINKS
+                    and row.get("resolution_tickets", 0) >= OPERATIONAL_SCORE_MIN_RESOLUTIONS
+                    and not row.get("created_date_missing_tickets", 0)):
+                row["operational_score_reason"] = "A comparação exige ao menos dois provedores com amostra suficiente."
+        return
+
+    percentiles = {
+        key: _percentile_scores(candidates, key)
+        for key in OPERATIONAL_SCORE_WEIGHTS
+    }
+    for index, row in enumerate(candidates):
+        ranked_metrics = {key: values[index] for key, values in percentiles.items()}
+        points = {
+            key: round(weight * (100 - ranked_metrics[key]), 1)
+            for key, weight in OPERATIONAL_SCORE_WEIGHTS.items()
+        }
+        row["performance_percentiles"] = {key: round(value, 1) for key, value in ranked_metrics.items()}
+        row["performance_components"] = points
+        row["operational_score"] = round(sum(points.values()), 1)
+        row["operational_score_reason"] = ""
+        row["operational_score_label"], row["operational_score_class"] = _performance_band(row["operational_score"])
+        row["best_eligible"] = True
 
 
 class RankingService:
     """Build monthly or rolling-three-month metrics in a bounded number of queries."""
 
     @classmethod
-    def build(cls, user, *, date_from, date_to, filters=None, now=None, detail_provider_id=None, detail_ticket_page=1, detail_ticket_page_size=10):
+    def build(cls, user, *, date_from, date_to, filters=None, now=None, detail_provider_id=None, detail_ticket_page=1, detail_ticket_page_size=10, include_export=True):
         filters = dict(filters or {})
         if filters.get("reason"):
             filters["reason"] = ClosingReasonCanonicalizer.key(filters["reason"])
@@ -231,7 +312,13 @@ class RankingService:
         provider_links = defaultdict(list)
         provider_names = {}
         provider_ids = defaultdict(set)
+        inventory_links_by_provider = defaultdict(int)
+        deployment_active_links_by_provider = defaultdict(int)
+        deployment_active_links_total = 0
         for link in links:
+            is_deployment_active = (link.deployment_state or "").casefold() in {"operacional", "operational"}
+            if is_deployment_active:
+                deployment_active_links_total += 1
             provider_name = (link.operator.name or "").strip() if link.operator_id else ""
             if not provider_name:
                 continue
@@ -239,33 +326,11 @@ class RankingService:
             provider_links[provider_key].append(link)
             provider_names.setdefault(provider_key, provider_name)
             provider_ids[provider_key].add(link.operator_id)
-
-        # Match the Dashboard's current CMDB snapshot: every present link counts,
-        # grouped by the resolved provider name, regardless of deployment state.
-        inventory_groups = list(
-            links_qs.filter(operator__isnull=False).exclude(operator__name="")
-            .values("operator__name").annotate(links=Count("pk", distinct=True)).order_by()
-        )
-        deployment_active_links_total = links_qs.filter(
-            Q(deployment_state__iexact="Operacional")
-            | Q(deployment_state__iexact="Operational")
-        ).count()
-        inventory_links_by_provider = defaultdict(int)
-        for group in inventory_groups:
-            provider_key = _provider_name_key(group["operator__name"])
-            inventory_links_by_provider[provider_key] += group["links"]
-            provider_names[provider_key] = group["operator__name"].strip()
-        operational_groups = list(
-            links_qs.filter(
-                Q(deployment_state__iexact="Operacional")
-                | Q(deployment_state__iexact="Operational"),
-                operator__isnull=False,
-            ).exclude(operator__name="").values("operator__name")
-            .annotate(links=Count("pk", distinct=True)).order_by()
-        )
-        deployment_active_links_by_provider = defaultdict(int)
-        for group in operational_groups:
-            deployment_active_links_by_provider[_provider_name_key(group["operator__name"])] += group["links"]
+            # The scoped CMDB rows are already materialized for provider mapping;
+            # reuse them for inventory totals instead of issuing three aggregates.
+            inventory_links_by_provider[provider_key] += 1
+            if is_deployment_active:
+                deployment_active_links_by_provider[provider_key] += 1
         provider_id_by_name = {
             key: min(ids) for key, ids in provider_ids.items() if ids
         }
@@ -294,7 +359,7 @@ class RankingService:
             | Q(resolved_at__isnull=True, terminal_state_at__gte=history_start_at, terminal_state_at__lt=end_exclusive)
         )
         relevant_tickets = TicketQueryService.noc_tickets().filter(
-            business_status__in=VALID_STATES,
+            business_statuses_query("business_status", VALID_STATES),
         ).filter(
             Q(source_created_at__gte=history_start_at, source_created_at__lt=end_exclusive)
             | Q(business_status__in=BACKLOG_STATES)
@@ -321,10 +386,7 @@ class RankingService:
 
         active_ids = {
             ticket_id for ticket_id, ticket in tickets.items()
-            if ticket.business_status in BACKLOG_STATES
-        }
-        active_with_created_ids = {
-            ticket_id for ticket_id in active_ids if tickets[ticket_id].source_created_at
+            if normalize_business_status(ticket.business_status) in BACKLOG_STATES
         }
         open_aged_ids = {
             ticket_id for ticket_id in active_ids
@@ -339,8 +401,6 @@ class RankingService:
             selected_links = {}
             selected_ticket_ids = set()
             recurrent_link_ids = set()
-            terminal_aged_ids = set()
-            eligible_ids = set()
             high_critical_ids = set()
             for link_id, ids in link_tickets.items():
                 chosen = {ticket_id for ticket_id in ids if in_window(tickets[ticket_id], start_bound, end_bound)}
@@ -352,13 +412,6 @@ class RankingService:
                     recurrent_link_ids.add(link_id)
             for ticket_id in selected_ticket_ids:
                 ticket = tickets[ticket_id]
-                operational_end = operational_resolution_at(ticket)
-                if ticket.business_status in TERMINAL_STATES and ticket.source_created_at and operational_end:
-                    eligible_ids.add(ticket_id)
-                    if operational_end - ticket.source_created_at > timedelta(hours=24):
-                        terminal_aged_ids.add(ticket_id)
-                elif ticket.business_status in BACKLOG_STATES and ticket.source_created_at:
-                    eligible_ids.add(ticket_id)
                 if _plain(ticket.priority_name) in PRIORITY_GROUPS["high"] | PRIORITY_GROUPS["critical"]:
                     high_critical_ids.add(ticket_id)
 
@@ -381,19 +434,10 @@ class RankingService:
                     link_tickets.get(link.pk, set()) & active_ids for link in links_for_provider
                 )) if links_for_provider else set()
                 aged_open_for_provider = backlog_ids & open_aged_ids
-                terminal_aged_for_provider = provider_ticket_ids & terminal_aged_ids
-                over_ids = aged_open_for_provider | terminal_aged_for_provider
-                eligible_for_provider = set()
-                for link in links_for_provider:
-                    ids = link_tickets.get(link.pk, set())
-                    eligible_for_provider.update(ids & active_with_created_ids)
-                    eligible_for_provider.update(ids & eligible_ids)
                 # Provider rows deduplicate tickets across its own CIs.
                 total = len(links_for_provider)
                 tickets_count = len(provider_ticket_ids)
                 affected = len(affected_link_ids)
-                over_count = len(over_ids)
-                eligible_count = len(eligible_for_provider)
                 backlog_count = len(backlog_ids)
                 critical_count = len(provider_ticket_ids & high_critical_ids)
                 recurrent_count = len(recurrent_for_provider)
@@ -405,22 +449,33 @@ class RankingService:
                     responsibility_counts[normalized] += 1
                 responsibility_known = responsibility_counts["PROCEDENTE"] + responsibility_counts["IMPROCEDENTE"]
                 resolution_durations = []
+                resolution_ticket_ids = set()
+                resolved_over_24h_ids = set()
+                created_date_missing_tickets = 0
                 for ticket_id in related_ticket_ids:
                     ticket = tickets[ticket_id]
+                    if not ticket.source_created_at:
+                        created_date_missing_tickets += 1
                     operational_end = operational_resolution_at(ticket)
                     if (
-                        ticket.business_status in TERMINAL_STATES
+                        normalize_business_status(ticket.business_status) in TERMINAL_STATES
                         and ticket.source_created_at and operational_end
                         and start_bound <= operational_end < end_bound
                     ):
                         duration = (operational_end - ticket.source_created_at).total_seconds() / 3600
                         if duration >= 0:
                             resolution_durations.append(duration)
+                            resolution_ticket_ids.add(ticket_id)
+                            if duration > 24:
+                                resolved_over_24h_ids.add(ticket_id)
+                resolved_over_24h_count = len(resolved_over_24h_ids)
+                resolution_count = len(resolution_durations)
                 providers[operator_id] = {
                     "id": operator_id,
                     "name": provider_names.get(provider_key) or links_for_provider[0].operator.name,
                     "links_total": inventory_links_by_provider.get(provider_key, total),
                     "links_active": inventory_links_by_provider.get(provider_key, total),
+                    "created_date_missing_tickets": created_date_missing_tickets,
                     "deployment_active_links": deployment_active_links_by_provider.get(provider_key, 0),
                     "tickets": tickets_count,
                     "links_affected": affected,
@@ -439,10 +494,12 @@ class RankingService:
                     "backlog_current": backlog_count,
                     "backlog_per_100_links": backlog_count / total * 100 if total else 0,
                     "aged_open": len(aged_open_for_provider),
-                    "terminal_over_24h": len(terminal_aged_for_provider),
-                    "tickets_over_24h": over_count,
-                    "eligible_tickets": eligible_count,
-                    "over_24h_rate": over_count / eligible_count if eligible_count else 0,
+                    "backlog_over_24h": len(aged_open_for_provider),
+                    "terminal_over_24h": resolved_over_24h_count,
+                    "resolved_tickets": resolution_count,
+                    "tickets_over_24h": resolved_over_24h_count,
+                    "eligible_tickets": resolution_count,
+                    "over_24h_rate": resolved_over_24h_count / resolution_count if resolution_count else 0,
                     "criticality_rate": critical_count / tickets_count if tickets_count else 0,
                     "high_critical_tickets": critical_count,
                     "procedentes": responsibility_counts["PROCEDENTE"],
@@ -457,14 +514,14 @@ class RankingService:
                     ),
                     "impact_tickets": tickets_count,
                     "impact_affected_links": affected,
-                    "impact_tickets_over_24h": over_count,
+                    "impact_tickets_over_24h": resolved_over_24h_count,
                     "impact_backlog": backlog_count,
                     "period_ticket_ids": provider_ticket_ids,
                     "affected_link_ids": affected_link_ids,
                     "recurrent_link_ids": recurrent_for_provider,
                     "backlog_ticket_ids": backlog_ids,
-                    "over_24h_ticket_ids": over_ids,
-                    "eligible_ticket_ids": eligible_for_provider,
+                    "over_24h_ticket_ids": resolved_over_24h_ids,
+                    "eligible_ticket_ids": resolution_ticket_ids,
                     "links_for_provider": links_for_provider,
                     "selected_link_tickets": {link.pk: selected_links.get(link.pk, set()) for link in links_for_provider},
                 }
@@ -493,7 +550,7 @@ class RankingService:
             month_label = history_start_day.strftime("%Y-%m")
             month_labels.append(month_label)
             for provider_id, month_row in month_rows.items():
-                history_by_provider[provider_id].append({"month": month_label, "score": month_row["risk_score"]})
+                history_by_provider[provider_id].append({"month": month_label, "score": month_row["operational_score"]})
         rows = list(current_rows_map.values())
         trend_rows = list(trend_rows_map.values())
         previous_rows = list(previous_rows_map.values())
@@ -505,16 +562,18 @@ class RankingService:
         for row in rows:
             trend_current = trend_by_id.get(row["id"])
             previous = previous_by_id.get(row["id"])
-            current_month_score = trend_current["risk_score"] if trend_current else 0.0
-            previous_score = previous["risk_score"] if previous else 0.0
-            delta = round(current_month_score - previous_score, 1)
+            current_month_score = trend_current["operational_score"] if trend_current else None
+            previous_score = previous["operational_score"] if previous else None
+            delta = round(current_month_score - previous_score, 1) if current_month_score is not None and previous_score is not None else None
             row["previous_score"] = previous_score
             row["monthly_score"] = current_month_score
             row["history"] = history_by_provider.get(row["id"], [])
             row["trend_delta"] = delta
-            row["trend"] = "worse" if delta > 2 else "better" if delta < -2 else "stable"
+            row["trend"] = "better" if delta is not None and delta > 2 else "worse" if delta is not None and delta < -2 else "stable" if delta is not None else "insufficient"
             row["trend_label"] = "Piorou" if row["trend"] == "worse" else "Melhorou" if row["trend"] == "better" else "Estável"
             row["sample_small"] = row["links_total"] < SMALL_SAMPLE_LINK_THRESHOLD
+            if delta is None:
+                row["trend_label"] = "Dados insuficientes"
             row["share"] = round(row["links_total"] / inventory_links_total * 100, 1) if inventory_links_total else 0
             row["active_share"] = round(row["links_active"] / inventory_links_total * 100, 1) if inventory_links_total else 0
             row["affected_rate_pct"] = round(row["affected_rate"] * 100, 1)
@@ -548,6 +607,7 @@ class RankingService:
 
         rows = [row for row in rows if sort_key(row)]
         rows.sort(key=lambda row: (
+            -(row["operational_score"] if row["operational_score"] is not None else -1),
             -row["risk_score"], -row["impact_noc_score"], -row["tickets"],
             -row["links_affected"], row["name"].casefold(),
         ))
@@ -556,7 +616,7 @@ class RankingService:
 
         # The national KPI follows Cockpit's ticket universe for an unfiltered view.
         scoped_tickets = TicketQueryService.base(user, links=LinkQueryService.base(user)).filter(
-            business_status__in=VALID_STATES,
+            business_statuses_query("business_status", VALID_STATES),
             source_created_at__gte=start_at,
             source_created_at__lt=end_exclusive,
         )
@@ -565,7 +625,7 @@ class RankingService:
             scoped_tickets = scoped_tickets.filter(pk__in=filter_ticket_ids)
         national_ticket_ids = set(scoped_tickets.values_list("pk", flat=True))
         if filters.get("only_aged"):
-            national_ticket_ids &= {ticket_id for row in current_rows_map.values() for ticket_id in row["over_24h_ticket_ids"]}
+            national_ticket_ids = {ticket_id for row in current_rows_map.values() for ticket_id in row["over_24h_ticket_ids"]}
         if filters.get("only_recurrent"):
             national_ticket_ids &= {ticket_id for row in current_rows_map.values()
                                     for link_id in row["recurrent_link_ids"]
@@ -580,13 +640,17 @@ class RankingService:
         total_affected_links = {link_id for link_id, ids in period_ids_by_link.items() if ids}
         total_recurrent_links = {link_id for link_id, ids in period_ids_by_link.items() if len(ids) >= 2}
         total_backlog_ids = set(active_ids)
-        terminal_over_ids = {
-            ticket_id for ids in period_ids_by_link.values() for ticket_id in ids
-            if tickets[ticket_id].business_status in TERMINAL_STATES
-            and tickets[ticket_id].source_created_at and operational_resolution_at(tickets[ticket_id])
-            and operational_resolution_at(tickets[ticket_id]) - tickets[ticket_id].source_created_at > timedelta(hours=24)
-        }
-        total_over_ids = open_aged_ids | terminal_over_ids
+        terminal_over_ids = set()
+        for ticket_id, ticket in tickets.items():
+            operational_end = operational_resolution_at(ticket)
+            if (
+                normalize_business_status(ticket.business_status) in TERMINAL_STATES
+                and ticket.source_created_at and operational_end
+                and start_at <= operational_end < end_exclusive
+                and operational_end - ticket.source_created_at > timedelta(hours=24)
+            ):
+                terminal_over_ids.add(ticket_id)
+        total_over_ids = set(terminal_over_ids)
         if filters.get("only_recurrent"):
             total_affected_links &= total_recurrent_links
             total_over_ids &= {ticket_id for link_id in total_recurrent_links for ticket_id in period_ids_by_link[link_id]}
@@ -597,16 +661,17 @@ class RankingService:
         link_rows = cls._ranked_links(links, link_tickets, tickets, current_rows_map, start_at, end_exclusive, filters)
         link_limit = None if filters.get("links_all") else 20
         ticket_export_rows = []
-        for provider_row in rows:
-            for ticket_row in cls._provider_ticket_rows(provider_row, tickets, link_tickets, now=now):
-                if not (ticket_row["in_period"] or ticket_row["backlog"]):
-                    continue
-                if filters.get("only_aged") and not ticket_row["over_24h"]:
-                    continue
-                if filters.get("only_recurrent") and not ticket_row["on_recurrent_link"]:
-                    continue
-                ticket_export_rows.append(ticket_row)
-        ticket_export_rows.sort(key=lambda item: (item["created_sort"], item["provider"].casefold()), reverse=True)
+        if include_export:
+            for provider_row in rows:
+                for ticket_row in cls._provider_ticket_rows(provider_row, tickets, link_tickets, now=now):
+                    if not (ticket_row["in_period"] or ticket_row["backlog"]):
+                        continue
+                    if filters.get("only_aged") and not ticket_row["over_24h"]:
+                        continue
+                    if filters.get("only_recurrent") and not ticket_row["on_recurrent_link"]:
+                        continue
+                    ticket_export_rows.append(ticket_row)
+            ticket_export_rows.sort(key=lambda item: (item["created_sort"], item["provider"].casefold()), reverse=True)
         return {
             "providers": rows,
             "all_providers": list(current_rows_map.values()),
@@ -645,6 +710,9 @@ class RankingService:
             "scoring": {
                 "weights": RANKING_WEIGHTS,
                 "weights_v1": RANKING_WEIGHTS_V1,
+                "operational_weights": OPERATIONAL_SCORE_WEIGHTS,
+                "operational_min_links": OPERATIONAL_SCORE_MIN_LINKS,
+                "operational_min_resolutions": OPERATIONAL_SCORE_MIN_RESOLUTIONS,
                 "small_sample_threshold": SMALL_SAMPLE_LINK_THRESHOLD,
                 "best_ranking_min_links": BEST_RANKING_MIN_LINKS,
                 "best_ranking_min_tickets": BEST_RANKING_MIN_TICKETS,
@@ -654,7 +722,9 @@ class RankingService:
     @staticmethod
     def _apply_ticket_filters(queryset, filters):
         if filters.get("status"):
-            queryset = queryset.filter(business_status=filters["status"])
+            queryset = queryset.filter(business_status_query(
+                "business_status", normalize_business_status(filters["status"]),
+            ))
         if filters.get("priority"):
             queryset = queryset.filter(priority_name=filters["priority"])
         if filters.get("reason"):
@@ -686,7 +756,7 @@ class RankingService:
         tickets = list(tickets)
         raw_reasons = {
             ticket.closing_code_raw for ticket in tickets
-            if ticket.closing_code_raw and ticket.business_status in TERMINAL_STATES
+            if ticket.closing_code_raw and normalize_business_status(ticket.business_status) in TERMINAL_STATES
         }
         return {
             "clients": sorted({link.contracting_client for link in links if link.contracting_client}, key=str.casefold),
@@ -764,7 +834,8 @@ class RankingService:
             } for link in linked]
             created = ticket.source_created_at
             terminal = ticket.terminal_state_at
-            is_terminal = ticket.business_status in TERMINAL_STATES
+            ticket_status = normalize_business_status(ticket.business_status)
+            is_terminal = ticket_status in TERMINAL_STATES
             operational_end = operational_resolution_at(ticket) if is_terminal else now
             duration = (operational_end - created) if created and operational_end else None
             in_period = ticket_id in row["period_ticket_ids"]
@@ -773,14 +844,14 @@ class RankingService:
             if normalized not in {"PROCEDENTE", "IMPROCEDENTE", "INDETERMINADO"}:
                 normalized = "INDETERMINADO"
             why = [
-                "Estado operacional válido: " + ticket.business_status,
+                "Estado operacional válido: " + normalize_business_status(ticket.business_status),
                 "Relacionado a link deste Provider dentro do Data Scope atual",
                 "Contabilizado uma única vez neste Provider",
             ]
             if in_period:
                 why.insert(0, "Criado no período selecionado")
             elif ticket_id in row["backlog_ticket_ids"]:
-                why.insert(0, "Backlog atual em OPEN/PENDING/SCHEDULED")
+                why.insert(0, "Backlog atual em OPEN/PENDING")
             if is_terminal and ticket.resolved_at:
                 why.append("Duração encerrada em ticketResolvido")
             elif is_terminal and terminal:
@@ -796,7 +867,7 @@ class RankingService:
                 "state": ", ".join(sorted({link["state"] for link in link_data if link["state"]})),
                 "city": ", ".join(sorted({link["city"] for link in link_data if link["city"]}, key=str.casefold)),
                 "links": link_data,
-                "status": ticket.business_status,
+                "status": normalize_business_status(ticket.business_status),
                 "priority": ticket.priority_name,
                 "created_at": timezone.localtime(created).strftime("%d/%m/%Y %H:%M") if created else "",
                 "created_sort": created.isoformat() if created else "",
@@ -866,7 +937,7 @@ class RankingService:
                     elif ticket.responsibility_normalized == "IMPROCEDENTE":
                         improc_counts[label].add(ticket_id)
                 reason = ClosingReasonCanonicalizer.display(ticket.closing_code_raw)
-                if reason and ticket.business_status in TERMINAL_STATES:
+                if reason and normalize_business_status(ticket.business_status) in TERMINAL_STATES:
                     reason_counts[reason].add(ticket_id)
             if ticket_ids:
                 link_rows.append({

@@ -1,13 +1,15 @@
 from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Count
 from django.utils import timezone
+import re
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.integracoes.models import Integration, IntegrationRun, IntegrationSyncState, OTRSTicket, OTRSTicketConfigItem, OTRSStateMapping
 from aplicativos.integracoes.otrs_queues import COCKPIT_QUEUE_NAMES, queue_signature
-from aplicativos.integracoes.services.errors import IntegrationError
+from aplicativos.integracoes.services.errors import IntegrationError, OTRSDatabaseNotFoundError
+from aplicativos.integracoes.services.integration_health import status_after_otrs_failure
 from aplicativos.integracoes.services.otrs_sync import OTRSSyncService
-from aplicativos.integracoes.views import _otrs_client
+from aplicativos.integracoes.views import _otrs_client, get_integration
 from aplicativos.integracoes.services.sync_lock import Lease
 
 
@@ -52,6 +54,37 @@ class Command(BaseCommand):
                 f"[OTRS][DIAGNÓSTICO] tipo={type(exc).__name__} | {exc.diagnostic_summary()}"
             )
 
+    @staticmethod
+    def _safe_error_code(exc):
+        error_code = str(getattr(exc, "error_code", "") or "").strip()
+        return error_code if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", error_code) else ""
+
+    @classmethod
+    def _safe_failure_summary(cls, exc):
+        error_code = cls._safe_error_code(exc)
+        code_suffix = f": {error_code}" if error_code else ""
+        return f"Falha segura ({type(exc).__name__}{code_suffix})"
+
+    @classmethod
+    def _record_setup_failure(cls, state, integration, run, exc):
+        """Persist a failed attempt even when the client cannot be prepared."""
+        failed_at = timezone.now()
+        summary = cls._safe_failure_summary(exc)
+        run.status = IntegrationRun.Status.FAILED
+        run.records_failed = 1
+        run.duration_ms = max(0, int((failed_at - run.started_at).total_seconds() * 1000))
+        run.finished_at = failed_at
+        run.message = summary
+        run.save(update_fields=("status", "records_failed", "duration_ms", "finished_at", "message"))
+        state.last_started_at = run.started_at
+        state.last_error_at = failed_at
+        state.last_error = summary
+        state.save(update_fields=("last_started_at", "last_error_at", "last_error", "updated_at"))
+        integration.last_error_at = failed_at
+        integration.last_error = summary
+        integration.status = status_after_otrs_failure(exc, integration.status)
+        integration.save(update_fields=("last_error_at", "last_error", "status", "updated_at"))
+
     def _execute(self, *args, **options):
         apply = bool(options.get("apply"))
         fast = bool(options.get("fast"))
@@ -72,34 +105,50 @@ class Command(BaseCommand):
             expected_coverage = f"queues={queue_signature(COCKPIT_QUEUE_NAMES)}"
             if not full_coverage or expected_coverage not in full_coverage.message:
                 raise CommandError("O conjunto de filas do Cockpit mudou; execute uma sincronização FULL antes do FAST.")
+        operation = IntegrationRun.Operation.OTRS_FAST_SYNC if fast else IntegrationRun.Operation.OTRS_FULL_SYNC
+        integration = get_integration(Integration.Key.OTRS)
+        run = IntegrationRun.objects.create(
+            integration=integration,
+            operation=operation,
+            status=IntegrationRun.Status.RUNNING,
+            message=("Fast " if fast else "Full ") + ("Apply " if apply else "Dry-run ")
+            + f"queues={queue_signature(queue_names)}"[:210],
+        )
+        state.last_started_at = run.started_at
+        state.save(update_fields=("last_started_at", "updated_at"))
+        AuditService.record(category="INTEGRATION", action="SYNC_STARTED", description="Sincronização OTRS iniciada", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "queues": list(queue_names), "mode": "apply" if apply else "dry-run"})
         try:
-            integration = Integration.objects.get(key=Integration.Key.OTRS)
             client = _otrs_client(integration)
         except IntegrationError as exc:
             self._write_diagnostic(options, exc)
+            self._record_setup_failure(state, integration, run, exc)
+            AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou ao preparar a conexão", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__, "error_code": self._safe_error_code(exc)})
             raise CommandError(
                 self._format_integration_error("Não foi possível preparar o client OTRS", exc)
             ) from exc
         except Exception as exc:
+            self._record_setup_failure(state, integration, run, exc)
+            AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou ao preparar a conexão", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__})
             raise CommandError(f"Não foi possível preparar o client OTRS ({type(exc).__name__}).") from None
         if not client.database:
             try:
                 system = {"information_schema", "mysql", "performance_schema", "sys"}
                 applications = [name for name in client.list_databases() if name.casefold() not in system]
                 if len(applications) != 1:
-                    raise CommandError("Database OTRS não configurado e schema de aplicação não pôde ser determinado de forma única.")
+                    raise OTRSDatabaseNotFoundError(error_code="database_not_unique")
                 client.database = applications[0]
             except IntegrationError as exc:
                 self._write_diagnostic(options, exc)
+                self._record_setup_failure(state, integration, run, exc)
+                AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou ao descobrir o database", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__, "error_code": self._safe_error_code(exc)})
                 raise CommandError(
                     self._format_integration_error("Não foi possível descobrir o database OTRS", exc)
                 ) from exc
+            except Exception as exc:
+                self._record_setup_failure(state, integration, run, exc)
+                AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou ao descobrir o database", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__})
+                raise CommandError(f"Não foi possível descobrir o database OTRS ({type(exc).__name__}).") from None
 
-        operation = IntegrationRun.Operation.OTRS_FAST_SYNC if fast else IntegrationRun.Operation.OTRS_FULL_SYNC
-        run = IntegrationRun.objects.create(integration=integration, operation=operation, status=IntegrationRun.Status.RUNNING, message=("Fast " if fast else "Full ") + ("Apply " if apply else "Dry-run ") + f"queues={queue_signature(queue_names)}"[:210])
-        state.last_started_at = run.started_at
-        state.save(update_fields=("last_started_at", "updated_at"))
-        AuditService.record(category="INTEGRATION", action="SYNC_STARTED", description="Sincronização OTRS iniciada", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "queues": list(queue_names), "mode": "apply" if apply else "dry-run"})
         service = OTRSSyncService(client, progress=self.stdout.write)
         try:
             with client.read_only_session():
@@ -139,23 +188,17 @@ class Command(BaseCommand):
             run.records_failed = 1
             run.duration_ms = int((timezone.now() - run.started_at).total_seconds() * 1000)
             run.finished_at = timezone.now()
-            safe_summary = f"Falha segura ({type(exc).__name__})"
-            if isinstance(exc, IntegrationError) and exc.error_code:
-                safe_summary = f"Falha segura ({type(exc).__name__}: {exc.error_code})"
+            safe_summary = self._safe_failure_summary(exc)
             run.message = safe_summary
             run.save(update_fields=("status", "records_failed", "duration_ms", "finished_at", "message"))
             state.last_error_at = timezone.now()
             state.last_error = safe_summary
             state.save(update_fields=("last_error_at", "last_error", "updated_at"))
-            try:
-                integration = Integration.objects.get(key=Integration.Key.OTRS)
-                integration.last_error_at = timezone.now()
-                integration.last_error = safe_summary
-                integration.status = Integration.Status.UNAVAILABLE
-                integration.save(update_fields=("last_error_at", "last_error", "status", "updated_at"))
-            except Exception:
-                pass
-            AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__, "error_code": getattr(exc, "error_code", "")})
+            integration.last_error_at = timezone.now()
+            integration.last_error = safe_summary
+            integration.status = status_after_otrs_failure(exc, integration.status)
+            integration.save(update_fields=("last_error_at", "last_error", "status", "updated_at"))
+            AuditService.record(category="INTEGRATION", action="SYNC_FAILED", description="Sincronização OTRS falhou", result="FAILURE", obj=run, module="Integrações", metadata={"source": "OTRS", "run_id": run.pk, "error_type": type(exc).__name__, "error_code": self._safe_error_code(exc)})
             if isinstance(exc, IntegrationError):
                 raise CommandError(
                     self._format_integration_error(

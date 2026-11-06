@@ -10,6 +10,9 @@ from django.db.models.functions import Cast
 from django.utils import timezone
 
 from aplicativos.integracoes.models import OTRSTicket
+from aplicativos.integracoes.services.otrs_status import (
+    business_status_label, normalize_business_status, status_for_external_state,
+)
 from aplicativos.relatorios.models import (
     PenaltyCompetence,
     PenaltyFinancialChange,
@@ -314,7 +317,8 @@ def _ticket_candidate_data(ticket, *, rec, lp):
         ticket.ticket_number, ticket.title or "", ci_values=ci_values, lp_values=lp_values,
         rec=rec, lp=lp,
     ) | {
-        "status": ticket.business_status,
+        "status": normalize_business_status(ticket.business_status),
+        "source_state": ticket.external_state_name,
         "queue": ticket.queue_name,
         "title": ticket.title,
         "external_id": ticket.external_id,
@@ -361,7 +365,8 @@ def _remote_candidate_data(candidate, *, rec, lp):
         ci_values=_title_ci_values(candidate.get("title", "")), rec=rec, lp=lp,
     )
     data.update({
-        "status": candidate.get("state", ""), "queue": candidate.get("queue", ""),
+        "status": status_for_external_state(candidate.get("state", "")),
+        "source_state": candidate.get("state", ""), "queue": candidate.get("queue", ""),
         "external_id": candidate.get("external_id"), "created_at": candidate.get("created_at"),
         "resolved_at": None, "closed_at": None, "responsible": candidate.get("responsible"),
         "source": "OTRS_GENERAL", "isps": [], "retrieved_at": timezone.now().isoformat(),
@@ -385,7 +390,8 @@ def _snapshot_from_ticket(ticket, *, source="LOCAL_MIRROR"):
     return {
         "external_id": ticket.external_id, "number": ticket.ticket_number, "title": ticket.title,
         "queue": ticket.queue_name, "state": ticket.external_state_name or ticket.business_status,
-        "business_status": ticket.business_status, "created_at": ticket.source_created_at.isoformat() if ticket.source_created_at else None,
+        "source_state": ticket.external_state_name,
+        "business_status": normalize_business_status(ticket.business_status), "created_at": ticket.source_created_at.isoformat() if ticket.source_created_at else None,
         "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at else None,
         "closed_at": ticket.terminal_state_at.isoformat() if ticket.terminal_state_at else None,
         "responsible": ticket.responsible_user_id, "ci": [], "lp": [], "isps": [],
@@ -394,10 +400,12 @@ def _snapshot_from_ticket(ticket, *, source="LOCAL_MIRROR"):
 
 
 def _snapshot_from_candidate(candidate):
+    raw_state = candidate.get("source_state", candidate.get("status", ""))
     return {
         "external_id": candidate.get("external_id"), "number": candidate.get("number", ""),
         "title": candidate.get("title", ""), "queue": candidate.get("queue", ""),
-        "state": candidate.get("status", ""), "business_status": candidate.get("status", ""),
+        "state": raw_state, "source_state": raw_state,
+        "business_status": normalize_business_status(candidate.get("status") or status_for_external_state(raw_state)),
         "created_at": candidate.get("created_at"), "resolved_at": candidate.get("resolved_at"),
         "closed_at": candidate.get("closed_at"), "responsible": candidate.get("responsible"),
         "ci": candidate.get("ci", []), "lp": candidate.get("lp", []),
@@ -896,6 +904,7 @@ def enrich_competence(competence_id, *, user=None, batch_size=500, treatment_ids
             ticket_summaries.append({
                 "number": remote_snapshot.get("number", ""), "title": remote_snapshot.get("title", ""),
                 "status": remote_snapshot.get("business_status") or remote_snapshot.get("state", ""),
+                "source_state": remote_snapshot.get("source_state") or remote_snapshot.get("state", ""),
                 "queue": remote_snapshot.get("queue", ""), "responsible_user_id": remote_snapshot.get("responsible"),
                 "opened_at": remote_snapshot.get("created_at"), "resolved_at": remote_snapshot.get("resolved_at"),
                 "source": remote_snapshot.get("source", "OTRS_GENERAL"),
@@ -910,7 +919,9 @@ def enrich_competence(competence_id, *, user=None, batch_size=500, treatment_ids
             linked_ticket = linked_relation.otrs_ticket
             ticket_summaries.append({
                 "number": linked_ticket.ticket_number, "title": linked_ticket.title,
-                "status": linked_ticket.business_status, "queue": linked_ticket.queue_name,
+                "status": normalize_business_status(linked_ticket.business_status),
+                "source_state": linked_ticket.external_state_name,
+                "queue": linked_ticket.queue_name,
                 "responsible_user_id": linked_ticket.responsible_user_id,
                 "opened_at": linked_ticket.source_created_at.isoformat() if linked_ticket.source_created_at else None,
                 "resolved_at": linked_ticket.resolved_at.isoformat() if linked_ticket.resolved_at else None,

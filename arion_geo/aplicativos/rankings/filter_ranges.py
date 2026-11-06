@@ -31,12 +31,12 @@ METRIC_META = {
         "levels": ("Backlog baixo", "Backlog moderado", "Backlog alto", "Backlog crítico"),
     },
     "aged": {
-        "chip": ">24h", "unit": "", "integer": True, "zero": "Nenhum >24h", "with": "Possui >24h",
-        "levels": (">24h baixo", ">24h moderado", ">24h alto", ">24h crítico"),
+        "chip": "Resolvidos >24h", "unit": "", "integer": True, "zero": "Nenhuma resolu\u00e7\u00e3o >24h", "with": "Possui resolu\u00e7\u00f5es >24h",
+        "levels": ("Resolvidos >24h baixo", "Resolvidos >24h moderado", "Resolvidos >24h alto", "Resolvidos >24h cr\u00edtico"),
     },
     "avg_time": {"chip": "Tempo médio", "unit": "h", "integer": False, "zero": None, "with": None, "levels": ()},
     "risk": {
-        "chip": "Indicador", "unit": "", "integer": False, "zero": None, "with": None,
+        "chip": "Score operacional", "unit": "", "integer": False, "zero": None, "with": None,
         "levels": ("Baixo", "Moderado", "Alto", "Crítico"),
     },
 }

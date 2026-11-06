@@ -1,6 +1,10 @@
 from datetime import timedelta
 from io import StringIO
+import importlib.util
+import os
+from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 from unittest.mock import patch
 
 from django.core.management import CommandError
@@ -9,10 +13,74 @@ from django.test import TestCase
 from django.utils import timezone
 
 from aplicativos.integracoes.management.commands.integration_worker import Command
+from aplicativos.integracoes.management.commands.sincronizar_otrs import Command as OTRSSyncCommand
 from aplicativos.integracoes.clients.factory import otrs_configuration_notice
 from aplicativos.integracoes.models import Integration, IntegrationLease, IntegrationRun, IntegrationSyncState
 from aplicativos.qualidade.models import QualityCorrelationCheckpoint
 from aplicativos.integracoes.services.sync_lock import Lease
+from aplicativos.integracoes.services.errors import OTRSAuthenticationError, OTRSConnectionRefusedError, OTRSTLSRequiredError
+from aplicativos.integracoes.services.integration_health import status_after_otrs_failure
+
+
+_RUN_PROCESS_PATH = Path(__file__).resolve().parents[3] / "deploy" / "windows" / "run_process.py"
+_RUN_PROCESS_SPEC = importlib.util.spec_from_file_location("arion_run_process_under_test", _RUN_PROCESS_PATH)
+RUN_PROCESS = importlib.util.module_from_spec(_RUN_PROCESS_SPEC)
+_RUN_PROCESS_SPEC.loader.exec_module(RUN_PROCESS)
+
+
+class WindowsSupervisorEnvironmentTests(TestCase):
+    def test_project_dotenv_is_loaded_from_explicit_root_and_reports_only_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / ".env").write_text(
+                "ARION_OTRS_LEGACY_NO_TLS_HOST=legacy.example.invalid\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                summary = RUN_PROCESS._load_project_environment(project_root)
+                self.assertIs(summary["dotenv_present"], True)
+                self.assertEqual(summary["otrs_legacy_host_source"], "project_dotenv")
+                self.assertEqual(os.environ["ARION_OTRS_LEGACY_NO_TLS_HOST"], "legacy.example.invalid")
+                self.assertNotIn("legacy.example.invalid", str(summary))
+
+    def test_process_environment_takes_precedence_and_child_receives_same_environment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / ".env").write_text(
+                "ARION_OTRS_LEGACY_NO_TLS_HOST=dotenv.example.invalid\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {
+                "ARION_OTRS_LEGACY_NO_TLS_HOST": "process.example.invalid",
+                "ARION_TEST_INHERITED_VALUE": "preserved",
+                "ARION_ENV": "testing",
+            }, clear=True):
+                summary = RUN_PROCESS._load_project_environment(project_root)
+                child_environment = RUN_PROCESS._child_environment()
+                self.assertEqual(summary["otrs_legacy_host_source"], "process_environment")
+                self.assertEqual(child_environment["ARION_OTRS_LEGACY_NO_TLS_HOST"], "process.example.invalid")
+                self.assertEqual(child_environment["ARION_TEST_INHERITED_VALUE"], "preserved")
+                self.assertEqual(child_environment["ARION_ENV"], "production")
+                self.assertEqual(os.environ["ARION_ENV"], "testing")
+
+    def test_status_requires_the_child_service_process_not_only_supervisor_lock(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_run_root = RUN_PROCESS.RUN_ROOT
+            RUN_PROCESS.RUN_ROOT = Path(temp_dir)
+            RUN_PROCESS.RUN_ROOT.mkdir(parents=True, exist_ok=True)
+            RUN_PROCESS._pid_path("worker").write_text("1234", encoding="ascii")
+            RUN_PROCESS._child_pid_path("worker").write_text("5678", encoding="ascii")
+            try:
+                with patch.object(RUN_PROCESS, "_is_locked", return_value=True), \
+                     patch.object(RUN_PROCESS, "_pid_is_running", return_value=False), \
+                     patch("builtins.print"):
+                    self.assertEqual(RUN_PROCESS._print_status("worker"), 2)
+                with patch.object(RUN_PROCESS, "_is_locked", return_value=True), \
+                     patch.object(RUN_PROCESS, "_pid_is_running", return_value=True), \
+                     patch("builtins.print"):
+                    self.assertEqual(RUN_PROCESS._print_status("worker"), 0)
+            finally:
+                RUN_PROCESS.RUN_ROOT = previous_run_root
 
 
 class IntegrationLeaseTests(TestCase):
@@ -175,11 +243,112 @@ class IntegrationWorkerTests(TestCase):
         self.assertIsNotNone(state.last_error_at)
 
     def test_worker_schedules_quality_correlation_after_full_otrs_pass(self):
+        Integration.objects.filter(key=Integration.Key.OTRS).update(
+            config={"host": "127.0.0.1", "database": "otrs"},
+            username="reader", secret_ciphertext="test-only-ciphertext",
+        )
         now = timezone.now()
         with patch.object(self.command, "_due") as run_job, patch.object(self.command, "_quality_tq_correlation") as correlate:
             self.command._schedule_once(now)
         self.assertTrue(any(call.args[0] == "otrs_full" for call in run_job.call_args_list))
         correlate.assert_called_once_with(now)
+
+    def test_processing_failure_does_not_claim_current_otrs_connectivity_failure(self):
+        integration = Integration.objects.get(key=Integration.Key.OTRS)
+        integration.status = Integration.Status.CONNECTED
+        self.assertEqual(
+            status_after_otrs_failure(RuntimeError("local mirror write failed"), integration.status),
+            Integration.Status.CONNECTED,
+        )
+        self.assertEqual(
+            status_after_otrs_failure(OTRSTLSRequiredError(), integration.status),
+            Integration.Status.ATTENTION,
+        )
+        self.assertEqual(
+            status_after_otrs_failure(OTRSConnectionRefusedError(), integration.status),
+            Integration.Status.UNAVAILABLE,
+        )
+
+    def test_sync_processing_failure_records_sync_error_without_overwriting_connection_status_or_cursor(self):
+        integration = Integration.objects.get(key=Integration.Key.OTRS)
+        integration.config = {"host": "127.0.0.1", "database": "otrs"}
+        integration.username = "reader"
+        integration.secret_ciphertext = "test-only-ciphertext"
+        integration.status = Integration.Status.CONNECTED
+        integration.save()
+        cursor = timezone.now() - timedelta(hours=1)
+        state, _ = IntegrationSyncState.objects.get_or_create(
+            key="otrs", defaults={"change_cursor": cursor, "last_success_at": cursor},
+        )
+        state.change_cursor = cursor
+        state.last_success_at = cursor
+        state.save()
+
+        class ReadOnlySessionClient:
+            database = "otrs"
+
+            def read_only_session(self):
+                from contextlib import nullcontext
+                return nullcontext(self)
+
+        command = OTRSSyncCommand(stdout=StringIO(), stderr=StringIO())
+        with patch(
+            "aplicativos.integracoes.management.commands.sincronizar_otrs._otrs_client",
+            return_value=ReadOnlySessionClient(),
+        ), patch(
+            "aplicativos.integracoes.management.commands.sincronizar_otrs.OTRSSyncService",
+        ) as sync_service:
+            sync_service.return_value.run.side_effect = RuntimeError("private row detail")
+            with self.assertRaises(CommandError):
+                command.handle(
+                    apply=True, fast=False, full=True, dry_run=False, queues=None,
+                    scheduler_lease=True, verbosity=1,
+                )
+
+        integration.refresh_from_db()
+        state.refresh_from_db()
+        failed_run = IntegrationRun.objects.get(operation=IntegrationRun.Operation.OTRS_FULL_SYNC)
+        self.assertEqual(integration.status, Integration.Status.CONNECTED)
+        self.assertIn("RuntimeError", integration.last_error)
+        self.assertNotIn("private row detail", integration.last_error)
+        self.assertEqual(state.change_cursor, cursor)
+        self.assertIsNotNone(state.last_error_at)
+        self.assertEqual(failed_run.status, IntegrationRun.Status.FAILED)
+        self.assertNotIn("private row detail", failed_run.message)
+
+    def test_sync_client_preflight_failure_creates_run_and_updates_connection_health(self):
+        integration = Integration.objects.get(key=Integration.Key.OTRS)
+        integration.status = Integration.Status.CONNECTED
+        integration.save(update_fields=("status",))
+        state, _ = IntegrationSyncState.objects.get_or_create(key="otrs")
+        command = OTRSSyncCommand(stdout=StringIO(), stderr=StringIO())
+        with patch(
+            "aplicativos.integracoes.management.commands.sincronizar_otrs._otrs_client",
+            side_effect=OTRSAuthenticationError(error_code="access_denied"),
+        ):
+            with self.assertRaises(CommandError):
+                command.handle(
+                    apply=True, fast=False, full=True, dry_run=False, queues=None,
+                    scheduler_lease=True, verbosity=1,
+                )
+
+        integration.refresh_from_db()
+        state.refresh_from_db()
+        failed_run = IntegrationRun.objects.get(operation=IntegrationRun.Operation.OTRS_FULL_SYNC)
+        self.assertEqual(integration.status, Integration.Status.ATTENTION)
+        self.assertIn("OTRSAuthenticationError", integration.last_error)
+        self.assertIn("access_denied", integration.last_error)
+        self.assertEqual(state.last_started_at, failed_run.started_at)
+        self.assertIsNotNone(state.last_error_at)
+        self.assertEqual(failed_run.status, IntegrationRun.Status.FAILED)
+        self.assertIn("access_denied", failed_run.message)
+
+    def test_sync_failure_summary_rejects_untrusted_error_code_text(self):
+        error = OTRSAuthenticationError(error_code="password=do-not-store")
+        self.assertEqual(
+            OTRSSyncCommand._safe_failure_summary(error),
+            "Falha segura (OTRSAuthenticationError)",
+        )
 
     def test_quality_correlation_checkpoint_uses_backoff_after_failure(self):
         now = timezone.now()

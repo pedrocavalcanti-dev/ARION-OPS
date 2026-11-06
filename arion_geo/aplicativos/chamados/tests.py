@@ -306,6 +306,21 @@ class TicketQueueTests(TestCase):
         self.assertEqual(page_two.context["page"].number, 2)
         self.assertEqual(page_two.context["page"].paginator.count, 26)
 
+    def test_queue_defaults_to_fifty_and_keeps_filters_on_next_page(self):
+        for ticket_id in range(710, 761):
+            self.make_ticket(ticket_id, "PENDING", link=self.link)
+        response = self.client.get(reverse("chamados:index"), {"q": "ticket", "tab": "PENDING"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["page_size"], 50)
+        self.assertEqual(len(response.context["rows"]), 50)
+        next_params = parse_qs(urlsplit(response.context["pagination_urls"]["next"]).query)
+        self.assertEqual(next_params["page_size"], ["50"])
+        self.assertEqual(next_params["q"], ["ticket"])
+        self.assertEqual(next_params["tab"], ["PENDING"])
+        page_two = self.client.get(reverse("chamados:index"), next_params)
+        self.assertEqual(page_two.context["page"].number, 2)
+        self.assertEqual(len(page_two.context["rows"]), 1)
+
     def test_ticket_with_multiple_links_has_one_queue_row_and_all_scoped_links_in_detail(self):
         second_link = self.make_link("ticket-link-2", "Projeto A", "RJ")
         ticket = self.make_ticket(20, link=self.link)
@@ -555,14 +570,14 @@ class TicketQueueTests(TestCase):
         self.assertEqual(self.client.get(reverse("chamados:index")).context["filters"]["project"], "Projeto A")
         explicit = self.client.get(reverse("chamados:index"), {"tab": "all"})
         self.assertEqual(explicit.context["filters"]["project"], "")
-        self.assertEqual(explicit.context["page_size"], 25)
+        self.assertEqual(explicit.context["page_size"], 50)
         cleared = self.client.get(reverse("chamados:index") + "?ignore_default=1")
         self.assertEqual(cleared.context["filters"]["project"], "")
         self.assertEqual(cleared.context["filters"]["tab"], "all")
         self.assertEqual(cleared.context["filters"]["arion_status"], "")
         self.assertEqual(cleared.context["filters"]["otrs_status"], "")
         self.assertEqual(cleared.context["filters"]["sort"], "aging")
-        self.assertEqual(cleared.context["page_size"], 25)
+        self.assertEqual(cleared.context["page_size"], 50)
 
         other_user = get_user_model().objects.create_user(username="queue-owner", password="safe-password-4")
         foreign = TicketQueueView.objects.create(user=other_user, name="Privada", filters={"project": "Projeto A"})

@@ -199,7 +199,7 @@ def link_quality_ticket(*, quality_order, ticket_identifier, ticket_type, actor=
         owner_snapshot="",
         opened_at=ticket.source_created_at,
         closed_at=closed_at,
-        result=ticket.closing_code_raw or ticket.get_business_status_display(),
+        result=ticket.closing_code_raw or ticket.operational_status_label,
     )
     description = f"Ticket {ticket.ticket_number} vinculado como {record.get_ticket_type_display().lower()}."
     QualityAuditEvent.objects.create(
@@ -278,7 +278,7 @@ def get_treatment_context(order):
             "opened_at": (ticket.source_created_at if ticket else record.opened_at),
             "closed_at": ((ticket.resolved_at or ticket.terminal_state_at or ticket.canceled_at) if ticket else record.closed_at),
             "last_movement_at": (ticket.source_changed_at if ticket else None),
-            "result": ((ticket.closing_code_raw or ticket.get_business_status_display()) if ticket else record.result) or "Resultado não informado",
+            "result": ((ticket.closing_code_raw or ticket.operational_status_label) if ticket else record.result) or "Resultado não informado",
             "active": active,
             "otrs_url": otrs_ticket_url(ticket.external_id if ticket else record.ticket_external_id_snapshot),
         })

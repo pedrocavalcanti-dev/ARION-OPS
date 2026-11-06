@@ -196,10 +196,11 @@ class ExternalAPIConfigurationTests(ExternalAPITestCase):
     def test_integrations_home_lists_external_api_cards(self):
         response = self.client.get(reverse("configuracoes:integrations"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "APIs externas")
+        self.assertContains(response, "API EXTERNA")
         self.assertContains(response, "Brevo")
         self.assertContains(response, "Mapbox")
-        self.assertContains(response, "Abrir integra&ccedil;&atilde;o")
+        self.assertContains(response, reverse("configuracoes:integracoes:brevo"))
+        self.assertContains(response, reverse("configuracoes:integracoes:mapbox"))
 
     def test_external_api_admin_pages_return_http_200_for_superuser(self):
         paths = (
@@ -437,7 +438,7 @@ class BrevoClientTests(TestCase):
         self.assertEqual(kwargs["body"], "plain body with ARION-QID")
         self.assertEqual(kwargs["to"], ["test@example.com"])
         self.assertEqual(kwargs["reply_to"], ["reply@example.com"])
-        self.assertEqual(kwargs["encoding"], "utf-8")
+        self.assertEqual(message.encoding, "utf-8")
         message.attach_alternative.assert_called_once_with("<p>html</p>", "text/html")
         message.send.assert_called_once_with(fail_silently=False)
 

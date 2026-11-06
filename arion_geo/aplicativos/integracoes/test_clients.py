@@ -1,11 +1,12 @@
 import json
 import ssl
+from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from django.test import override_settings
 
 from aplicativos.integracoes.clients.cmdb import CMDBClient
-from aplicativos.integracoes.clients.factory import normalize_otrs_config
+from aplicativos.integracoes.clients.factory import configured_otrs_client, normalize_otrs_config
 from aplicativos.integracoes.clients.otrs import OTRSReadOnlyClient
 from aplicativos.integracoes.forms import CMDBConfigurationForm, OTRSConfigurationForm
 from aplicativos.integracoes.services.errors import (
@@ -375,14 +376,14 @@ class OTRSReadOnlyClientTests(TestCase):
         self.assertFalse(remote_insecure_tls.allow_insecure_remote)
         with self.assertRaises(OTRSTLSRequiredError) as caught_tls:
             remote_insecure_tls._build_ssl_context()
-        self.assertEqual(caught_tls.exception.error_code, "tls_policy_required")
+        self.assertEqual(caught_tls.exception.error_code, "tls_legacy_opt_in_required")
 
         remote_insecure_verify = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private", use_tls=True, ssl_verify=False
         )
         with self.assertRaises(OTRSTLSRequiredError) as caught_verify:
             remote_insecure_verify._build_ssl_context()
-        self.assertEqual(caught_verify.exception.error_code, "tls_policy_required")
+        self.assertEqual(caught_verify.exception.error_code, "tls_verification_required")
 
         remote_tls_unverified_with_legacy_flag = OTRSReadOnlyClient(
             host="200.174.198.133",
@@ -413,13 +414,23 @@ class OTRSReadOnlyClientTests(TestCase):
         self.assertNotIn("secret-user", joined_logs)
         self.assertNotIn("secret-password", joined_logs)
 
-        unauthorized_legacy_host = OTRSReadOnlyClient(
-            host="other.example", username="reader", password="private", use_tls=False,
-            allow_insecure_remote=True,
-        )
         with override_settings(OTRS_LEGACY_NO_TLS_HOST="200.174.198.133"):
-            with self.assertRaises(OTRSTLSRequiredError):
+            unauthorized_legacy_host = OTRSReadOnlyClient(
+                host="other.example", username="reader", password="private", use_tls=False,
+                allow_insecure_remote=True,
+            )
+            with self.assertRaises(OTRSTLSRequiredError) as caught_mismatch:
                 unauthorized_legacy_host._build_ssl_context()
+        self.assertEqual(caught_mismatch.exception.error_code, "tls_legacy_host_mismatch")
+
+        with override_settings(OTRS_LEGACY_NO_TLS_HOST=""):
+            authorized_without_host = OTRSReadOnlyClient(
+                host="200.174.198.133", username="reader", password="private", use_tls=False,
+                allow_insecure_remote=True,
+            )
+            with self.assertRaises(OTRSTLSRequiredError) as caught_unconfigured:
+                authorized_without_host._build_ssl_context()
+        self.assertEqual(caught_unconfigured.exception.error_code, "tls_legacy_host_unconfigured")
 
         remote_default = OTRSReadOnlyClient(
             host="200.174.198.133", username="reader", password="private"
@@ -449,6 +460,24 @@ class OTRSReadOnlyClientTests(TestCase):
             "username": "reader", "password": "private", "timeout": 10, "use_tls": False,
         })
         self.assertTrue(form_loopback.is_valid())
+
+    def test_shared_factory_honors_the_exact_legacy_host_opt_in(self):
+        integration = SimpleNamespace(
+            config={
+                "host": "legacy.example.invalid", "port": 3306, "database": "otrs",
+                "use_tls": False, "allow_insecure_remote": True,
+            },
+            username="reader", secret_ciphertext="test-only-ciphertext",
+        )
+        with override_settings(OTRS_LEGACY_NO_TLS_HOST="legacy.example.invalid"), \
+             patch("aplicativos.integracoes.clients.factory.get_secret_protector") as protector:
+            protector.return_value.unprotect.return_value = "test-only-password"
+            client = configured_otrs_client(integration)
+            self.assertIsNone(client._build_ssl_context())
+
+        from aplicativos.integracoes.views import _otrs_client as view_client_factory
+        from aplicativos.integracoes.management.commands.sincronizar_otrs import _otrs_client as sync_client_factory
+        self.assertIs(view_client_factory, sync_client_factory)
 
     def test_tls_certificate_and_handshake_errors_are_distinct_from_policy_disabled_and_sanitized(self):
         class DriverFailure(Exception):

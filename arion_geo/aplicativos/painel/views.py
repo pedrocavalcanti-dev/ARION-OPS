@@ -23,20 +23,22 @@ logger = logging.getLogger(__name__)
 
 
 @login_required
-@access_required("view_dashboard")
 def index(request):
-    links = LinkQueryService.base(request.user)
-    summary = links.aggregate(
-        total_links=Count("pk"),
-        state_count=Count("state", filter=Q(state__in=STATE_NAMES), distinct=True),
-        provider_count=Count(
-            "operator_id",
-            filter=Q(operator__isnull=False, operator__name__gt=""),
-            distinct=True,
-        ),
-    )
+    can_view_dashboard = request.user.has_perm("configuracoes.view_dashboard")
+    summary = {}
+    if can_view_dashboard:
+        links = LinkQueryService.base(request.user)
+        summary = links.aggregate(
+            total_links=Count("pk"),
+            state_count=Count("state", filter=Q(state__in=STATE_NAMES), distinct=True),
+            provider_count=Count(
+                "operator_id",
+                filter=Q(operator__isnull=False, operator__name__gt=""),
+                distinct=True,
+            ),
+        )
     access = {
-        "can_view_dashboard": request.user.has_perm("configuracoes.view_dashboard"),
+        "can_view_dashboard": can_view_dashboard,
         "can_view_chamados": request.user.has_perm("configuracoes.view_operational_tickets"),
         "can_view_base": request.user.has_perm("configuracoes.view_base"),
         "can_view_cockpit": request.user.has_perm("configuracoes.view_cockpit"),

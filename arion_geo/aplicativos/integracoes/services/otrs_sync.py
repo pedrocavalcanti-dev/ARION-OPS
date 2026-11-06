@@ -13,29 +13,11 @@ from aplicativos.integracoes.models import (
 )
 
 from .sync_common import clean, integer_or_none, normalized_name, source_datetime
+from .otrs_status import BUSINESS_OPEN_STATUSES, status_for_external_state
 
 logger = logging.getLogger(__name__)
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_$]+$")
-BUSINESS_STATES = {
-    "new": OTRSStateMapping.BusinessStatus.OPEN,
-    "merged": OTRSStateMapping.BusinessStatus.CLOSED,
-    "em atendimento": OTRSStateMapping.BusinessStatus.OPEN,
-    "pendente": OTRSStateMapping.BusinessStatus.PENDING,
-    "pendente aprovacao": OTRSStateMapping.BusinessStatus.PENDING,
-    "pendente cliente endereco nao localizado": OTRSStateMapping.BusinessStatus.PENDING,
-    "pendente cliente local fechado": OTRSStateMapping.BusinessStatus.PENDING,
-    "pendente operadora": OTRSStateMapping.BusinessStatus.PENDING,
-    "pendente outros": OTRSStateMapping.BusinessStatus.PENDING,
-    "aguardando aprovacao do gestor": OTRSStateMapping.BusinessStatus.PENDING,
-    "aguardando aprovacao do solicitante": OTRSStateMapping.BusinessStatus.PENDING,
-    "projeto especial": OTRSStateMapping.BusinessStatus.OPEN,
-    "agendado": OTRSStateMapping.BusinessStatus.SCHEDULED,
-    "resolvido": OTRSStateMapping.BusinessStatus.RESOLVED,
-    "closed successful": OTRSStateMapping.BusinessStatus.CLOSED,
-    "encerrado com viabilidade": OTRSStateMapping.BusinessStatus.CLOSED,
-    "cancelado": OTRSStateMapping.BusinessStatus.CANCELED,
-}
-OPEN_STATUSES = {OTRSStateMapping.BusinessStatus.OPEN, OTRSStateMapping.BusinessStatus.PENDING, OTRSStateMapping.BusinessStatus.SCHEDULED}
+OPEN_STATUSES = set(BUSINESS_OPEN_STATUSES)
 
 
 def normalize_responsibility(value):
@@ -238,7 +220,7 @@ class OTRSSyncService:
 
     @staticmethod
     def _state_status(name):
-        return BUSINESS_STATES.get(normalized_name(name), OTRSStateMapping.BusinessStatus.UNKNOWN)
+        return status_for_external_state(name)
 
     def _normalize_tickets(self, ticket_rows, queue_names_by_id, selected_queue_ids, dimensions, state_type_map, now):
         statuses = Counter()
@@ -333,7 +315,6 @@ class OTRSSyncService:
             _number(_val(row, "id")) for row in dimensions["states"]
             if self._state_status(clean(_val(row, "name"))) in {
                 OTRSStateMapping.BusinessStatus.RESOLVED,
-                OTRSStateMapping.BusinessStatus.CLOSED,
                 OTRSStateMapping.BusinessStatus.CANCELED,
             }
         }

@@ -21,6 +21,7 @@ from django.views.decorators.http import require_POST
 from aplicativos.auditoria.models import AuditEvent
 from aplicativos.auditoria.services import AuditService
 from aplicativos.integracoes.models import OTRSTicket
+from aplicativos.integracoes.services.otrs_status import business_status_label, normalize_business_status
 
 from .forms import CompetenceCreateForm, TreatmentEditForm, TreatmentOverrideForm, TreatmentPauseForm, WorkbookSelectionForm
 from .models import PenaltyCompetence, PenaltyFinancialChange, PenaltySourceRow, PenaltyTreatmentOverride, PenaltyTreatmentPause, PenaltyTreatmentRow, PenaltyTreatmentTicket
@@ -791,7 +792,8 @@ def treatment_detail_data(request, pk):
             "id": ticket.pk, "number": ticket.ticket_number,
             "url": otrs_ticket_url(ticket.external_id),
             "title": ticket.title, "queue": ticket.queue_name,
-            "status": ticket.get_business_status_display(),
+            "status": ticket.operational_status_label,
+            "source_state": ticket.external_state_name,
             "responsible": ticket.responsible_user_id,
             "opened_at": _display_datetime(ticket.source_created_at),
             "resolved_at": _display_datetime(ticket.resolved_at),
@@ -809,7 +811,8 @@ def treatment_detail_data(request, pk):
             "number": ticket_snapshot["number"],
             "url": otrs_ticket_url(ticket_snapshot.get("external_id")) if ticket_snapshot.get("external_id") else "",
             "title": ticket_snapshot.get("title", ""), "queue": ticket_snapshot.get("queue", ""),
-            "status": ticket_snapshot.get("business_status") or ticket_snapshot.get("state", ""),
+            "status": business_status_label(ticket_snapshot.get("business_status") or ticket_snapshot.get("state", "")),
+            "source_state": ticket_snapshot.get("source_state") or ticket_snapshot.get("state", ""),
             "responsible": ticket_snapshot.get("responsible"),
             "opened_at": _display_datetime(ticket_snapshot.get("created_at")),
             "resolved_at": _display_datetime(ticket_snapshot.get("resolved_at")),
@@ -834,14 +837,15 @@ def treatment_detail_data(request, pk):
         if candidate_ticket:
             ticket_candidates.append({
                 **candidate,
-                "status_label": candidate_ticket.get_business_status_display(),
+                "status_label": candidate_ticket.operational_status_label,
                 "queue": candidate_ticket.queue_name,
                 "url": otrs_ticket_url(candidate_ticket.external_id),
             })
         elif candidate.get("source") == "OTRS_GENERAL":
             ticket_candidates.append({
                 **candidate,
-                "status_label": candidate.get("status", "Estado não informado"),
+                "status_label": business_status_label(candidate.get("status", "Estado não informado")),
+                "source_state": candidate.get("source_state", ""),
                 "url": otrs_ticket_url(candidate.get("external_id")) if candidate.get("external_id") else "",
             })
     overrides = list(treatment.overrides.filter(removed_at__isnull=True))
@@ -951,7 +955,8 @@ def treatment_detail_data(request, pk):
             "ticket": treatment.ticket.ticket_number if treatment.ticket else ticket_snapshot.get("number") or treatment.ticket_identifier or "—",
             "title": treatment.ticket.title if treatment.ticket else ticket_snapshot.get("title", ""),
             "queue": treatment.ticket.queue_name if treatment.ticket else ticket_snapshot.get("queue", ""),
-            "state": treatment.ticket.get_business_status_display() if treatment.ticket else ticket_snapshot.get("business_status") or ticket_snapshot.get("state", ""),
+            "state": treatment.ticket.operational_status_label if treatment.ticket else business_status_label(ticket_snapshot.get("business_status") or ticket_snapshot.get("state", "")),
+            "source_state": treatment.ticket.external_state_name if treatment.ticket else ticket_snapshot.get("source_state") or ticket_snapshot.get("state", ""),
             "responsible": treatment.ticket.responsible_user_id if treatment.ticket else ticket_snapshot.get("responsible"),
             "tickets": tickets,
             "ticket_match": match_info,
@@ -1115,7 +1120,9 @@ def treatment_ticket_relation(request, pk):
                 treatment.arion_values["ticket_snapshot"] = {
                     "external_id": candidate_data.get("external_id"), "number": candidate_data["number"],
                     "title": candidate_data.get("title", ""), "queue": candidate_data.get("queue", ""),
-                    "state": candidate_data.get("status", ""), "business_status": candidate_data.get("status", ""),
+                    "state": candidate_data.get("source_state") or candidate_data.get("status", ""),
+                    "source_state": candidate_data.get("source_state") or candidate_data.get("status", ""),
+                    "business_status": normalize_business_status(candidate_data.get("status", "")),
                     "created_at": candidate_data.get("created_at"), "resolved_at": candidate_data.get("resolved_at"),
                     "closed_at": candidate_data.get("closed_at"), "responsible": candidate_data.get("responsible"),
                     "ci": candidate_data.get("ci", []), "lp": candidate_data.get("lp", []),

@@ -17,9 +17,14 @@ from aplicativos.configuracoes.permissions import access_required
 from aplicativos.integracoes.models import (CMDBLinkMirror, CMDBOperatorMirror,
     OTRSTicketConfigItem, OTRSStateMapping)
 from aplicativos.integracoes.services.analytics import (
-    BUSINESS_OPEN_STATUSES, OPERATIONAL_RESOLUTION_FIELD, LinkQueryService,
+    BACKLOG_STATUSES, OPERATIONAL_RESOLUTION_FIELD, LinkQueryService,
     TicketQueryService, operational_resolution_at,
     operational_resolution_expression,
+)
+from aplicativos.integracoes.services.otrs_status import (
+    OPERATIONAL_VALID_STATUSES, RESOLVED_STATUS,
+    business_status_label,
+    business_status_query, business_statuses_query, normalize_business_status,
 )
 from aplicativos.integracoes.services.semantics import LinkSemantics, UNCLASSIFIED
 from .search import matching_link_queryset, normalize_search_text
@@ -210,13 +215,11 @@ def provider_detail(request, pk):
     link_ids = list(links.values_list("pk", flat=True))
     now = timezone.now()
     start = now - timedelta(days=30)
-    valid = (OTRSStateMapping.BusinessStatus.OPEN, OTRSStateMapping.BusinessStatus.PENDING,
-        OTRSStateMapping.BusinessStatus.SCHEDULED, OTRSStateMapping.BusinessStatus.RESOLVED,
-        OTRSStateMapping.BusinessStatus.CLOSED)
+    valid = OPERATIONAL_VALID_STATUSES
     relations = OTRSTicketConfigItem.objects.filter(
         is_present_in_source=True, cmdb_link_id__in=link_ids,
-        ticket__in=TicketQueryService.noc_tickets(), ticket__business_status__in=valid,
-    ).select_related("ticket", "cmdb_link")
+        ticket__in=TicketQueryService.noc_tickets(),
+    ).filter(business_statuses_query("ticket__business_status", valid)).select_related("ticket", "cmdb_link")
     recent = relations.filter(ticket__source_created_at__gte=start, ticket__source_created_at__lte=now)
     ticket_ids = recent.values_list("ticket_id", flat=True).distinct()
     from aplicativos.integracoes.models import OTRSTicket
@@ -224,15 +227,14 @@ def provider_detail(request, pk):
     page = Paginator(ticket_qs.order_by("-source_created_at", "-pk"), 10).get_page(request.GET.get("history_page", 1))
     ticket_rows = [{"id": t.pk, "number": t.ticket_number, "title": t.title,
         "created_at": t.source_created_at.isoformat() if t.source_created_at else None,
-        "status": t.get_business_status_display() if hasattr(t, "get_business_status_display") else t.business_status,
+        "status": business_status_label(t.business_status),
         "responsibility": t.responsibility_normalized}
         for t in page.object_list]
-    active = BUSINESS_OPEN_STATUSES
+    active = BACKLOG_STATUSES
     active_ids = set(relations.filter(ticket__business_status__in=active).values_list("ticket_id", flat=True).distinct())
     terminal = ticket_qs.annotate(**{
         OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression(),
-    }).filter(business_status__in=(OTRSStateMapping.BusinessStatus.RESOLVED,
-        OTRSStateMapping.BusinessStatus.CLOSED), source_created_at__isnull=False).exclude(
+    }).filter(business_status_query("business_status", RESOLVED_STATUS), source_created_at__isnull=False).exclude(
             **{f"{OPERATIONAL_RESOLUTION_FIELD}__isnull": True},
         )
     overdue = sum(1 for ticket in OTRSTicket.objects.filter(pk__in=active_ids, source_created_at__isnull=False)
@@ -311,9 +313,7 @@ def detail(request, pk):
 def _ticket_duration_hours(ticket, now):
     if not ticket.source_created_at:
         return None
-    if ticket.business_status in (
-        OTRSStateMapping.BusinessStatus.RESOLVED, OTRSStateMapping.BusinessStatus.CLOSED,
-    ):
+    if normalize_business_status(ticket.business_status) == RESOLVED_STATUS:
         end_at = operational_resolution_at(ticket)
         if not end_at:
             return None
@@ -328,17 +328,15 @@ def _add_link_history(data, link, request):
     period_days = {"30": 30, "90": 90, "365": 365}.get(request.GET.get("period", "30"), 30)
     now = timezone.now()
     start = now - timedelta(days=period_days)
-    valid = (OTRSStateMapping.BusinessStatus.OPEN, OTRSStateMapping.BusinessStatus.PENDING,
-        OTRSStateMapping.BusinessStatus.SCHEDULED, OTRSStateMapping.BusinessStatus.RESOLVED,
-        OTRSStateMapping.BusinessStatus.CLOSED)
+    valid = OPERATIONAL_VALID_STATUSES
     relation_base = OTRSTicketConfigItem.objects.filter(
         is_present_in_source=True, cmdb_link=link,
-        ticket__in=TicketQueryService.noc_tickets(), ticket__business_status__in=valid,
-    )
+        ticket__in=TicketQueryService.noc_tickets(),
+    ).filter(business_statuses_query("ticket__business_status", valid))
     ticket_ids = relation_base.values_list("ticket_id", flat=True).distinct()
     period_ids = relation_base.filter(ticket__source_created_at__gte=start,
         ticket__source_created_at__lte=now).values_list("ticket_id", flat=True).distinct()
-    status_backlog = BUSINESS_OPEN_STATUSES
+    status_backlog = BACKLOG_STATUSES
     all_tickets = OTRSTicket.objects.filter(pk__in=ticket_ids).order_by("-source_created_at", "-pk")
     in_period = OTRSTicket.objects.filter(pk__in=period_ids)
     period_ticket_rows = list(in_period.filter(source_created_at__isnull=False).only(
@@ -347,7 +345,7 @@ def _add_link_history(data, link, request):
     overdue = sum(1 for ticket in period_ticket_rows if (
         ticket.business_status in status_backlog and now - ticket.source_created_at > timedelta(hours=24)
     ) or (
-        ticket.business_status in (OTRSStateMapping.BusinessStatus.RESOLVED, OTRSStateMapping.BusinessStatus.CLOSED)
+        normalize_business_status(ticket.business_status) == RESOLVED_STATUS
         and operational_resolution_at(ticket)
         and operational_resolution_at(ticket) - ticket.source_created_at > timedelta(hours=24)
     ))
@@ -371,14 +369,14 @@ def _add_link_history(data, link, request):
         "backlog": all_tickets.filter(business_status__in=status_backlog).count(),
         "recurrent": 1 if in_period.count() >= 2 else 0, "over_24h": overdue,
         "tickets": [{"id": t.pk, "number": t.ticket_number, "created_at": t.source_created_at.isoformat() if t.source_created_at else None,
-            "status": t.business_status, "title": t.title, "responsibility": t.responsibility_normalized,
+            "status": normalize_business_status(t.business_status), "title": t.title, "responsibility": t.responsibility_normalized,
             "client": link.contracting_client, "project": link.business_project,
             "resolved_at": t.resolved_at.isoformat() if t.resolved_at else None,
             "terminal_at": t.terminal_state_at.isoformat() if t.terminal_state_at else None,
             "duration_hours": _ticket_duration_hours(t, now),
             "closing_reason": t.closing_code_raw,
             "over_24h": bool(t.source_created_at and ((t.business_status in status_backlog and now - t.source_created_at > timedelta(hours=24)) or
-                (t.business_status in (OTRSStateMapping.BusinessStatus.RESOLVED, OTRSStateMapping.BusinessStatus.CLOSED)
+                (normalize_business_status(t.business_status) == RESOLVED_STATUS
                  and operational_resolution_at(t)
                  and operational_resolution_at(t) - t.source_created_at > timedelta(hours=24))))}
             for t in page.object_list],
@@ -465,19 +463,19 @@ def map_state_detail(request):
         tab == "recurrence" and mode in {"projects", "calls", "repeat"}
     )
     if mode in {"projects", "calls", "repeat", "motives"} and load_ticket_relations:
-        statuses = (OTRSStateMapping.BusinessStatus.OPEN, OTRSStateMapping.BusinessStatus.PENDING,
-                    OTRSStateMapping.BusinessStatus.SCHEDULED, OTRSStateMapping.BusinessStatus.RESOLVED,
-                    OTRSStateMapping.BusinessStatus.CLOSED)
+        statuses = OPERATIONAL_VALID_STATUSES
         if tab == "tickets" and mode == "motives":
-            statuses = (OTRSStateMapping.BusinessStatus.RESOLVED, OTRSStateMapping.BusinessStatus.CLOSED)
+            statuses = (RESOLVED_STATUS,)
             date_field = OPERATIONAL_RESOLUTION_FIELD
         else:
             date_field = "ticket__source_created_at"
         relations = OTRSTicketConfigItem.objects.filter(
             is_present_in_source=True, cmdb_link__in=state_links,
-            ticket__in=TicketQueryService.noc_tickets(), ticket__business_status__in=statuses,
+            ticket__in=TicketQueryService.noc_tickets(),
             ticket__responsibility_normalized__in=(params.get("provenance"),) if params.get("provenance") else VALID_PROCEDENCE,
-        ).select_related("ticket", "cmdb_link", "cmdb_link__operator").order_by("-ticket__source_created_at")
+        ).filter(business_statuses_query("ticket__business_status", statuses)).select_related(
+            "ticket", "cmdb_link", "cmdb_link__operator",
+        ).order_by("-ticket__source_created_at")
         if mode == "motives":
             relations = relations.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
@@ -492,7 +490,9 @@ def map_state_detail(request):
         if end:
             relations = relations.filter(**{f"{date_field}__lt": end_exclusive})
         if params.get("status"):
-            relations = relations.filter(ticket__business_status=params.get("status").strip().upper())
+            relations = relations.filter(business_status_query(
+                "ticket__business_status", normalize_business_status(params.get("status")),
+            ))
         if params.get("priority"):
             relations = relations.filter(ticket__priority_name=params.get("priority").strip()[:160])
         relations = filter_tracking_relations(
@@ -526,7 +526,7 @@ def map_state_detail(request):
             ) or None
             unique.setdefault(ticket.pk, {
                 "external_id": ticket.external_id,
-                "ticket_number": ticket.ticket_number, "status": ticket.business_status,
+                "ticket_number": ticket.ticket_number, "status": normalize_business_status(ticket.business_status),
                 "created_at": ticket.source_created_at.isoformat() if ticket.source_created_at else None,
                 "changed_at": ticket.source_changed_at.isoformat() if ticket.source_changed_at else None,
                 "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at else None,

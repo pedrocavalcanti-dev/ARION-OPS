@@ -356,7 +356,7 @@ class Command(BaseCommand):
             owner_snapshot="",
             opened_at=ticket.source_created_at,
             closed_at=ticket.resolved_at or ticket.terminal_state_at or ticket.canceled_at,
-            result=ticket.closing_code_raw or ticket.get_business_status_display(),
+            result=ticket.closing_code_raw or ticket.operational_status_label,
         )
         self._record_order_event(
             order, actor, QualityAuditEvent.EventType.QUALITY_TICKET_LINKED,

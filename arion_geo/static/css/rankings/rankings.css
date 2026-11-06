@@ -80,6 +80,8 @@
 
 /* KPIs neutros com ênfase em número, legenda e sinais semânticos pequenos. */
 .ranking-kpis--v2 { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:9px; margin:12px 0 18px; }
+.ranking-performance-kpis { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.ranking-performance-note { margin:-8px 0 16px; color:var(--text-muted); font-size:11px; line-height:1.55; }
 .ranking-v2 .ranking-kpi { position:relative; min-width:0; padding:12px; border:1px solid var(--card-border); border-radius:var(--radius-md); background:var(--card-bg); box-shadow:inset 0 1px 0 var(--card-highlight),var(--card-shadow); transition:transform 180ms var(--ease-out),border-color 180ms ease,box-shadow 180ms var(--ease-out); }
 .ranking-v2 .ranking-kpi > span { display:block; min-height:2.4em; color:var(--text-muted); font-size:9px; font-weight:600; letter-spacing:.06em; line-height:1.3; text-transform:uppercase; }
 .ranking-v2 .ranking-kpi strong { display:block; overflow:hidden; margin:4px 0 3px; color:var(--text-primary); font-size:clamp(19px,1.55vw,25px); font-weight:550; letter-spacing:-.04em; line-height:1; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
@@ -344,6 +346,7 @@ body.ranking-drawer-open { overflow:hidden; }
 /* Laptop, tablet and mobile. */
 @media (max-width:1199px) {
   .ranking-kpis--v2 { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .ranking-performance-kpis { grid-template-columns:repeat(4,minmax(0,1fr)); }
   .ranking-filter-form--v2 { grid-template-columns:repeat(4,minmax(0,1fr)); grid-template-areas:"month window client project" "provider more custom actions"; }
   .podium { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .provider-drawer { width:min(760px,72vw); }
@@ -360,6 +363,7 @@ body.ranking-drawer-open { overflow:hidden; }
 @media (max-width:760px) {
   .ranking-page { padding:20px 14px 38px; }
   .ranking-kpis--v2 { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+  .ranking-performance-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .ranking-v2 .ranking-kpi { padding:10px; }
   .ranking-v2 .ranking-kpi > span { min-height:2.5em; font-size:9px; }
   .ranking-v2 .ranking-kpi strong { font-size:20px; }

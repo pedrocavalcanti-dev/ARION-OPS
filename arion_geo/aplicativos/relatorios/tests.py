@@ -25,15 +25,12 @@ class ReportsAccessTests(TestCase):
         cls.system_admin.groups.set([Group.objects.get(name=GROUP_SYSTEM_ADMIN)])
         cls.superuser = User.objects.create_superuser(username="reports-root", email="", password="secure-test-password")
 
-    def test_only_authorized_profiles_see_reports_menu_and_open_module(self):
+    def test_only_authorized_profiles_can_open_reports_module(self):
         dashboard_url = reverse("relatorios:dashboard")
         self.client.force_login(self.manager)
         self.assertEqual(self.client.get(dashboard_url).status_code, 200)
-        self.assertContains(self.client.get(reverse("configuracoes:account")), "Relatórios")
 
         self.client.force_login(self.analyst)
-        account = self.client.get(reverse("configuracoes:account"))
-        self.assertNotContains(account, "Relatórios")
         self.assertEqual(self.client.get(dashboard_url).status_code, 403)
         self.assertEqual(self.client.get(reverse("relatorios:claro-penalidades")).status_code, 403)
 

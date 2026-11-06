@@ -4,7 +4,7 @@ O módulo Chamados é a mesa operacional diária do NOC Atacado. A fila e os det
 
 ## Fila e fonte
 
-A fila inicial contém tickets atuais da fila `NOC - ATACADO` nos estados OTRS `OPEN`, `PENDING` e `SCHEDULED`. `RESOLVED`, `CLOSED`, `CANCELED` e `UNKNOWN` não são ativos. Cada ticket aparece uma vez, mesmo quando relacionado a vários ConfigItems; os links associados ficam disponíveis no detalhe.
+A fila inicial contém tickets atuais da fila `NOC - ATACADO` nos estados OTRS `OPEN`, `PENDING` e `SCHEDULED`. `RESOLVED` (incluindo o alias local legado `CLOSED`), `CANCELED` e `UNKNOWN` não são ativos. Cada ticket aparece uma vez, mesmo quando relacionado a vários ConfigItems; os links associados ficam disponíveis no detalhe.
 
 O número comercial (`ticket.tn`, exibido na fila) é diferente do ID interno (`ticket.id`). O mirror guarda o ID interno em `OTRSTicket.external_id`; o sincronizador já o preenchia nos modos FAST e FULL. O link oficial é composto no backend como `AgentTicketZoom;TicketID=<external_id>`, usando `OTRS_WEB_BASE_URL`. A fila oficial usa `OTRS_NOC_ATACADO_QUEUE_URL`. Ambos abrem em outra aba e dependem da autenticação do próprio OTRS. Sem ID interno válido, o link do ticket é omitido.
 
@@ -23,7 +23,7 @@ Leia `ticket.id` como chave técnica e `ticket.tn` como número de apresentaçã
 
 ## Busca, filtros e recortes
 
-Busca, filtros, recortes e paginação são atendidos no backend e permanecem na URL. A busca inclui número, título, ID interno OTRS, designação, CI, link, cliente, projeto, provider, cidade e UF. Os filtros principais são Status ARION, Cliente, Projeto, Provider/ISP, UF e Responsável. Status OTRS, prioridade, motivo, aging, reincidência e ordenação ficam em **Mais filtros**; links antigos com `otrs_status` continuam aceitos. O padrão é 25 linhas; as opções são 50 e 100.
+Busca, filtros, recortes e paginação são atendidos no backend e permanecem na URL. A busca inclui número, título, ID interno OTRS, designação, CI, link, cliente, projeto, provider, cidade e UF. Os filtros principais são Status ARION, Cliente, Projeto, Provider/ISP, UF e Responsável. Status OTRS, prioridade, motivo, aging, reincidência e ordenação ficam em **Mais filtros**; links antigos com `otrs_status` continuam aceitos. O padrão inicial é 50 linhas; seleções explícitas de 25, 50 ou 100 são preservadas ao paginar e em filtros salvos.
 
 As abas aplicam recortes cumulativos com os demais filtros e seus contadores são calculados no backend para o recorte inteiro, não apenas para a página visível:
 
@@ -34,7 +34,7 @@ As abas aplicam recortes cumulativos com os demais filtros e seus contadores sã
 - **Meus:** acompanhamento ARION atribuído ao usuário atual.
 - **Sem responsável:** acompanhamento ARION sem responsável.
 
-Selects e checkboxes aplicam ao mudar; a busca usa debounce e continua sendo uma navegação GET server-side. **Limpar** remove os filtros e abre Todos, por maior aging e 25 por página. A URL envia `ignore_default=1` para não reaplicar a fila padrão pessoal nesse acesso.
+Selects e checkboxes aplicam ao mudar; a busca usa debounce e continua sendo uma navegação GET server-side. **Limpar** remove os filtros e abre Todos, por maior aging e 50 por página. A URL envia `ignore_default=1` para não reaplicar a fila padrão pessoal nesse acesso.
 
 Categorias de encerramento reutilizam `ClosingReasonCanonicalizer`.
 
@@ -68,7 +68,7 @@ Sem parâmetros na URL, a fila padrão do usuário é aplicada. Parâmetros expl
 
 ## Aging e recorrência
 
-Aging é `agora - source_created_at`. O marcador operacional `>24h` não representa SLA contratual. Reincidência exige ao menos dois tickets distintos em estados operacionais válidos (`OPEN`, `PENDING`, `SCHEDULED`, `RESOLVED`, `CLOSED`) relacionados ao link nos últimos 30 dias, usando a regra compartilhada pela analytics operacional. Cancelados e desconhecidos não contam.
+Aging é `agora - source_created_at`. O marcador operacional `>24h` não representa SLA contratual. Reincidência exige ao menos dois tickets distintos em estados operacionais válidos (`OPEN`, `PENDING`, `SCHEDULED`, `RESOLVED`) relacionados ao link nos últimos 30 dias, usando a regra compartilhada pela analytics operacional. `CLOSED` é somente um alias local legado de `RESOLVED` durante compatibilidade; não é uma categoria adicional. Cancelados e desconhecidos não contam.
 
 ## Sincronização e limites
 

@@ -360,7 +360,7 @@ class MapMirrorTests(TestCase):
         self.assertEqual(data["affected_link_count"], 2)
         self.assertEqual(data["states"]["SP"]["affected_links"], 2)
         self.assertEqual(data["states"]["SP"]["active_tickets"], 3)
-        self.assertEqual(data["ticket_status_counts"], {"OPEN": 1, "PENDING": 1, "SCHEDULED": 1, "RESOLVED": 1, "CLOSED": 1})
+        self.assertEqual(data["ticket_status_counts"], {"OPEN": 1, "PENDING": 1, "SCHEDULED": 1, "RESOLVED": 2})
         self.assertEqual(data["states"]["RJ"]["ticket_count"], 0)
 
     def test_operational_map_excludes_improper_and_unknown_provenance_but_keeps_valid_history(self):
@@ -395,7 +395,7 @@ class MapMirrorTests(TestCase):
         self.assertEqual(calls["ticket_count"], 4)
         self.assertEqual(calls["active_ticket_count"], 2)
         self.assertEqual(calls["affected_link_count"], 1)
-        self.assertEqual(calls["ticket_status_counts"], {"OPEN": 2, "RESOLVED": 1, "CLOSED": 1})
+        self.assertEqual(calls["ticket_status_counts"], {"OPEN": 2, "RESOLVED": 2})
         self.assertEqual(motives["terminal_ticket_count"], 2)
         self.assertEqual(sum(motives["states"]["SP"]["reason_counts"].values()), 2)
         self.assertEqual(
@@ -673,7 +673,7 @@ class MapMirrorTests(TestCase):
         self.assertEqual(october["terminal_ticket_count"], 1)
         self.assertEqual(november["terminal_ticket_count"], 0)
         self.assertEqual(len(october_detail["tickets"]), 1)
-        self.assertEqual(october_detail["tickets"][0]["status"], "CLOSED")
+        self.assertEqual(october_detail["tickets"][0]["status"], "RESOLVED")
         self.assertEqual(october_detail["tickets"][0]["resolved_at"], ticket.resolved_at.isoformat())
         self.assertEqual(october_detail["tickets"][0]["terminal_at"], ticket.terminal_state_at.isoformat())
         self.assertEqual(november_detail["tickets"], [])

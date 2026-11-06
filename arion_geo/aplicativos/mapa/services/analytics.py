@@ -11,6 +11,10 @@ from aplicativos.integracoes.services.analytics import (
     BUSINESS_OPEN_STATUSES, OPERATIONAL_RESOLUTION_FIELD, LinkQueryService,
     PeriodService, TicketQueryService, operational_resolution_expression,
 )
+from aplicativos.integracoes.services.otrs_status import (
+    OPERATIONAL_VALID_STATUSES, RESOLVED_STATUS, TERMINAL_STATUSES,
+    business_status_query, business_statuses_query, normalize_business_status,
+)
 from aplicativos.integracoes.services.ticket_business_identity import TicketBusinessIdentityService
 from aplicativos.integracoes.services.link_business_identity import BusinessIdentityRules
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
@@ -32,16 +36,10 @@ STATE_NAMES_ACCENTED = {
     "PR": "Paran\u00e1", "RO": "Rond\u00f4nia", "SP": "S\u00e3o Paulo",
 }
 CLIENT_KEYS = {"claro": "Claro", "vivo": "Vivo", "algar": "Algar"}
-VALID_TICKET_STATES = (
-    OTRSStateMapping.BusinessStatus.OPEN, OTRSStateMapping.BusinessStatus.PENDING,
-    OTRSStateMapping.BusinessStatus.SCHEDULED, OTRSStateMapping.BusinessStatus.RESOLVED,
-    OTRSStateMapping.BusinessStatus.CLOSED,
-)
+VALID_TICKET_STATES = OPERATIONAL_VALID_STATUSES
 ACTIVE_TICKET_STATES = BUSINESS_OPEN_STATUSES
 VALID_PROCEDENCE = ("PROCEDENTE", "INDETERMINADO")
-TERMINAL_TICKET_STATES = (
-    OTRSStateMapping.BusinessStatus.RESOLVED, OTRSStateMapping.BusinessStatus.CLOSED,
-)
+TERMINAL_TICKET_STATES = TERMINAL_STATUSES
 
 
 def _norm(value):
@@ -171,18 +169,18 @@ class MapAnalyticsService:
                 assigned_to_id=int(assignee),
             ).values("ticket_external_id"))
         if mode == "calls":
-            tickets = tickets.filter(business_status__in=VALID_TICKET_STATES)
+            tickets = tickets.filter(business_statuses_query("business_status", VALID_TICKET_STATES))
             if start_at:
                 tickets = tickets.filter(source_created_at__gte=start_at)
             if end_exclusive:
                 tickets = tickets.filter(source_created_at__lt=end_exclusive)
             if status_filter:
-                tickets = tickets.filter(business_status=status_filter)
+                tickets = tickets.filter(business_status_query("business_status", status_filter))
             if priority_filter:
                 tickets = tickets.filter(priority_name=priority_filter)
         else:
             tickets = tickets.filter(
-                business_status__in=TERMINAL_TICKET_STATES,
+                business_statuses_query("business_status", TERMINAL_TICKET_STATES),
             ).exclude(closing_code_raw="").annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression(),
             }).exclude(**{f"{OPERATIONAL_RESOLUTION_FIELD}__isnull": True})
@@ -213,7 +211,7 @@ class MapAnalyticsService:
         project = canonical_project_name(params.get("project"))
         provider = (params.get("provider") or "").strip()
         reason_filter = ClosingReasonCanonicalizer.key(params.get("reason")) if params.get("reason") else ""
-        status_filter = (params.get("status") or "").strip().upper()
+        status_filter = normalize_business_status(params.get("status")) if params.get("status") else ""
         priority_filter = (params.get("priority") or "").strip()
         arion_status = (params.get("arion_status") or "").strip().upper()
         assignee = (params.get("assignee") or "").strip()
@@ -279,9 +277,10 @@ class MapAnalyticsService:
         if mode in {"projects", "calls", "repeat", "motives"}:
             period_relations = OTRSTicketConfigItem.objects.filter(
                 is_present_in_source=True, ticket__in=TicketQueryService.noc_tickets(),
-                ticket__business_status__in=VALID_TICKET_STATES,
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
-            ).select_related("ticket")
+            ).filter(business_statuses_query(
+                "ticket__business_status", VALID_TICKET_STATES,
+            )).select_related("ticket")
             current_relations = OTRSTicketConfigItem.objects.filter(
                 is_present_in_source=True, ticket__in=TicketQueryService.noc_tickets(),
                 ticket__business_status__in=ACTIVE_TICKET_STATES,
@@ -291,9 +290,12 @@ class MapAnalyticsService:
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
             }).filter(
                 is_present_in_source=True, ticket__in=TicketQueryService.noc_tickets(),
-                ticket__business_status__in=TERMINAL_TICKET_STATES,
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
-            ).exclude(ticket__closing_code_raw="").exclude(**{f"{OPERATIONAL_RESOLUTION_FIELD}__isnull": True}).select_related("ticket")
+            ).filter(business_statuses_query(
+                "ticket__business_status", TERMINAL_TICKET_STATES,
+            )).exclude(ticket__closing_code_raw="").exclude(
+                **{f"{OPERATIONAL_RESOLUTION_FIELD}__isnull": True},
+            ).select_related("ticket")
             if start:
                 period_relations = period_relations.filter(ticket__source_created_at__gte=start_at)
                 terminal_relations = terminal_relations.filter(**{f"{OPERATIONAL_RESOLUTION_FIELD}__gte": start_at})
@@ -303,9 +305,10 @@ class MapAnalyticsService:
             priority_options = list(period_relations.filter(cmdb_link__in=scoped).exclude(
                 ticket__priority_name="").values_list("ticket__priority_name", flat=True).distinct().order_by("ticket__priority_name"))
             if status_filter:
-                period_relations = period_relations.filter(ticket__business_status=status_filter)
-                current_relations = current_relations.filter(ticket__business_status=status_filter)
-                terminal_relations = terminal_relations.filter(ticket__business_status=status_filter)
+                status_query = business_status_query("ticket__business_status", status_filter)
+                period_relations = period_relations.filter(status_query)
+                current_relations = current_relations.filter(status_query)
+                terminal_relations = terminal_relations.filter(status_query)
             if priority_filter:
                 period_relations = period_relations.filter(ticket__priority_name=priority_filter)
                 current_relations = current_relations.filter(ticket__priority_name=priority_filter)
@@ -403,7 +406,7 @@ class MapAnalyticsService:
             active = {rel.ticket_id for rel in active_rows if context_matches(rel.ticket)}
             terminal = {rel.ticket_id: rel.ticket for rel in terminal_rows if context_matches(rel.ticket)}
             global_tickets.update(tickets)
-            global_ticket_statuses.update({ticket_id: ticket.business_status for ticket_id, ticket in tickets.items()})
+            global_ticket_statuses.update({ticket_id: normalize_business_status(ticket.business_status) for ticket_id, ticket in tickets.items()})
             global_ticket_priorities.update({ticket_id: ticket.priority_name for ticket_id, ticket in tickets.items()})
             global_ticket_reasons.update({ticket_id: ClosingReasonCanonicalizer.display(ticket.closing_code_raw) for ticket_id, ticket in tickets.items()})
             active_ids.update(active)
@@ -458,7 +461,7 @@ class MapAnalyticsService:
             item["active_tickets"] = len(item["active_ticket_ids"])
             item["recurrence_tickets"] = len(item["recurrence_ticket_ids"])
             for ticket in item["tickets_by_id"].values():
-                _inc(item["ticket_status_counts"], ticket.business_status)
+                _inc(item["ticket_status_counts"], normalize_business_status(ticket.business_status))
                 if ticket.priority_name:
                     _inc(item["ticket_priority_counts"], ticket.priority_name)
                 reason = ClosingReasonCanonicalizer.display(ticket.closing_code_raw)
@@ -495,7 +498,7 @@ class MapAnalyticsService:
             _inc(status_counts, status)
         if mode == "calls":
             for row in unlinked_tickets.values("business_status").annotate(total=Count("pk")):
-                _inc(status_counts, row["business_status"], row["total"])
+                _inc(status_counts, normalize_business_status(row["business_status"]), row["total"])
         for priority in global_ticket_priorities.values():
             if priority:
                 _inc(priority_counts, priority)

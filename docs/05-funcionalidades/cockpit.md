@@ -28,7 +28,7 @@ Abrange a fila `NOC - ATACADO`. As métricas de tickets usam estados operacionai
 
 ### Cancelamentos
 
-Abrange as filas configuradas para o processo de cancelamento. Os tickets são classificados pelo serviço central de etapas, usando fila e estado disponíveis no espelho. O contexto mostra as etapas ativas e mantém tickets ativos sem regra conhecida em `UNKNOWN`, para não ocultá-los do estoque consolidado.
+Abrange as filas configuradas para o processo de cancelamento. Os tickets são classificados pelo serviço central de etapas, usando fila e estado disponíveis no espelho. A classificação ainda pode mostrar uma etapa `UNKNOWN` para investigação, mas esses tickets não entram no backlog, aging ou total de estoque operacional.
 
 A classificação usa os perfis operacionais sincronizados do OTRS. Solicitação e Em tratamento podem compartilhar a fila física; a combinação com o estado diferencia as etapas. Os cards representam estoque atual por etapa, e não quatro fluxos independentes.
 
@@ -42,11 +42,9 @@ Combina Suporte e Cancelamentos e deduplica tickets pelo identificador externo. 
 | --- | --- |
 | Tickets criados | `source_created_at`; tickets distintos nos estados válidos do contexto. Cancelados e improcedentes obedecem às opções gerenciais quando compatíveis. |
 | Em atendimento, Pendentes e Agendados | `source_created_at` no período e estado atual correspondente. |
-| Resolvidos | Estado `RESOLVED`, pela data operacional de resolução. |
-| Encerrados | Estado `CLOSED`, pela data operacional de resolução. |
-| Resolvidos + Encerrados | Estados `RESOLVED` e `CLOSED`, pela data operacional de resolução. |
+| Resolvidos | Categoria operacional `RESOLVED`, incluindo estados OTRS brutos Resolvido e Encerrado, pela data operacional de resolução. |
 | Cancelados | Estado `CANCELED`, pela data de cancelamento; métrica específica. |
-| Backlog atual | Snapshot de tickets ativos; a data selecionada não altera o estoque atual. |
+| Backlog atual | Snapshot somente de `OPEN` e `PENDING`; `SCHEDULED`, `CANCELED`, `UNKNOWN` e improcedentes ficam de fora. A data selecionada não altera o estoque atual. |
 | Links afetados | Links CMDB distintos relacionados aos tickets do recorte. Um ticket pode se relacionar a mais de um link. |
 | Links reincidentes | Links distintos que atendem à regra de recorrência sobre tickets distintos no período. Não representa o estoque atual de links afetados. |
 
@@ -56,27 +54,27 @@ A dimensão Provedor pode incluir o mesmo ticket em mais de um grupo quando ele 
 
 ## Fluxo operacional, backlog e aging
 
-O fluxo usa tickets filtrados no contexto atual. **Novos** usa `source_created_at`; **Resolvidos** inclui as saídas em `RESOLVED` e `CLOSED`; a data de saída usa os timestamps operacionais descritos acima.
+O fluxo usa tickets filtrados no contexto atual. **Novos** usa `source_created_at`; **Resolvidos** inclui a saída operacional `RESOLVED`, que consolida os nomes brutos OTRS Resolvido e Encerrado. A data de saída usa os timestamps operacionais descritos acima.
 
 O Cockpit considera cancelados e improcedentes por padrão nas análises históricas aplicáveis. As opções ficam em **Mais filtros** e permitem excluí-los. Cancelados podem fazer parte do histórico, mas não entram no backlog atual, aging ou tickets ativos.
 
-O atalho **Improcedentes** continua filtrando especificamente os tickets cuja procedência é improcedente. Improcedentes não entram no snapshot atual de backlog ou aging. A métrica **Backlog atual** permanece restrita ao estoque operacional ativo.
+O atalho **Improcedentes** continua filtrando especificamente os tickets cuja procedência é improcedente. Improcedentes não entram no snapshot atual de backlog ou aging. A métrica **Backlog atual** permanece restrita a `OPEN` e `PENDING`.
 
-O saldo visível do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets operacionais ativos, sem improcedentes, e a reconstrução histórica sempre baixa os cancelamentos. A variação percentual do backlog compara a variação reconstruída do estoque com o backlog inicial.
+O saldo visível do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets `OPEN` e `PENDING`, sem `SCHEDULED`, improcedentes ou desconhecidos, e a reconstrução histórica sempre baixa resoluções e cancelamentos. A variação percentual do backlog compara a variação reconstruída do estoque com o backlog inicial.
 
-O backlog histórico é reconstruído como estoque inicial, entradas por criação e saídas por resolução, encerramento ou cancelamento. A linha só aparece quando os timestamps do espelho permitem reconstrução a partir do início disponível e, quando o período termina hoje, o valor final reconcilia com o snapshot atual. Caso a cobertura não seja suficiente, a linha é ocultada com a razão; o snapshot atual continua disponível.
+O backlog histórico é reconstruído como estoque inicial, entradas válidas por criação e saídas por resolução consolidada ou cancelamento. A linha só aparece quando os timestamps do espelho permitem reconstrução a partir do início disponível e, quando o período termina hoje, o valor final reconcilia com o snapshot `OPEN`/`PENDING` atual. Caso a cobertura não seja suficiente, a linha é ocultada com a razão; o snapshot atual continua disponível.
 
 A reconstrução não recupera ciclos completos de reabertura nem todas as movimentações históricas de fila, pois esses eventos não são materializados no mirror do Cockpit. Portanto, **Novos** significa tickets criados no período, não tickets que entraram na fila nesse período.
 
-O aging é um snapshot do estoque ativo em faixas `0-4h`, `4-8h`, `8-24h`, `24-48h`, `48-72h` e `>72h`, calculadas desde `source_created_at`. Não é tempo médio de resolução. A faixa **Acima de 24h** é um filtro de backlog atual, não uma métrica histórica.
+O aging é um snapshot do backlog `OPEN`/`PENDING` em faixas `0-4h`, `4-8h`, `8-24h`, `24-48h`, `48-72h` e `>72h`, calculadas desde `source_created_at`. Não é tempo médio de resolução. A faixa **Acima de 24h** é um filtro de backlog atual, não uma métrica histórica.
 
-O tempo médio de resolução é calculado separadamente para tickets `RESOLVED`/`CLOSED` com duração válida. Cancelamentos não são tratados como resoluções médias.
+O tempo médio de resolução é calculado separadamente para tickets `RESOLVED` com duração válida, incluindo linhas legadas `CLOSED`. Cancelamentos não são tratados como resoluções médias.
 
 ## Opções gerenciais e filtros
 
 As opções de registros considerados ficam em **Mais filtros**. Ambas vêm ligadas por padrão e são preservadas na URL e nas consultas salvas:
 
-- **Incluir cancelados**: mantém cancelamentos nas análises históricas aplicáveis. Métricas específicas de estado RESOLVED/CLOSED não passam a contar cancelamentos.
+- **Incluir cancelados**: mantém cancelamentos nas análises históricas aplicáveis. Métricas específicas de estado `RESOLVED` (incluindo o alias legado `CLOSED`) não passam a contar cancelamentos.
 - **Incluir improcedentes**: mantém improcedentes nas métricas compatíveis e no histórico. O estoque atual permanece operacional e sem improcedentes.
 
 O estado das opções é preservado na URL e nas consultas salvas. Quando uma opção é desmarcada, o PDF registra a exclusão correspondente.

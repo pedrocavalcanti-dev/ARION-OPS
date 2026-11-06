@@ -22,9 +22,9 @@ SORT_OPTIONS = (
     ("tickets", "Chamados no período"),
     ("tickets_per_100_active_links", "Chamados / 100 links"),
     ("backlog_current", "Backlog atual"),
-    ("tickets_over_24h", "Chamados >24h"),
+    ("tickets_over_24h", "Resolvidos >24h"),
     ("avg_resolution_hours", "Tempo médio"),
-    ("risk_score", "Indicador operacional"),
+    ("operational_score", "Score operacional"),
     ("impact_noc_score", "Maior impacto no NOC"),
     ("affected_rate", "Maior % da base afetada"),
     ("recurrent_links", "Mais reincidentes"),
@@ -39,9 +39,9 @@ NUMERIC_FILTERS = (
     ("tickets", "tickets", "Chamados no período", "", "1"),
     ("incidence", "tickets_per_100_active_links", "Chamados / 100 links", "", "0.1"),
     ("backlog", "backlog_current", "Backlog atual", "", "1"),
-    ("aged", "tickets_over_24h", "Chamados >24h", "", "1"),
+    ("aged", "tickets_over_24h", "Resolvidos >24h", "", "1"),
     ("avg_time", "avg_resolution_hours", "Tempo médio", "h", "0.5"),
-    ("risk", "risk_score", "Indicador operacional", "", "1"),
+    ("risk", "operational_score", "Score operacional", "", "1"),
 )
 NUMERIC_FILTER_PARAMS = tuple(f"{prefix}_{bound}" for prefix, *_ in NUMERIC_FILTERS for bound in ("min", "max"))
 # Default period window when the URL does not carry one (explicit ?view= always wins).
@@ -54,7 +54,7 @@ SITUATION_OPTIONS = (
     ("without_tickets", "Sem chamados"),
     ("with_backlog", "Com backlog"),
     ("without_backlog", "Sem backlog"),
-    ("with_aged", "Com chamados >24h"),
+    ("with_aged", "Com resoluções >24h"),
 )
 SITUATION_KEYS = {key for key, _ in SITUATION_OPTIONS}
 
@@ -117,7 +117,7 @@ def _read_filters(request):
     ranking_view = request.GET.get("ranking_view", "links").strip()
     if ranking_view not in {"links", "risk", "best", "stable"}:
         ranking_view = "links"
-    default_sort = "links_active" if ranking_view == "links" else "risk_score"
+    default_sort = "links_active" if ranking_view in {"links", "stable"} else "operational_score"
     sort = request.GET.get("sort", default_sort)
     if sort not in SORT_KEYS:
         sort = default_sort
@@ -184,7 +184,7 @@ def _url(filters, **updates):
     return "?" + urlencode(values)
 
 
-def _build(request, filters, *, detail_provider_id=None, detail_ticket_page=1, detail_ticket_page_size=10):
+def _build(request, filters, *, detail_provider_id=None, detail_ticket_page=1, detail_ticket_page_size=10, include_export=False):
     return RankingService.build(
         request.user,
         date_from=date.fromisoformat(filters["date_from"]),
@@ -193,6 +193,7 @@ def _build(request, filters, *, detail_provider_id=None, detail_ticket_page=1, d
         detail_provider_id=detail_provider_id,
         detail_ticket_page=detail_ticket_page,
         detail_ticket_page_size=detail_ticket_page_size,
+        include_export=include_export,
     )
 
 
@@ -201,10 +202,10 @@ def _tab_base(all_providers, ranking_view, minimum_links):
     if ranking_view == "links":
         return [row for row in all_providers if row["links_active"] > 0 and row["links_active"] >= minimum_links]
     if ranking_view == "best":
-        return [row for row in all_providers if row["tickets"] >= 1 and row["links_active"] >= minimum_links]
+        return [row for row in all_providers if row["operational_score"] is not None and row["links_active"] >= minimum_links]
     if ranking_view == "stable":
         return [row for row in all_providers if row["no_occurrence"] and row["links_active"] >= minimum_links]
-    return [row for row in all_providers if row["risk_eligible"] and row["links_active"] >= minimum_links]
+    return [row for row in all_providers if row["operational_score"] is not None and row["links_active"] >= minimum_links]
 
 
 def _filter_providers(providers, filters):
@@ -248,7 +249,9 @@ def _sort_tab(providers, filters):
     if view == "links":
         providers.sort(key=lambda row: (-row["links_active"], -row["tickets"], row["name"].casefold()))
     elif view == "best":
-        providers.sort(key=lambda row: (row["risk_score"], -row["links_total"], -row["eligible_tickets"], row["name"].casefold()))
+        providers.sort(key=lambda row: (-row["operational_score"], -row["links_total"], -row["resolution_tickets"], row["name"].casefold()))
+    elif view == "risk":
+        providers.sort(key=lambda row: (row["operational_score"], -row["links_total"], -row["resolution_tickets"], row["name"].casefold()))
     elif view == "stable":
         providers.sort(key=lambda row: (-row["links_active"], -row["links_total"], row["name"].casefold()))
     else:
@@ -265,9 +268,9 @@ def _sort_metric_label(filters):
     view = filters["ranking_view"]
     if view in {"links", "stable"}:
         return "Links na CMDB"
-    if view == "best":
-        return "Indicador operacional"
-    return dict(SORT_OPTIONS).get(filters["sort"], "Indicador operacional")
+    if view in {"best", "risk"}:
+        return "Score operacional"
+    return dict(SORT_OPTIONS).get(filters["sort"], "Score operacional")
 
 
 def _tab_providers(all_providers, filters):
@@ -352,6 +355,12 @@ def index(request):
     filters = _read_filters(request)
     data = _build(request, filters)
     all_providers = list(data["providers"])
+    scored_providers = [row for row in all_providers if row["operational_score"] is not None]
+    attention_providers = [row for row in scored_providers if row["operational_score"] < 40]
+    average_operational_score = (
+        sum(row["operational_score"] for row in scored_providers) / len(scored_providers)
+        if scored_providers else None
+    )
     minimum_links = int(filters["min_links"])
     universe = _tab_base(all_providers, filters["ranking_view"], minimum_links)
     filter_fields = _build_filter_fields(universe, filters)
@@ -398,6 +407,9 @@ def index(request):
         {"value": key, "label": "Todos" if key == "all" else f"Top {key}", "active": key == filters["top"]}
         for key in ("10", "20", "50", "all")
     ]
+    direction_labels = dict(DIRECTION_OPTIONS)
+    if filters["ranking_view"] == "risk":
+        direction_labels = {"desc": "Pior → melhor", "asc": "Melhor → pior"}
     return render(request, "rankings/index.html", {
         **data,
         "providers": providers,
@@ -408,10 +420,15 @@ def index(request):
         "filter_fields": filter_fields,
         "direction_urls": {key: _url(filters, direction=key, page=1) for key, _ in DIRECTION_OPTIONS},
         "sort_metric_label": _sort_metric_label(filters),
-        "direction_label": dict(DIRECTION_OPTIONS)[filters["direction"]],
+        "direction_label": direction_labels[filters["direction"]],
+        "direction_labels": direction_labels,
         "page_obj": page_obj,
         "top_providers": top_providers,
         "best_eligible_count": sum(row["best_eligible"] for row in best_base),
+        "scored_provider_count": len(scored_providers),
+        "attention_provider_count": len(attention_providers),
+        "average_operational_score": average_operational_score,
+        "average_operational_score_display": f"{average_operational_score:.1f}" if average_operational_score is not None else "—",
         "stable_total": stable_total,
         "ranked_links": data["ranked_links"],
         "filters": filters,
@@ -430,8 +447,8 @@ def index(request):
         "cockpit_url": reverse("cockpit"),
         "export_pdf_url": reverse("rankings:export", args=["pdf"]) + _url(filters),
         "export_xlsx_url": reverse("rankings:export", args=["xlsx"]) + _url(filters),
-        "ranking_risk_url": _url(filters, ranking_view="risk", sort="risk_score", page=1),
-        "ranking_best_url": _url(filters, ranking_view="best", sort="risk_score", page=1),
+        "ranking_risk_url": _url(filters, ranking_view="risk", sort="operational_score", direction="desc", page=1),
+        "ranking_best_url": _url(filters, ranking_view="best", sort="operational_score", direction="desc", page=1),
         "ranking_stable_url": _url(filters, ranking_view="stable", sort="links_active", page=1),
         "ranking_links_url": _url(filters, ranking_view="links", sort="links_active", page=1),
         "full_links_url": _url(filters, links="all"),
@@ -468,7 +485,7 @@ def export(request, file_format):
 
     filters = _read_filters(request)
     filters["links_all"] = True
-    data = _build(request, filters)
+    data = _build(request, filters, include_export=True)
     all_providers = list(data["providers"])
     providers = _tab_providers(all_providers, filters)
     podium = _podium(filters["ranking_view"], providers)

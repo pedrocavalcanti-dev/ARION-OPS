@@ -11,11 +11,21 @@ A Central administra configuração dos conectores CMDB/OTRS e mostra saúde/fre
 
 `Integration` guarda configuração protegida/status. `IntegrationRun` guarda tentativas sanitizadas. `IntegrationSyncState` persiste cursor, sucesso/último FULL e `IntegrationLease` coordena processos. Segredo aparece mascarado, nunca em response/API.
 
+O status de `Integration` representa configuração e evidência de conectividade. `IntegrationRun` registra o resultado de cada operação; `IntegrationSyncState` registra cursor, último apply, falha e backoff. Um teste de conexão bem-sucedido não comprova que FULL/FAST aplicou dados. Falhas de autenticação, TLS ou transporte atualizam a saúde da conexão; falhas de consulta, validação ou aplicação local ficam no run e no estado de sincronização, preservando a última conectividade conhecida. Falhas ao preparar o client também geram `IntegrationRun` com erro sanitizado.
+
 Cadências: OTRS FAST 2 min; OTRS FULL 30 min; CMDB FULL 10 min; retry 2 min. O FULL OTRS reconcilia o conjunto de filas selecionado e preserva tickets de filas fora dele. O FAST compartilhado exige o conjunto completo de quatro filas e um FULL bem-sucedido com essa cobertura; mudança de cobertura agenda novo FULL. Ver [Worker](..\02-arquitetura\worker-e-sincronizacao.md), [OTRS](..\06-integracoes-e-dados\otrs.md) e [CMDB](..\06-integracoes-e-dados\cmdb.md).
+
+## Leitura da Central
+
+A página inicial separa estado das conexões, sincronização e diagnóstico local. Os cartões mostram teste mais recente, última leitura, registros processados quando disponíveis e uma indicação de sincronização em andamento. Configuração de host, credenciais protegidas e testes permanecem nas páginas individuais; os cartões nunca imprimem segredos nem caminhos do banco.
+
+Os totais de links, operadoras, tickets e vínculos de Qualidade exibidos no diagnóstico aplicam o Data Scope do usuário antes de contar. O resumo de saúde do worker e freshness descreve o estado técnico das fontes. Mensagens de falha usam resumos sanitizados persistidos pelo worker, acompanhados de uma ação sugerida.
 
 ## Diagnóstico
 
 Leia resultado e último sucesso em conjunto: attempt FAILED recente não torna mirror fresco. Confira configuração/conectividade, último FAST/FULL, cursor e lease. OTRS depende da resolução exata de cada nome de fila selecionado; CMDB precisa resposta completa Search/Get. FULL valida o conjunto antes de marcar ausências; falha conserva o último snapshot. A tela do Cockpit distingue cobertura FULL ainda não aplicada de uma sincronização bem-sucedida sem tickets (zero real).
+
+A causa exata do incidente TLS histórico em produção não foi confirmada nesta etapa: não houve acesso ao servidor, logs ou ambiente de produção. A inspeção local não encontrou factories OTRS distintas para Web e Worker; ambos usam o mesmo cliente e agora recebem o `.env` da raiz com a mesma precedência de ambiente. TLS segue obrigatório para host remoto, exceto opt-in explícito e restrito ao host legado configurado. A validação final da causa depende de uma futura inspeção autorizada no servidor.
 
 Segredos locais DPAPI dependem do usuário Windows de execução. Em outra conta ou máquina, cadastre de novo sem copiar credencial em ticket de suporte.
 
@@ -25,7 +35,7 @@ Chamados não atualiza OTRS e Base não edita CMDB. Importador XLSX antigo não 
 
 ## APIs externas
 
-A Central administra Brevo e Mapbox. A tela Brevo oferece SMTP Relay (STARTTLS obrigat?rio) e API REST por sele??o local at? salvar; credenciais ficam separadas e protegidas por DPAPI. A configura??o de e-mail distingue To, Cc e Reply-To. Testes de conex?o autenticam sem enviar e-mail e registram m?todo, lat?ncia, resultado e diagn?stico sanitizado. O teste REST consulta estat?stica transacional. Autoriza??o operacional exige permiss?o de gest?o e confirma??o individual da TQ.
+A Central administra Brevo e Mapbox. A tela Brevo oferece SMTP Relay com STARTTLS obrigatório e API REST selecionável; credenciais ficam separadas e protegidas por DPAPI. A configuração distingue To, Cc e Reply-To. O teste SMTP autentica sem enviar e-mail; o teste REST consulta estatística transacional. Respostas SMTP `535` são classificadas como falha de autenticação e `525` como bloqueio de política TLS, sem registrar credenciais ou conteúdo. Diagnósticos persistidos são sanitizados. Nenhum envio externo foi feito durante esta estabilização.
 
 O token Mapbox é público (pk.) e pode ser cadastrado pela Central. A resolução de runtime prioriza um registro explícito no banco; MAPBOX_PUBLIC_TOKEN é fallback apenas quando não há registro. Um registro inválido ou desabilitado não volta silenciosamente ao valor antigo. Restrinja o token público aos domínios autorizados no painel Mapbox.
 

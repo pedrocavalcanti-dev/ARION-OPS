@@ -215,7 +215,7 @@ class OTRSMirrorSyncTests(DjangoTestCase):
     def test_explicit_business_status_rule_and_unknown_is_not_open(self):
         cases = {
             "new": (OTRSStateMapping.BusinessStatus.OPEN, True),
-            "merged": (OTRSStateMapping.BusinessStatus.CLOSED, False),
+            "merged": (OTRSStateMapping.BusinessStatus.RESOLVED, False),
             "em atendimento": (OTRSStateMapping.BusinessStatus.OPEN, True),
             "Pendente": (OTRSStateMapping.BusinessStatus.PENDING, True),
             "pendente operadora": (OTRSStateMapping.BusinessStatus.PENDING, True),
@@ -224,9 +224,9 @@ class OTRSMirrorSyncTests(DjangoTestCase):
             "Projeto Especial": (OTRSStateMapping.BusinessStatus.OPEN, True),
             "agendado": (OTRSStateMapping.BusinessStatus.SCHEDULED, True),
             "resolvido": (OTRSStateMapping.BusinessStatus.RESOLVED, False),
-            "closed successful": (OTRSStateMapping.BusinessStatus.CLOSED, False),
+            "closed successful": (OTRSStateMapping.BusinessStatus.RESOLVED, False),
             "cancelado": (OTRSStateMapping.BusinessStatus.CANCELED, False),
-            "Encerrado com viabilidade": (OTRSStateMapping.BusinessStatus.CLOSED, False),
+            "Encerrado com viabilidade": (OTRSStateMapping.BusinessStatus.RESOLVED, False),
             "Estado Novo Qualquer": (OTRSStateMapping.BusinessStatus.UNKNOWN, False),
         }
         for name, (expected, is_open) in cases.items():

@@ -178,7 +178,8 @@ class CandidateDatabaseFlowTests(SimpleTestCase):
                                       validation={"passed": True})
         self.path.write_text(json.dumps(bootstrap), encoding="utf-8")
         activate_candidate(path=self.path, environ={})
-        rollback_to_previous(path=self.path)
+        with patch.dict("os.environ", {"DATABASE_URL": ""}):
+            rollback_to_previous(path=self.path)
         self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["active"]["engine"], "sqlite")
         self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["rollback"]["engine"], "mysql")
 
@@ -275,7 +276,7 @@ class LocalDataCopyTests(UnitTestCase):
                 CMDBLinkMirror = apps.get_model("integracoes", "CMDBLinkMirror")
                 OTRSTicket = apps.get_model("integracoes", "OTRSTicket")
 
-                QualityTreatmentSequence.objects.using(source).create(key="tq", last_value=0)
+                QualityTreatmentSequence.objects.using(source).update_or_create(key="tq", defaults={"last_value": 0})
                 link = CMDBLinkMirror.objects.using(source).create(source_config_item_id="CI-QUALITY-1")
                 order = QualityOrder.objects.using(source).create(code="OQ-2026-000321")
                 QualityOrder.objects.using(source).filter(pk=order.pk).update(link_id=link.source_config_item_id)

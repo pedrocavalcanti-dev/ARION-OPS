@@ -48,6 +48,8 @@ deploy\windows\status-arion.ps1
 
 `install-arion.ps1` executa `npm ci`/build quando Node está disponível, coleta estáticos e executa o production-check. Ele não sincroniza fontes remotas nem altera a conta Cloudflare. `-ApplyMigrations` exige confirmação explícita; migrations são executadas somente depois do restore completo e da conferência do banco alvo. As tarefas agendadas iniciam no boot, rodam ocultas, usam a `.venv` e reiniciam processos encerrados. O supervisor grava `var/logs/arion-web.log` e `arion-worker.log` com rotação; `status-arion.ps1` informa Web, Worker e Cloudflared sem mostrar segredos.
 
+O supervisor carrega o `.env` da raiz do projeto para Web e Worker, mantendo as variáveis de ambiente já definidas no processo Windows como precedência. `status-arion.ps1` confirma supervisor e processo filho. `restart-arion.ps1 -Role worker` atua somente sobre o supervisor ARION do Worker. Para diagnosticar falha, compare estado de conexão (`Integration`), resultado da tentativa (`IntegrationRun`) e cursor/backoff (`IntegrationSyncState`); não infira falha TLS a partir de um erro de processamento. Esta tarefa não acessou nem alterou servidor ou banco de produção.
+
 `/manifest.webmanifest` tem cache curto de cinco minutos; `/service-worker.js` fica na raiz, recebe `Service-Worker-Allowed: /` e permanece fora de cache intermediário (`no-store`). O endpoint `/api/version/` também usa `no-store` e retorna apenas versão, data e título da release. Mantenha cache bypass para páginas/API e permita cache somente para estáticos públicos. O Service Worker não guarda HTML, JSON nem respostas operacionais; offline fornece uma página neutra sem snapshot. O nome dos caches combina a versão canônica com uma revisão do worker/build/assets offline. A ativação remove somente caches antigos com prefixos ARION e chama `clients.claim()`.
 
 ### Versionamento e notas de release
@@ -86,7 +88,40 @@ npm run build:production
 
 Esta estabilização adiciona a migration `0011_alter_penaltycompetence_options_and_more`, aplicada somente ao SQLite local de desenvolvimento. Ela adiciona os campos de arquivamento lógico; não foi aplicada em produção nesta tarefa. Antes de publicar este código, confira o plano de migrations e aplique a migration apenas após backup do banco alvo e autorização operacional. O Worker de integração não precisa ser reiniciado; o serviço Web deve ser reiniciado para carregar o código Django novo, e o Service Worker do navegador é atualizado pelo fluxo PWA.
 
-**Estado local em 29/10/2026:** a evolução seguinte inclui a migration `0013_penaltytreatmentpause_evidence_and_more` e alterações no sincronizador OTRS/`integration_worker` para a cobertura de quatro filas do Cockpit. Nada disso foi aplicado em produção nesta rodada. Antes de uma futura publicação desta revisão, inspecione o plano de migrations e o banco alvo, faça backup e siga a autorização operacional existente; reinicie Web e Worker para carregar os respectivos códigos. A nota anterior de que o Worker não precisa reiniciar aplica-se somente à revisão associada à migration `0011`.
+**Estado local em 06/11/2026:** a evolução seguinte inclui a migration `0013_penaltytreatmentpause_evidence_and_more`, o sincronizador OTRS/`integration_worker` para cobertura de quatro filas do Cockpit e a migration de dados `0014_normalize_closed_operational_status`, que consolida o alias legado `CLOSED` em `RESOLVED` sem alterar estado bruto nem datas. A migration `0014` foi validada em SQLite temporário e aplicada ao banco MySQL local do projeto, confirmado em loopback com `DEBUG=True`; não foi aplicada em produção nem em banco remoto. Antes de futura publicação, inspecione o plano e o banco alvo, faça backup e siga a autorização operacional existente; reinicie Web e Worker para carregar os respectivos códigos. A nota anterior de que o Worker não precisa reiniciar aplica-se somente à revisão associada à migration `0011`.
+
+## Checklist de atualização incremental 1.3.1
+
+Este procedimento é para execução futura pela equipe no Windows Server. A Etapa 3 não executou comandos remotos nem deploy. Confirme a raiz do repositório, branch `main`, backup recente do banco e janela operacional antes de aplicar migrations. A release mantém a versão `1.3.1`; não crie tag `1.4.0`.
+
+No PowerShell, a partir da raiz confirmada do projeto:
+
+```powershell
+git status --short
+git pull --ff-only origin main
+
+# Execute apenas se requirements.txt ou requirements-prod.txt mudou:
+.venv\Scripts\python.exe -m pip install -r requirements-prod.txt
+# Execute apenas se package-lock.json mudou:
+npm ci
+
+# Revise o plano e confirme o backup antes de alterar o banco:
+.venv\Scripts\python.exe arion_geo\gerenciar.py makemigrations --check --dry-run
+.venv\Scripts\python.exe arion_geo\gerenciar.py migrate --plan
+.venv\Scripts\python.exe arion_geo\gerenciar.py migrate --noinput
+
+npm run build:production
+.venv\Scripts\python.exe arion_geo\gerenciar.py collectstatic --noinput
+.venv\Scripts\python.exe arion_geo\gerenciar.py check --deploy
+.\deploy\windows\restart-arion.ps1 -Role web
+.\deploy\windows\restart-arion.ps1 -Role worker
+.\deploy\windows\status-arion.ps1
+Get-Service -Name Cloudflared
+```
+
+Não instale dependências se os manifests não mudaram: a etapa atual não adicionou dependências Python ou JavaScript. O build requer Node 24. A migration `integracoes.0014_normalize_closed_operational_status` normaliza o status local `CLOSED` para `RESOLVED`, preservando estado bruto e datas; confira o plano no banco alvo e faça backup antes de aplicar. A Etapa 3 não cria migration.
+
+Após reiniciar, confira Web, Worker e Cloudflared. Na Central de Integrações, use os testes de autenticação/conexão de OTRS e Brevo; o teste Brevo não deve enviar mensagem e nenhuma TQ deve ser reenviada. Verifique grupos e permissões, usuários sem `view_dashboard`, Data Scope, freshness e consistência dos indicadores de Dashboard, Chamados, Cockpit, Mapa e Rankings. Não apague OQs nem registros de homologação.
 
 ## Cloudflare Tunnel e proteção perimetral
 

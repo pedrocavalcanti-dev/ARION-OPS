@@ -128,14 +128,14 @@ class QualityTreatmentCreationTests(QualityModuleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response,
             'id="arion-echarts-vendor" src="/static/vendor/echarts/echarts.min.js"')
-        self.assertContains(response,
-            'type="module" src="/static/js/qualidade/dashboard.js"')
         self.assertContains(response, 'name="mobile-web-app-capable" content="yes"')
         self.assertContains(response,
             'name="apple-mobile-web-app-capable" content="yes"')
         html = response.content.decode('utf-8')
+        self.assertRegex(html,
+            r'type="module" src="/static/(?:js/qualidade/dashboard\.js|arion_build/qualidade/dashboard\.[A-Za-z0-9_.-]+\.js)"')
         self.assertLess(html.index('id="arion-echarts-vendor"'), html.index(
-            'type="module" src="/static/js/qualidade/dashboard.js"'))
+            'type="module" src="/static/'))
         source_root = Path(__file__).resolve().parents[3
             ] / 'frontend_src' / 'js' / 'qualidade'
         chart_source = (source_root / 'charts.js').read_text(encoding='utf-8')
@@ -869,9 +869,9 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
         all_response = self.client.get(
             reverse("qualidade:ordem_detail", kwargs={"codigo": order.code}), {"tab": "ocorrencias"},
         )
-        self.assertContains(all_response, "OcorrÃªncia inicial")
-        self.assertContains(all_response, "ReincidÃªncia #1")
-        self.assertContains(all_response, "OcorrÃªncias desconsideradas")
+        self.assertContains(all_response, "Ocorr\u00eancia inicial")
+        self.assertContains(all_response, "Reincid\u00eancia #1")
+        self.assertContains(all_response, "Ocorr\u00eancias desconsideradas")
 
     def test_occurrence_exclusion_requires_reason_and_review_recalculates_metrics_with_audit(self):
         from aplicativos.auditoria.models import AuditEvent
@@ -928,7 +928,6 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
 
         response = self.client.post(reverse("qualidade:ordem_update", kwargs={"codigo": order.code}), {
             "field": "detail",
-            "status": QualityOrder.Status.AGUARDANDO_TERCEIRO,
             "recurrence_level": QualityOrder.RecurrenceLevel.R3,
             "priority": QualityOrder.Priority.CRITICA,
             "owner": owner.pk,
@@ -939,14 +938,14 @@ class QualityOrderDetailAndReviewTests(QualityModuleTestCase):
 
         self.assertEqual(response.status_code, 302)
         order.refresh_from_db()
-        self.assertEqual(order.status, QualityOrder.Status.AGUARDANDO_TERCEIRO)
+        self.assertEqual(order.status, QualityOrder.Status.NOVA)
         self.assertEqual(order.recurrence_level, QualityOrder.RecurrenceLevel.R3)
         self.assertEqual(order.priority, QualityOrder.Priority.CRITICA)
         self.assertEqual(order.owner_id, owner.pk)
         self.assertEqual(order.internal_notes, "Aguardar retorno formal do provedor.")
         events = set(order.audit_events.values_list("event_type", flat=True))
-        self.assertTrue({"STATUS_CHANGED", "LEVEL_CHANGED", "PRIORITY_CHANGED", "OWNER_CHANGED", "DEADLINE_CHANGED", "NOTES_CHANGED"}.issubset(events))
-        self.assertEqual(AuditEvent.objects.filter(category="QUALITY").count(), 6)
+        self.assertTrue({"LEVEL_CHANGED", "PRIORITY_CHANGED", "OWNER_CHANGED", "DEADLINE_CHANGED", "NOTES_CHANGED"}.issubset(events))
+        self.assertEqual(AuditEvent.objects.filter(category="QUALITY").count(), 5)
 
     def test_view_only_quality_user_cannot_edit_or_review(self):
         viewer = self.create_authorized_user("quality-detail-view-only")
@@ -1093,9 +1092,9 @@ class QualityDashboardGranularityTests(SimpleTestCase):
         self.assertEqual(daily[0]["tooltip"], "03/10/2026")
 
         weekly = _make_buckets(date(2026, 9, 30), date(2026, 10, 6), "week")
-        self.assertEqual([item["label"] for item in weekly], ["30 setâ€“04 out", "05â€“06 out"])
-        self.assertEqual(weekly[0]["tooltip"], "30/09/2026 â€“ 04/10/2026")
-        self.assertEqual(weekly[1]["tooltip"], "05/10/2026 â€“ 06/10/2026")
+        self.assertEqual([item["label"] for item in weekly], ["30 set\u201304 out", "05\u201306 out"])
+        self.assertEqual(weekly[0]["tooltip"], "30/09/2026 \u2013 04/10/2026")
+        self.assertEqual(weekly[1]["tooltip"], "05/10/2026 \u2013 06/10/2026")
 
         monthly = _make_buckets(date(2026, 11, 30), date(2027, 1, 2), "month")
         self.assertEqual([item["label"] for item in monthly], ["nov 2026", "dez 2026", "jan 2027"])
@@ -1259,7 +1258,7 @@ class QualityDashboardTests(QualityModuleTestCase):
         self.assertEqual(result["effectiveness"]["total"], 2)
         self.assertEqual(sum(result["evolution"]["completed"]), 1)
         self.assertEqual(sum(result["evolution"]["post_treatment"]), 1)
-        self.assertEqual(result["evolution"]["granularity"], "DiÃ¡ria")
+        self.assertEqual(result["evolution"]["granularity"], "Di\u00e1ria")
 
     def test_rreip_cycle_uses_configured_default_duration(self):
         actor = self.create_authorized_user("quality-rreip-default-duration")
@@ -1671,12 +1670,12 @@ class QualityQueueTests(QualityModuleTestCase):
         orders_response = self.client.get(reverse("qualidade:ordens"))
 
         self.assertEqual(priority_response.status_code, 200)
-        self.assertContains(priority_response, "Links prioritÃ¡rios")
-        self.assertContains(priority_response, "ARION OPS Â· Links prioritÃ¡rios Â· Qualidade Operacional")
+        self.assertContains(priority_response, "Links priorit\u00e1rios")
+        self.assertContains(priority_response, "ARION OPS \u00b7 Links priorit\u00e1rios \u00b7 Qualidade Operacional")
         self.assertEqual(priority_response.headers["Content-Type"], "text/html; charset=utf-8")
         self.assertEqual(orders_response.status_code, 200)
         self.assertContains(orders_response, "Ordens de Qualidade")
-        self.assertContains(orders_response, "ARION OPS Â· Ordens de Qualidade")
+        self.assertContains(orders_response, "ARION OPS \u00b7 Ordens de Qualidade")
         for response in (priority_response, orders_response):
             rendered = response.content.decode("utf-8")
             mojibake_sequences = (
@@ -1730,14 +1729,14 @@ class QualityQueueTests(QualityModuleTestCase):
         self.assertEqual(response.context["recurrence_count"], 1)
         self.assertEqual(response.context["same_cause_recurrences"], 1)
         self.assertEqual(response.context["period"], "60")
-        self.assertContains(response, "OcorrÃªncia inicial")
-        self.assertContains(response, "ReincidÃªncia #1")
+        self.assertContains(response, "Ocorr\u00eancia inicial")
+        self.assertContains(response, "Reincid\u00eancia #1")
         self.assertContains(response, "OscilaÃ§Ã£o confirmada")
         self.assertContains(response, "Falha no enlace de acesso")
         self.assertContains(response, "Mesma causa confirmada")
-        self.assertContains(response, "Improcedente Â· nÃ£o contabilizado")
-        self.assertContains(response, "Cancelado Â· nÃ£o contabilizado")
-        self.assertContains(response, "Duplicado Â· nÃ£o contabilizado")
+        self.assertContains(response, "Improcedente \u00b7 n\u00e3o contabilizado")
+        self.assertContains(response, "Cancelado \u00b7 n\u00e3o contabilizado")
+        self.assertContains(response, "Duplicado \u00b7 n\u00e3o contabilizado")
         self.assertContains(response, order.code)
         self.assertContains(response, "Abrir OQ")
         self.assertEqual(response.context["history_count"], 5)
@@ -2329,7 +2328,7 @@ class QualityPhaseFourWorkflowTests(QualityModuleTestCase):
         )
         local = get_order_history(manager, order, category="order")
         self.assertEqual(local["history_page"].paginator.count, 2)
-        self.assertEqual(local["history_events"][0]["label"], "NÃ­vel alterado")
+        self.assertEqual(local["history_events"][0]["label"], "N\u00edvel alterado")
 
         for index in range(26):
             AuditEvent.objects.create(

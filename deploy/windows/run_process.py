@@ -15,7 +15,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -109,21 +109,74 @@ def _pid_path(role: str) -> Path:
     return RUN_ROOT / f"{role}.pid"
 
 
+def _child_pid_path(role: str) -> Path:
+    return RUN_ROOT / f"{role}.child.pid"
+
+
 def _stop_path(role: str) -> Path:
     return RUN_ROOT / f"{role}.stop"
 
 
 def _print_status(role: str) -> int:
     pid_file = _pid_path(role)
-    if _is_locked(role):
-        try:
-            pid = pid_file.read_text(encoding="ascii").strip()
-        except OSError:
-            pid = "unknown"
-        print(f"{role}: running (pid {pid})")
+    if not _is_locked(role):
+        print(f"{role}: stopped")
+        return 1
+    try:
+        supervisor_pid = pid_file.read_text(encoding="ascii").strip() or "unknown"
+    except OSError:
+        supervisor_pid = "unknown"
+    try:
+        child_pid = _child_pid_path(role).read_text(encoding="ascii").strip()
+        child_running = _pid_is_running(int(child_pid))
+    except (OSError, ValueError):
+        child_pid, child_running = "", False
+    if child_running:
+        print(f"{role}: running (supervisor pid {supervisor_pid}, child pid {child_pid})")
         return 0
-    print(f"{role}: stopped")
-    return 1
+    print(f"{role}: supervisor running (pid {supervisor_pid}); child restarting or unavailable")
+    return 2
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _load_project_environment(project_root: Path = PROJECT_ROOT) -> dict[str, str | bool]:
+    """Load the fixed project .env using OS environment precedence and report sources safely."""
+    dotenv_path = project_root / ".env"
+    inherited_keys = set(os.environ)
+    try:
+        file_values = dotenv_values(dotenv_path)
+    except (OSError, UnicodeError):
+        file_values = {}
+    load_dotenv(dotenv_path, override=False)
+    key = "ARION_OTRS_LEGACY_NO_TLS_HOST"
+    if key in inherited_keys:
+        source = "process_environment"
+    elif str(file_values.get(key) or "").strip():
+        source = "project_dotenv"
+    else:
+        source = "unset"
+    return {"dotenv_present": dotenv_path.is_file(), "otrs_legacy_host_source": source}
+
+
+def _child_environment() -> dict[str, str]:
+    """Build the same production environment for the web and worker children."""
+    environment = os.environ.copy()
+    environment["DJANGO_SETTINGS_MODULE"] = "config.settings"
+    environment["ARION_ENV"] = "production"
+    return environment
 
 
 def _request_stop(role: str) -> int:
@@ -196,6 +249,7 @@ def supervise(role: str) -> int:
 
     child = None
     pid_file = _pid_path(role)
+    child_pid_file = _child_pid_path(role)
     stop_file = _stop_path(role)
     stop_file.unlink(missing_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="ascii")
@@ -203,9 +257,14 @@ def supervise(role: str) -> int:
     signal.signal(signal.SIGINT, lambda *_: STOP_EVENT.set())
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.environ["ARION_ENV"] = "production"
-    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    environment_summary = _load_project_environment()
     os.environ["ARION_ENV"] = "production"
-    logger.info("supervisor started")
+    logger.info(
+        "supervisor started role=%s project_root=%s dotenv_present=%s "
+        "otrs_legacy_host_source=%s",
+        role, PROJECT_ROOT, environment_summary["dotenv_present"],
+        environment_summary["otrs_legacy_host_source"],
+    )
 
     try:
         delay = 2
@@ -218,9 +277,7 @@ def supervise(role: str) -> int:
             except RuntimeError as exc:
                 logger.error("startup refused: %s", sanitize_line(str(exc)))
                 return 1
-            environment = os.environ.copy()
-            environment["DJANGO_SETTINGS_MODULE"] = "config.settings"
-            environment["ARION_ENV"] = "production"
+            environment = _child_environment()
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             try:
                 child = subprocess.Popen(command, cwd=PROJECT_ROOT / "arion_geo", env=environment,
@@ -229,6 +286,7 @@ def supervise(role: str) -> int:
             except OSError as exc:
                 logger.error("child launch failed: %s", sanitize_line(str(exc)))
                 return 1
+            child_pid_file.write_text(str(child.pid), encoding="ascii")
             logger.info("child started (pid %s)", child.pid)
             reader = threading.Thread(target=_read_child_output, args=(child, logger), daemon=True)
             reader.start()
@@ -239,6 +297,7 @@ def supervise(role: str) -> int:
                 _stop_child(child, logger)
                 break
             code = child.wait()
+            child_pid_file.unlink(missing_ok=True)
             reader.join(timeout=2)
             child = None
             logger.warning("child exited with status %s; restart in %s seconds", code, delay)
@@ -247,6 +306,7 @@ def supervise(role: str) -> int:
     finally:
         if child is not None:
             _stop_child(child, logger)
+        child_pid_file.unlink(missing_ok=True)
         pid_file.unlink(missing_ok=True)
         stop_file.unlink(missing_ok=True)
         logger.info("supervisor stopped")

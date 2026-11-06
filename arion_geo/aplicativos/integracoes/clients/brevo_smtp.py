@@ -32,10 +32,10 @@ def _safe_error(exc, *, stage="smtp_authentication"):
         detail = detail.decode("utf-8", errors="ignore")
     detail = str(detail).casefold()
     code = getattr(exc, "smtp_code", None)
-    if isinstance(exc, smtplib.SMTPAuthenticationError) or code == 535:
-        return "SMTP 535 \u2014 Login ou chave rejeitados."
     if code == 525:
         return "SMTP 525 \u2014 Possivel bloqueio de IP; verifique a autorizacao na conta Brevo."
+    if isinstance(exc, smtplib.SMTPAuthenticationError) or code == 535:
+        return "SMTP 535 \u2014 Login ou chave rejeitados."
     if "ip" in detail and any(term in detail for term in ("block", "allow", "authoriz", "whitelist", "blacklist")):
         return "Acesso SMTP bloqueado pela politica de IP."
     if isinstance(exc, (socket.timeout, TimeoutError)):

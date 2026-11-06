@@ -13,6 +13,9 @@ from aplicativos.integracoes.otrs_queues import (
     EQUIPMENT_REMOVAL_QUEUE_NAME,
     PAYMENT_PENDING_QUEUE_ALIASES,
 )
+from aplicativos.integracoes.services.otrs_status import (
+    TERMINAL_QUERY_STATUSES, TERMINAL_STATUSES, normalize_business_status,
+)
 
 
 def normalize_operational_name(value):
@@ -36,7 +39,7 @@ CANCELLATION_STAGE_LABELS = {
     "CLOSED": "Encerrado",
     "UNKNOWN": "N\u00e3o classificado",
 }
-TERMINAL_BUSINESS_STATUSES = ("RESOLVED", "CLOSED", "CANCELED")
+TERMINAL_BUSINESS_STATUSES = TERMINAL_STATUSES
 _QUEUE_STAGE_BY_KEY = {}
 for _stage, _label, _queue, _states in ACTIVE_CANCELLATION_STAGES:
     for _queue_alias in (
@@ -63,7 +66,7 @@ def cancellation_stage_expression():
     request_state = _text_matches("external_state_name", CANCELLATION_REQUEST_STATES)
     treatment_state = _text_matches("external_state_name", CANCELLATION_TREATMENT_STATES)
     profile_active_state = _text_matches("external_state_name", CANCELLATION_PROFILE_ACTIVE_STATES)
-    terminal = Q(business_status__in=TERMINAL_BUSINESS_STATUSES) | (
+    terminal = Q(business_status__in=TERMINAL_QUERY_STATUSES) | (
         Q(external_state_type__icontains="closed")
         | Q(external_state_type__iexact="merged")
     )
@@ -85,7 +88,7 @@ def classify_cancellation_stage(ticket):
     if not stage:
         return ""
 
-    status = str(getattr(ticket, "business_status", "") or "").upper()
+    status = normalize_business_status(getattr(ticket, "business_status", ""))
     state_type = normalize_operational_name(getattr(ticket, "external_state_type", ""))
     if status in TERMINAL_BUSINESS_STATUSES or "closed" in state_type or state_type == "merged":
         return "CLOSED"

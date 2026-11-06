@@ -415,7 +415,8 @@ class TreatmentDrawerAndTicketRelationTests(TestCase):
         self.assertTrue(payload["evidence"]["found"])
         self.assertEqual(payload["evidence"]["ticket_identifier"], number)
         self.assertEqual(payload["evidence"]["tickets"][0]["number"], number)
-        self.assertEqual(payload["evidence"]["tickets"][0]["status"], "Fechado")
+        self.assertEqual(payload["evidence"]["tickets"][0]["status"], "Resolvido")
+        self.assertEqual(payload["evidence"]["tickets"][0]["source_state"], "Resolved")
 
     def test_rounded_excel_pu_resolves_only_with_unique_exact_rec_ci_and_lp_evidence(self):
         from .services.treatment import enrich_competence

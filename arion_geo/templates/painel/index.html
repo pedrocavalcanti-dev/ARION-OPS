@@ -9,13 +9,13 @@
       <p class="section-kicker overview-kicker">ARION <span>/</span> NOC ATACADO</p>
       <h1 id="overview-title">Vis&atilde;o geral</h1>
       <p class="overview-lead">Sua central de acesso &agrave; opera&ccedil;&atilde;o do NOC Atacado.</p>
-      <div class="overview-summary" aria-label="Resumo da base CMDB">
+      {% if can_view_dashboard %}<div class="overview-summary" aria-label="Resumo da base CMDB">
         <span><strong>{{ total_links|default:0|intcomma }}</strong> Links</span>
         <i aria-hidden="true">&middot;</i>
         <span><strong>{{ state_count|default:0|intcomma }}</strong> Estados</span>
         <i aria-hidden="true">&middot;</i>
         <span><strong>{{ provider_count|default:0|intcomma }}</strong> Provedores</span>
-      </div>
+      </div>{% endif %}
     </header>
 
     {% if can_view_operation %}

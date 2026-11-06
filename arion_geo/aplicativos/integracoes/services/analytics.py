@@ -7,10 +7,13 @@ from django.db.models.functions import Coalesce
 from aplicativos.configuracoes.data_scope import DataScopeService
 from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket, OTRSTicketConfigItem
 from aplicativos.integracoes.otrs_queues import CANCELLATION_QUEUE_NAMES, NOC_QUEUE_NAME
+from aplicativos.integracoes.services.otrs_status import (
+    BACKLOG_STATUSES, BUSINESS_OPEN_STATUSES, OPERATIONAL_VALID_STATUSES,
+    RESOLVED_STATUS, TERMINAL_STATUSES,
+)
 
 
 OPERATIONAL_RESOLUTION_FIELD = "operational_resolution_at"
-BUSINESS_OPEN_STATUSES = ("OPEN", "PENDING", "SCHEDULED")
 
 
 def operational_resolution_expression(prefix=""):

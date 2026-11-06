@@ -289,7 +289,7 @@ class TicketQueueService:
             "otrs_status": "", "arion_status": "", "assignee": "", "priority": "", "reason": "",
             "recurrent": False, "over_24h": False, "tab": "all", "sort": "aging", **filters,
         }
-        page_size = filters.get("page_size", 25)
+        page_size = filters.get("page_size", 50)
 
         scoped_links = LinkQueryService.base(user)
         scoped_tickets = TicketQueryService.business_open(user, links=scoped_links)

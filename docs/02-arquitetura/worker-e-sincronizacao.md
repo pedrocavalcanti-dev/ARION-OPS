@@ -4,6 +4,8 @@
 
 `integration_worker` é uma management command do ARION OPS executada em processo separado do servidor HTTP. Views, middleware e `AppConfig.ready()` não iniciam a sincronização. A web lê o último snapshot local e continua disponível se o worker parar; o dado pode ficar stale.
 
+No supervisor Windows, `deploy/windows/run_process.py` carrega `.env` a partir da raiz fixa do projeto; variáveis herdadas do processo Windows têm precedência (`override=False`). Web e Worker são iniciados com o mesmo ambiente e diretório do projeto. Os scripts de start/status confirmam o processo filho do serviço correspondente; o status distingue supervisor ativo com filho indisponível/em reinício de serviço parado. As operações são limitadas aos supervisores ARION registrados.
+
 ### Compatibilidade com OTRS MySQL legado
 
 TLS permanece obrigatório para qualquer host remoto por padrão. Um MySQL legado sem suporte a TLS só pode usar o opt-in existente `use_tls=False` + `allow_insecure_remote=True` quando o host também corresponder exatamente a `ARION_OTRS_LEGACY_NO_TLS_HOST`, configurado no ambiente do servidor. Essa exceção temporária não se aplica a CMDB, Brevo, Mapbox ou ao banco principal. O tráfego OTRS nesse modo não é criptografado; prefira restaurar TLS no MySQL ou usar túnel privado e remova a variável e o opt-in após a migração.
@@ -107,7 +109,7 @@ Se apply local falha, cursor FAST não avança. Snapshot incompleto ou inválido
 |---|---|---|
 | `IntegrationRun` | Tipo/operação, estado, início/fim, duração, contagens e detalhes sanitizados | Diferencie `SUCCESS`, `PARTIAL` e `FAILED`; uma tentativa recente não prova snapshot recente. |
 | `IntegrationSyncState.last_started_at` | Tentativa mais recente iniciada | Pode ser falha ou execução ainda em curso. |
-| `failure_count`, `last_error_at`, `last_error` | Falhas consecutivas e diagnostico sanitizado | Indicam backoff e proxima tentativa, inclusive quando o comando falha antes de criar `IntegrationRun`. |
+| `failure_count`, `last_error_at`, `last_error` | Falhas consecutivas e diagnóstico sanitizado | Indicam backoff e próxima tentativa; falhas de preparação do cliente OTRS também criam `IntegrationRun`. |
 | `QualityCorrelationCheckpoint` | Cursor, ultima leitura, falha e contagem por fila de Qualidade | Nao confunda leitura sem vinculos com uma TQ correlacionada. |
 | `last_success_at` | Último apply bem-sucedido | Freshness geral do último sucesso local. |
 | `last_full_success_at` | Última reconciliação completa bem-sucedida | Confirma quando ocorreu o FULL mais recente. |
@@ -116,6 +118,12 @@ Se apply local falha, cursor FAST não avança. Snapshot incompleto ou inválido
 | `source_last_seen_at` e `is_present_*` | Observação no snapshot da entidade | Não substituem o estado agregado da integração. |
 
 Para avaliar freshness, compare tipo/status/duração do `IntegrationRun`, sucesso geral, sucesso FULL, cursor FAST e heartbeat. Não conclua que o dado está fresco apenas porque o worker está vivo.
+
+### Conexão e processamento
+
+`Integration.status` descreve a saúde conhecida da configuração/conexão: credencial ausente fica não configurada, autenticação ou política TLS requer atenção, e host/porta inacessível fica indisponível. Um erro de consulta, schema, transformação ou apply local não prova que a conexão caiu; nesse caso o estado de conexão é preservado enquanto o run e o estado de sincronização registram a falha. O diagnóstico exposto usa tipo e código seguro, nunca host, usuário, senha, token, SQL ou conteúdo de linha.
+
+O FULL do OTRS lê em batches, carrega relações e Dynamic Fields em grupos limitados e aplica upserts locais em transação. FAST mantém cursor com janela de segurança; FULL reconcilia cobertura. A revisão preserva esses limites e não altera o desenho do mirror. A escrita agrupada mantém o padrão recomendado pelo [manual MySQL para otimizar inserções](https://dev.mysql.com/doc/refman/8.4/en/insert-optimization.html). Não foi executado benchmark contra produção; os tempos/contagens de `IntegrationRun` são evidência por execução e devem embasar qualquer otimização futura.
 
 ## Sincronização manual
 

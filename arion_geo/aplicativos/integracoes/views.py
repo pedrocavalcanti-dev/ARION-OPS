@@ -9,6 +9,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import connections
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
@@ -31,6 +32,7 @@ from .services.errors import (
     IntegrationNotConfigured,
     OTRSCredentialMissingError,
 )
+from .services.integration_health import status_after_otrs_failure
 from .services.secrets import get_secret_protector
 from .clients.brevo import BrevoTransactionalClient
 from .clients.brevo_smtp import test_brevo_smtp_auth
@@ -38,7 +40,8 @@ from .services.external_apis import (
     decrypt_external_api_secret, decrypt_external_api_smtp_secret,
     get_mapbox_runtime_state, is_public_mapbox_token,
 )
-from .services.analytics import TicketQueryService
+from .services.analytics import LinkQueryService, TicketQueryService
+from .services.otrs_status import BACKLOG_STATUSES
 from aplicativos.qualidade.models import QualityCorrelationCheckpoint, QualityTreatment
 from .services.arion_database import (
     active_database_summary, activate_candidate, candidate_config,
@@ -159,7 +162,9 @@ def _run_operation(*, request, integration, operation, callback):
             error = f"{error} Código técnico: {exc.error_code}"
         run.status = IntegrationRun.Status.FAILED
         run.message = error
-        if isinstance(exc, (IntegrationNotConfigured, OTRSCredentialMissingError)):
+        if integration.key == Integration.Key.OTRS:
+            integration.status = status_after_otrs_failure(exc, integration.status)
+        elif isinstance(exc, (IntegrationNotConfigured, OTRSCredentialMissingError)):
             integration.status = Integration.Status.NOT_CONFIGURED
         else:
             integration.status = Integration.Status.UNAVAILABLE
@@ -185,7 +190,8 @@ def _run_operation(*, request, integration, operation, callback):
         error = "Não foi possível concluir a operação da integração."
         run.status = IntegrationRun.Status.FAILED
         run.message = error
-        integration.status = Integration.Status.UNAVAILABLE
+        if integration.key != Integration.Key.OTRS:
+            integration.status = Integration.Status.UNAVAILABLE
         integration.last_error = error
         integration.last_error_at = timezone.now()
     else:
@@ -249,6 +255,7 @@ def home(request):
     otrs = get_integration(Integration.Key.OTRS)
     cmdb_state = IntegrationSyncState.objects.filter(key="cmdb").first()
     otrs_state = IntegrationSyncState.objects.filter(key="otrs").first()
+    cmdb_run = IntegrationRun.objects.filter(operation=IntegrationRun.Operation.CMDB_SYNC).first()
     otrs_setup_notice = otrs_configuration_notice(otrs)
     _sync_integration_runtime_status(cmdb, cmdb_state)
     _sync_integration_runtime_status(otrs, otrs_state)
@@ -293,6 +300,18 @@ def home(request):
         database_health.update(status="Online", online=True, latency_ms=max(0, int((time.perf_counter() - started) * 1000)))
     except Exception:
         database_health["status"] = "Indisponível"
+    scoped_links = LinkQueryService.base(request.user)
+    scoped_link_counts = scoped_links.aggregate(
+        total=Count("pk"),
+        operators=Count(
+            "operator_id", distinct=True,
+            filter=Q(operator__isnull=False, operator__name__gt=""),
+        ),
+    )
+    ticket_counts = TicketQueryService.base(request.user).aggregate(
+        total=Count("pk"),
+        open=Count("pk", filter=Q(business_status__in=BACKLOG_STATUSES)),
+    )
     context = _admin_context_for_integration(
         request, "integrations", cmdb=cmdb, otrs=otrs, database_health=database_health,
         otrs_setup_notice=otrs_setup_notice,
@@ -302,12 +321,16 @@ def home(request):
         quality_last_read=quality_last_read,
         quality_last_attempt=quality_last_attempt,
         quality_last_error=quality_last_error,
-        quality_confirmed_links=QualityTreatment.objects.filter(quality_ticket_external_id__isnull=False).count(),
+        quality_confirmed_links=QualityTreatment.objects.filter(
+            quality_ticket_external_id__isnull=False,
+            quality_order__link__in=scoped_links,
+        ).count(),
         worker_alive=worker_alive,
-        cmdb_links=CMDBLinkMirror.objects.filter(is_present_in_source=True).count(),
-        cmdb_operators=CMDBOperatorMirror.objects.filter(is_present_in_source=True).count(),
-        otrs_tickets=TicketQueryService.noc_tickets().count(),
-        otrs_open=TicketQueryService.business_open().count(),
+        cmdb_links=scoped_link_counts["total"] or 0,
+        cmdb_operators=scoped_link_counts["operators"] or 0,
+        otrs_tickets=ticket_counts["total"] or 0,
+        otrs_open=ticket_counts["open"] or 0,
+        cmdb_run=cmdb_run,
         otrs_fast=IntegrationRun.objects.filter(operation=IntegrationRun.Operation.OTRS_FAST_SYNC).first(),
         otrs_full=IntegrationRun.objects.filter(operation=IntegrationRun.Operation.OTRS_FULL_SYNC).first(),
         mapbox_configured=get_mapbox_runtime_state()["configured"],

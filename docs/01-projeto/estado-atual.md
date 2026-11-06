@@ -1,6 +1,6 @@
 # Estado atual do ARION OPS
 
-Revisão estrutural em 05/11/2026 (Atualização incremental 1.3.1). A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
+Revisão estrutural em 06/11/2026 (Atualização incremental 1.3.1). A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
 
 Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
 
@@ -12,7 +12,7 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A dis
 | Chamados | IMPLEMENTADO | Tickets atuais da fila NOC + `TicketTracking` | Acompanhamento apenas no ARION OPS | OTRS somente leitura. |
 | Cockpit | IMPLEMENTADO | Espelhos OTRS/CMDB; filas de Suporte e Cancelamentos | `SavedAnalyticsView` local; exportação de leitura | Contextos Suporte, Cancelamentos e Geral; classificação por etapa e Data Scope no backend. |
 | Mapa | IMPLEMENTADO | Espelhos e relações Ticket–ConfigItem | Sem edição da fonte | Agrega por UF; não geocodifica. |
-| Rankings | IMPLEMENTADO | Snapshot atual CMDB/Base Links + chamados válidos do espelho OTRS no período | Exportação de leitura | Exposição por links ativos e incidência proporcional; Índice ARION é operacional, não SLA nem prova de causalidade. |
+| Rankings | IMPLEMENTADO | Snapshot CMDB atual + chamados validos OTRS | Consulta e exportacao de leitura | Score comparativo de 0-100, melhores/atencao/mais links, regras de amostra e periodos documentados; Data Scope no backend. |
 | Qualidade Operacional | IMPLEMENTADO (Fases 1–4 + envio controlado de TQ) | OQs, checklist, contatos, ciclos, TQs locais e espelhos CMDB/OTRS | Registros locais auditados; envio Brevo somente por autorização e confirmação individual; sem escrita OTRS | Inclui alinhamento visual refinado na aba Tratativas, botões padronizados, resumo expansível, template institucional HTML/texto, pré-visualização, correlação por ID persistente no corpo (QID) e migrations 0014/0015 validadas. |
 | Base | IMPLEMENTADO | `CMDBLinkMirror`, `CMDBOperatorMirror` | Consulta/exportação | Importador XLSX legado não é fluxo normal. |
 | Central de Relatórios | IMPLEMENTADO | Original Claro e espelhos locais OTRS/CMDB em enriquecimento explícito | Tratativa, pausas, overrides, decisão e auditoria no ARION OPS | Cálculo automático é baseline; decisão final é humana. |
@@ -25,6 +25,14 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A dis
 | Central documental | IMPLEMENTADO | Markdown estruturado em `docs/` e catálogo em `docs/08-releases/releases.json` | Leitura | Inclui Atualizações e versões, páginas funcionais/arquiteturais e busca; páginas técnicas protegidas por `configuracoes.manage_groups`. |
 
 A Central de Integrações administra APIs externas Brevo e Mapbox. A API Key Brevo é protegida por DPAPI e o teste usa apenas autenticação sem envio; a autorização administrativa de envio real permanece desabilitada por padrão. O Mapbox prioriza token público configurado no banco, com fallback legado controlado pelo ambiente.
+
+No código atual, o espelho OTRS preserva `external_state_name` e normaliza Resolvido/Encerrado como `business_status=RESOLVED`; backlog e aging operacional consideram somente `OPEN` e `PENDING`. A migration de dados `0014_normalize_closed_operational_status` converte linhas locais `CLOSED` sem alterar datas ou estado bruto e foi aplicada ao banco MySQL local de desenvolvimento, confirmado em loopback com `DEBUG=True`. Não foi aplicada em produção ou banco remoto, nem publicada. Integração diferencia saúde da conexão de falha de processamento; o supervisor Windows carrega `.env` da raiz com precedência do ambiente herdado e valida o processo filho.
+
+A Visão geral pessoal está disponível para qualquer usuário autenticado. A permissão `configuracoes.view_dashboard` continua protegendo a Dashboard gerencial; sem ela, o portal não consulta nem exibe KPIs executivos. Contagens na Visão geral autorizada e no diagnóstico da Central de Integrações respeitam Data Scope antes das agregações.
+
+A Central de Integrações organiza conexão, último teste, sincronização, registros, estado do worker e diagnósticos em tema verde e responsivo. Grupos e acessos oferecem busca, módulos recolhíveis, resumo de grants e aviso de alterações não salvas sem mudar as permissões provisionadas. Chamados abre com 50 itens por página e mantém paginação server-side.
+
+O ranking inclui Score Operacional comparativo com amostra mínima e métricas normalizadas por exposição; SLA não é inferido. As páginas analíticas e de Chamados compartilham consultas locais escopadas, reduzem agregações repetidas e não carregam todos os tickets antecipadamente. Não há migration de banco nova na Etapa 3; a migration de dados `integracoes.0014_normalize_closed_operational_status` das etapas anteriores ainda precisa entrar no plano da próxima publicação.
 
 ## Banco e fontes
 

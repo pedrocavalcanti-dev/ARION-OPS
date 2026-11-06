@@ -3,6 +3,7 @@ from django.db.models import Q
 
 from aplicativos.integracoes.models import CMDBLinkMirror
 from aplicativos.integracoes.services.analytics import TicketQueryService
+from aplicativos.integracoes.services.otrs_status import business_statuses_query
 from aplicativos.painel.services.analytics import AnalyticsQueryService
 
 from ..models import QualityOccurrence
@@ -35,7 +36,7 @@ def quality_ticket_sets(
         ticket_external_id_snapshot__isnull=False,
     ).values("ticket_external_id_snapshot")
     valid = tickets.filter(
-        business_status__in=AnalyticsQueryService.OPERATIONAL_VALID_STATES,
+        business_statuses_query("business_status", AnalyticsQueryService.OPERATIONAL_VALID_STATES),
     ).exclude(
         responsibility_normalized="IMPROCEDENTE",
     ).exclude(
