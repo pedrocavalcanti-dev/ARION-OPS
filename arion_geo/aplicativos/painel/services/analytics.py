@@ -525,9 +525,13 @@ class AnalyticsQueryService:
         )
         first_ticket_at = result["first_ticket_at"]
         result["history_start"] = timezone.localtime(first_ticket_at).date() if first_ticket_at else None
-        result["history_complete"] = bool(first_ticket_at) and not any((
+        result["date_fields_complete"] = bool(first_ticket_at) and not any((
             result["missing_created_at"], result["missing_terminal_at"], result["invalid_terminal_at"],
         ))
+        # O mirror stores only the latest ticket state. It has no durable ledger
+        # of reopenings, queue transfers, or every historical state transition,
+        # so complete date fields alone cannot establish historical stock.
+        result["history_complete"] = False
         return result
 
     @classmethod
@@ -570,10 +574,11 @@ class AnalyticsQueryService:
         flow_ledger = ledger_rows.annotate(_operational_closed_at=closing_date)
 
         history_start = history_meta.get("history_start")
-        history_available = bool(
-            history_meta.get("history_complete") and history_start
-            and start >= history_start and end <= as_of.date()
-        )
+        # A current-state mirror cannot prove a historical backlog baseline:
+        # reopened tickets and tickets that left the synchronized queues have
+        # no complete transition/membership ledger. Never infer past stock from
+        # the current row set, even if its visible timestamps happen to be full.
+        history_available = False
         baseline = stock_ledger.filter(business_statuses_query(
             "business_status", (*BACKLOG_STATUSES, *TERMINAL_STATUSES),
         )).filter(source_created_at__lt=start_at).filter(
@@ -707,13 +712,20 @@ class AnalyticsQueryService:
         backlog_final = running_backlog if history_available else None
         history_message = ""
         if not history_meta.get("history_complete"):
-            history_message = "O mirror não tem datas suficientes para reconstruir todo o estoque histórico."
-        elif not history_start:
-            history_message = "Não há data inicial confiável no mirror para este recorte."
-        elif start < history_start:
-            history_message = f"O histórico disponível começa em {history_start:%d/%m/%Y}."
-        elif end > as_of.date():
-            history_message = "O período termina no futuro; o Cockpit não projeta backlog."
+            history_message = (
+                "Backlog histórico não comprovável: o mirror guarda o estado atual, "
+                "sem todas as transições, reaberturas e saídas das filas sincronizadas. "
+                "Novos e resolvidos mostram apenas eventos datados presentes no recorte do mirror."
+            )
+            missing_created = history_meta.get("missing_created_at", 0)
+            missing_terminal = history_meta.get("missing_terminal_at", 0)
+            invalid_terminal = history_meta.get("invalid_terminal_at", 0)
+            if missing_created or missing_terminal or invalid_terminal:
+                history_message += (
+                    f" Lacunas de datas neste recorte: {missing_created} sem criação, "
+                    f"{missing_terminal} terminais sem resolução e {invalid_terminal} "
+                    "com resolução anterior à criação."
+                )
         if history_available and end == as_of.date() and backlog_final != total_active:
             history_available = False
             backlog_initial = None
@@ -818,7 +830,11 @@ class AnalyticsQueryService:
             "period": period,
             "backlog": {
                 "available": history_available,
-                "history_start": history_start.isoformat() if history_start else None,
+                # A minimum creation date in the mutable mirror is not a
+                # proven start of historical coverage.
+                "history_start": None,
+                "earliest_observed_created_at": history_start.isoformat() if history_start else None,
+                "date_fields_complete": bool(history_meta.get("date_fields_complete")),
                 "message": history_message,
                 "initial": backlog_initial,
                 "final": backlog_final,

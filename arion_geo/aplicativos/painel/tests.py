@@ -846,8 +846,9 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(aging["4-8"], 1)
         self.assertEqual(aging["24-48"], 1)
         self.assertEqual(sum(aging.values()), 3)
-        self.assertTrue(result["operational"]["backlog"]["available"])
+        self.assertFalse(result["operational"]["backlog"]["available"])
         self.assertEqual(result["operational"]["backlog"]["final"], sum(aging.values()))
+        self.assertIn("sem todas as transições", result["operational"]["backlog"]["message"])
         long_range = AnalyticsQueryService().query({
             "scope": "support", "metric": "tickets", "group_by": "status",
             "start": "2026-10-01", "end": "2026-12-31", "filters": {},
@@ -908,16 +909,16 @@ class MirrorAnalyticsTests(TestCase):
             "end": "2026-10-10", "filters": {}, "include_cancelled": False,
         }, user=self.user)
         operational = result["operational"]
-        self.assertTrue(operational["backlog"]["available"])
-        self.assertEqual(operational["period"]["backlog_initial"], 30)
+        self.assertFalse(operational["backlog"]["available"])
+        self.assertTrue(operational["backlog"]["date_fields_complete"])
+        self.assertIsNone(operational["period"]["backlog_initial"])
         self.assertEqual(operational["period"]["entries"], 5)
         self.assertEqual(operational["period"]["closed"], 2)
         self.assertEqual(operational["period"]["net"], 3)
-        self.assertEqual(operational["period"]["backlog_final"], 33)
-        self.assertEqual([item["value"] for item in operational["primary_kpis"]], [30, 5, 2, 33])
-        self.assertEqual(operational["series"][-1]["backlog"], 33)
+        self.assertIsNone(operational["period"]["backlog_final"])
+        self.assertIsNone(operational["series"][-1]["backlog"])
         self.assertEqual(sum(item["total"] for item in operational["aging"]), operational["current"]["total"])
-        self.assertEqual(operational["current"]["total"], operational["period"]["backlog_final"])
+        self.assertEqual(operational["current"]["total"], 33)
 
     def test_backlog_counts_same_period_creation_and_closure_without_changing_stock(self):
         for index in range(10):
@@ -938,8 +939,8 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(result["period"]["closed"], 1)
         self.assertEqual(result["period"]["canceled"], 0)
         self.assertEqual(result["period"]["net"], 0)
-        self.assertEqual(result["period"]["backlog_initial"], 10)
-        self.assertEqual(result["period"]["backlog_final"], 10)
+        self.assertIsNone(result["period"]["backlog_initial"])
+        self.assertIsNone(result["period"]["backlog_final"])
 
     def test_backlog_counts_older_tickets_closed_during_period_and_net_reduction(self):
         closed_at = datetime(2026, 10, 7, 15, tzinfo=datetime_timezone.utc)
@@ -958,11 +959,11 @@ class MirrorAnalyticsTests(TestCase):
             "scope": "support", "metric": "tickets", "start": "2026-10-05",
             "end": "2026-10-10", "filters": {},
         }, user=self.user)["operational"]
-        self.assertEqual(result["period"]["backlog_initial"], 9)
+        self.assertIsNone(result["period"]["backlog_initial"])
         self.assertEqual(result["period"]["entries"], 4)
         self.assertEqual(result["period"]["closed"], 9)
         self.assertEqual(result["period"]["net"], -5)
-        self.assertEqual(result["period"]["backlog_final"], 4)
+        self.assertIsNone(result["period"]["backlog_final"])
 
     def test_backlog_uses_canceled_at_for_canceled_ticket_closure(self):
         for index in range(3):
@@ -979,10 +980,10 @@ class MirrorAnalyticsTests(TestCase):
             "scope": "support", "metric": "tickets", "start": "2026-10-05",
             "end": "2026-10-10", "filters": {},
         }, user=self.user)["operational"]
-        self.assertEqual(result["period"]["backlog_initial"], 4)
+        self.assertIsNone(result["period"]["backlog_initial"])
         self.assertEqual(result["period"]["closed"], 0)
         self.assertEqual(result["period"]["canceled"], 1)
-        self.assertEqual(result["period"]["backlog_final"], 3)
+        self.assertIsNone(result["period"]["backlog_final"])
         closed_by_day = {point["key"]: point["closed"] for point in result["series"]}
         self.assertEqual(closed_by_day["2026-10-07"], 0)
         self.assertEqual(closed_by_day["2026-10-08"], 0)
@@ -996,9 +997,33 @@ class MirrorAnalyticsTests(TestCase):
             "end": "2026-10-29", "filters": {},
         }, user=self.user)["operational"]
         self.assertFalse(result["backlog"]["available"])
-        self.assertEqual(result["backlog"]["history_start"], "2026-10-05")
+        self.assertIsNone(result["backlog"]["history_start"])
+        self.assertEqual(result["backlog"]["earliest_observed_created_at"], "2026-10-05")
         self.assertIsNone(result["period"]["backlog_initial"])
         self.assertTrue(all(item["backlog"] is None for item in result["series"]))
+
+    def test_reopened_ticket_keeps_current_stock_but_does_not_invent_past_backlog(self):
+        now = datetime(2026, 4, 1, 12, tzinfo=datetime_timezone.utc)
+        ticket = self._ticket(2070, "OPEN", True, 5)
+        ticket.source_created_at = datetime(2025, 12, 12, 10, tzinfo=datetime_timezone.utc)
+        ticket.source_changed_at = datetime(2026, 3, 20, 9, tzinfo=datetime_timezone.utc)
+        # The current mirror has no prior-cycle transition after the ticket was
+        # reopened; change_time is not a resolution timestamp.
+        ticket.resolved_at = None
+        ticket.terminal_state_at = None
+        ticket.save(update_fields=("source_created_at", "source_changed_at", "resolved_at", "terminal_state_at"))
+
+        with patch("django.utils.timezone.now", return_value=now):
+            operational = AnalyticsQueryService().query({
+                "scope": "support", "metric": "tickets", "start": "2025-12-01",
+                "end": "2026-03-31", "filters": {},
+            }, user=self.user)["operational"]
+
+        self.assertEqual(operational["period"]["entries"], 1)
+        self.assertEqual(operational["period"]["closed"], 0)
+        self.assertFalse(operational["backlog"]["available"])
+        self.assertEqual(operational["backlog"]["current_snapshot"], 1)
+        self.assertTrue(all(point["backlog"] is None for point in operational["series"]))
 
     def test_cockpit_page_starts_with_noc_filters_and_paged_results(self):
         response = self.client.get(reverse("cockpit"))

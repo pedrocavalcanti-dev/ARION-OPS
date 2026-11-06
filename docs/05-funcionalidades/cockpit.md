@@ -64,11 +64,13 @@ O Cockpit considera cancelados e improcedentes por padrão nas análises histór
 
 O atalho **Improcedentes** continua filtrando especificamente os tickets cuja procedência é improcedente. Improcedentes não entram no snapshot atual de backlog ou aging. A métrica **Backlog atual** permanece restrita a `OPEN` e `PENDING`.
 
-O saldo visível do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets `OPEN` e `PENDING`, sem `SCHEDULED`, improcedentes ou desconhecidos, e a reconstrução histórica sempre baixa resoluções e cancelamentos. A variação percentual do backlog compara a variação reconstruída do estoque com o backlog inicial.
+O saldo do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets `OPEN` e `PENDING`, sem `SCHEDULED`, improcedentes ou desconhecidos.
 
-O backlog histórico é reconstruído como estoque inicial, entradas válidas por criação e saídas por resolução consolidada ou cancelamento. A linha só aparece quando os timestamps do espelho permitem reconstrução a partir do início disponível e, quando o período termina hoje, o valor final reconcilia com o snapshot `OPEN`/`PENDING` atual. Caso a cobertura não seja suficiente, a linha é ocultada com a razão; o snapshot atual continua disponível.
+O backlog histórico não é calculado a partir do mirror atual: o espelho não persiste um ledger completo de transições, reaberturas e pertencimento às filas ao longo do tempo. Datas completas nas linhas atuais não provam um backlog inicial confiável, então a série histórica fica indisponível e não é preenchida com zero ou estimativa. O estoque atual `OPEN`/`PENDING` continua disponível nos indicadores e no aging. A mensagem do gráfico identifica essa limitação e informa lacunas de datas encontradas no recorte.
 
-A reconstrução não recupera ciclos completos de reabertura nem todas as movimentações históricas de fila, pois esses eventos não são materializados no mirror do Cockpit. Portanto, **Novos** significa tickets criados no período, não tickets que entraram na fila nesse período.
+O aviso antigo dependia apenas de datas presentes nas linhas atuais. A normalização do alias legado `CLOSED` ampliou as linhas terminais avaliadas e tornou visíveis datas de resolução ausentes; uma FULL também tira do conjunto atual tickets que saíram das filas. Em cada sincronização, campos de resolução ausentes na leitura OTRS são gravados como ausentes no mirror. Preservar automaticamente uma data antiga seria incorreto quando houve reabertura, então o serviço falha de forma conservadora em vez de transformar esse conjunto mutável em uma história de estoque.
+
+**Novos** e **Resolvidos** mostram eventos datados que existem nas linhas atualmente presentes no recorte sincronizado. Tickets que saíram das filas e ciclos anteriores de resolução/reabertura podem não estar representados; por isso o gráfico informa que essas séries não têm cobertura histórica completa. A data de criação não representa entrada na fila.
 
 O aging é um snapshot do backlog `OPEN`/`PENDING` em faixas `0-4h`, `4-8h`, `8-24h`, `24-48h`, `48-72h` e `>72h`, calculadas desde `source_created_at`. Não é tempo médio de resolução. A faixa **Acima de 24h** é um filtro de backlog atual, não uma métrica histórica.
 
@@ -100,7 +102,7 @@ Os atalhos representam consultas reais e preservam contexto e período, salvo os
 
 ## Gráficos, calendário e evidências
 
-A evolução operacional apresenta Novos, Resolvidos e o Backlog reconstruído. Cancelados e improcedentes podem compor o universo histórico sem criar séries visuais adicionais. Valores positivos são rotulados quando há espaço; zeros não recebem rótulo visual, mas permanecem disponíveis nos dados da consulta. Em séries densas, os rótulos são reduzidos para evitar sobreposição.
+A evolução operacional apresenta Novos e Resolvidos com eventos datados do recorte local. A linha histórica de backlog só poderá ser exibida quando houver uma fonte de transições e snapshots com cobertura verificável; o mirror atual não fornece essa evidência. Cancelados e improcedentes podem compor o universo do fluxo sem criar séries visuais adicionais. Valores positivos são rotulados quando há espaço; zeros não recebem rótulo visual, mas permanecem disponíveis nos dados da consulta. Em séries densas, os rótulos são reduzidos para evitar sobreposição.
 
 O gráfico de análise selecionada e o calendário usam a métrica principal. O calendário mostra o resumo mensal, os valores diários e o pico. A seleção de um dia pode filtrar temporariamente a evidência ou aplicar aquele dia como novo período, sem alterar a regra de Data Scope.
 
