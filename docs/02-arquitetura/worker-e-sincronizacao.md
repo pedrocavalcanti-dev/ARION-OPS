@@ -141,6 +141,8 @@ Não coloque credenciais nos argumentos de shell compartilhado nem em logs.
 
 ## Diagnóstico
 
+Consulte também o [detalhamento técnico da sincronização OTRS](otrs-sincronizacao.md) para projeções, cursor, reconciliação e limites do FULL/FAST.
+
 1. Confira `IntegrationRun` e diferencie sucesso completo, parcial e falha.
 2. Compare `last_success_at`, `last_full_success_at` e `change_cursor`.
 3. Verifique owner/heartbeat/expiração do lease e se há processo concorrente.

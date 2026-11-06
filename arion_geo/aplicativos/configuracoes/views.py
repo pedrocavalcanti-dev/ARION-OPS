@@ -377,6 +377,7 @@ def documentation_home(request):
         ("inicio", "Começar", "Visão geral, arquitetura e fontes de dados.", ("Começar",)),
         ("modulos", "Funcionalidades", "Chamados, Base, Dashboard, Cockpit, Mapa, Rankings e ARI.", ("Funcionalidades",)),
         ("dados", "Dados e Integrações", "Banco de dados, OTRS, CMDB, worker e dicionário.", ("Dados e Integrações",)),
+        ("otrs", "OTRS", "Referência técnica da integração, sincronização e dados.", ("OTRS",)),
         ("administracao", "Administração", "Usuários, grupos, escopos, configurações e auditoria.", ("Administração",)),
         ("operacao", "Segurança e operação", "Segurança, testes, erros, implantação e padrões.", ("Segurança e operação", "Padrões")),
     )

@@ -345,6 +345,8 @@ html[data-theme="dark"] .docs-icon-sun, html[data-theme="light"] .docs-icon-moon
 .docs-diagram-expand svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .docs-diagram-svg marker path { fill: var(--docs-muted); }
 .docs-diagram-edge { fill: none; stroke: var(--docs-muted); stroke-width: 1.5; }
+.docs-diagram-lifeline { stroke: var(--docs-border-strong); stroke-dasharray: 4 4; }
+.docs-diagram-message-label { fill: var(--docs-text); font: 11px Inter, sans-serif; }
 .docs-diagram-node rect { fill: var(--docs-bg); stroke: var(--docs-border); stroke-width: 1.2; }
 .docs-diagram-node text { fill: var(--docs-text); font: 500 13px Inter, sans-serif; }
 .docs-diagram-source { margin-top: 10px; color: var(--docs-muted); font-size: 11px; }

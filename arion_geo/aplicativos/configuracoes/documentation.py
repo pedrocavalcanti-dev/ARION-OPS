@@ -28,7 +28,24 @@ DOCUMENTS = {
     "base": ("Base de Links", "Links e Providers/ISP do espelho CMDB", "Funcionalidades", "05-funcionalidades/base.md", "links provider operadora ISP ConfigItemID CMDB busca exportação"),
     "ari": ("ARI", "Conversas, anexos e artefatos Preview", "Funcionalidades", "05-funcionalidades/ari.md", "assistente IA intelligence artificial preview artifacts LLM"),
     "banco-de-dados": ("Banco de Dados e Modelos", "Banco local, schema, chaves e relacionamentos", "Dados e Integrações", "02-arquitetura/banco-de-dados.md", "banco database MySQL SQLite models migrations schema tabelas ConfigItemID OTRSTicketConfigItem CMDBLinkMirror external_id ticket_number closing_code_raw GroupDataScope IntegrationLease CodigoFechamento FalhaMassiva TELMEX Provider DPAPI source_config_item_id"),
-    "otrs": ("OTRS", "Leitura da fila, estados, relações e Dynamic Fields", "Dados e Integrações", "06-integracoes-e-dados/otrs.md", "OTRS ticket tn ticket.id ticket.tn ticket_number external_id Dynamic Field CodigoFechamento closing_code_raw FalhaMassiva status link_relation ConfigItemID"),
+    "otrs": ("OTRS · Visão geral", "Arquitetura, cobertura e limites da integração OTRS", "OTRS", "06-integracoes-e-dados/otrs.md", "OTRS ticket tn ticket.id ticket.tn ticket_number external_id Dynamic Field CodigoFechamento closing_code_raw Falha Massiva status link_relation ConfigItemID FULL FAST"),
+    "otrs-origem-dados": ("02 · Origem dos dados", "Fonte externa, escopo de leitura e evidências locais", "OTRS", "06-integracoes-e-dados/otrs/origem-dados.md", "MySQL origem schema information_schema READ ONLY origem externa fotografia schema validado"),
+    "otrs-tabelas": ("03 · Catálogo de tabelas", "Inventário de tabelas consultadas pelo código", "OTRS", "06-integracoes-e-dados/otrs/tabelas.md", "tabelas ticket queue ticket_state link_relation dynamic_field article catalog"),
+    "otrs-dicionario": ("04 · Dicionário de dados", "Campos, tipos observados, transformações e destinos", "OTRS", "06-integracoes-e-dados/otrs/dicionario-dados.md", "campos colunas tipos field data dictionary ticket id tn article article_data_mime.a_body a_body"),
+    "otrs-relacionamentos": ("05 · Relacionamentos", "Chaves, cardinalidade, relação Ticket-CI e JOINs", "OTRS", "06-integracoes-e-dados/otrs/relacionamentos.md", "JOIN cardinalidade source_key target_key ConfigItem ticket ticket_history article"),
+    "otrs-consultas-sql": ("06 · Consultas SQL", "Catálogo estável de 48 famílias de consulta", "OTRS", "06-integracoes-e-dados/otrs/consultas-sql.md", "SQL query OTRS-Q001 OTRS-Q101 OTRS-Q201 OTRS-Q301 SELECT filtros parâmetros"),
+    "otrs-sincronizacao": ("07 · Sincronização", "FULL, FAST, cursor, worker, leases e falhas", "OTRS", "06-integracoes-e-dados/otrs/sincronizacao.md", "FULL FAST cursor safety window worker lease retry checkpoint IntegrationSyncState"),
+    "otrs-espelho-local": ("08 · Espelho local", "Modelos Django, identidade, upsert e reconciliação", "OTRS", "06-integracoes-e-dados/otrs/espelho-local.md", "mirror OTRSTicket OTRSTicketConfigItem OTRSStateMapping external_id"),
+    "otrs-estados": ("09 · Estados dos tickets", "Estado bruto, categoria operacional e compatibilidade CLOSED", "OTRS", "06-integracoes-e-dados/otrs/estados.md", "OPEN PENDING SCHEDULED RESOLVED CLOSED CANCELED UNKNOWN status migration 0014"),
+    "otrs-datas": ("10 · Datas operacionais", "Criação, mudança, resolução e histórico", "OTRS", "06-integracoes-e-dados/otrs/datas.md", "create_time change_time ticketResolvido StateUpdate terminal_state_at timezone"),
+    "otrs-indicadores": ("11 · Indicadores", "Regras temporais, status, universo e deduplicação", "OTRS", "06-integracoes-e-dados/otrs/indicadores.md", "KPI backlog resolvidos incidentes reincidência links impactados distinct Data Scope"),
+    "otrs-consumidores": ("12 · Módulos consumidores", "Cockpit, Chamados, Rankings, Mapa e demais módulos", "OTRS", "06-integracoes-e-dados/otrs/consumidores.md", "Cockpit Chamados Rankings Mapa Qualidade Relatórios Base Links Integracoes consumers"),
+    "otrs-qualidade-tq": ("13 · Qualidade e TQ", "Envio, QID, artigos, checkpoint e reconciliação", "OTRS", "06-integracoes-e-dados/otrs/qualidade-tq.md", "TQ QID ARION-QID article correlation Brevo checkpoint artigos"),
+    "otrs-seguranca": ("14 · Segurança", "TLS, segredos, somente leitura e dados sensíveis", "OTRS", "06-integracoes-e-dados/otrs/otrs-seguranca.md", "TLS certificado DPAPI segredo read-only READ ONLY senha logs a_body"),
+    "otrs-diagnostico": ("15 · Diagnóstico", "Procedimentos seguros para falhas e divergências", "OTRS", "06-integracoes-e-dados/otrs/diagnostico.md", "diagnóstico falha conexão TLS FAST cursor duplicidade CI TQ worker"),
+    "otrs-glossario": ("16 · Glossário", "Termos OTRS, ARION OPS e semântica de mirror", "OTRS", "06-integracoes-e-dados/otrs/glossario.md", "glossário TN ID CI Dynamic Field mirror cursor ticket"),
+    "otrs-rastreabilidade": ("17 · Rastreabilidade", "Da coluna externa ao modelo, serviço e interface", "OTRS", "06-integracoes-e-dados/otrs/rastreabilidade.md", "origem transformação destino interface source traceability"),
+    "otrs-limitacoes": ("18 · Limitações e cobertura", "Confirmações, inferências e validações pendentes", "OTRS", "06-integracoes-e-dados/otrs/limitacoes.md", "pendente inferido confirmado cobertura limitação schema validação"),
     "cmdb": ("CMDB", "Objetos ConfigItem, identidade de negócio e mirror", "Dados e Integrações", "06-integracoes-e-dados/cmdb.md", "CMDB ServiceUp ConfigItemID source_config_item_id Number Links de internet Operadoras Provider ISP TELMEX projeto conta identidade confiança"),
     "worker": ("Worker e Sincronização", "Cadências, FAST/FULL, leases e freshness", "Dados e Integrações", "02-arquitetura/worker-e-sincronizacao.md", "worker integration_worker FAST FULL cadência lease heartbeat cursor IntegrationLease IntegrationRun retry SyncState"),
     "dicionario-de-dados": ("Dicionário de Dados", "Campos centrais, origens, chaves e semântica", "Dados e Integrações", "02-arquitetura/dicionario-de-dados.md", "TicketTracking CMDBLinkMirror OTRSTicketConfigItem ConfigItemID external_id ticket_number closing_code_raw source_config_item_id CodigoFechamento GroupDataScope IntegrationLease"),
@@ -45,7 +62,7 @@ DOCUMENTS = {
     "implantacao-e-producao": ("Implantação e Produção", "Configuração web, banco e worker", "Segurança e operação", "02-arquitetura/implantacao-e-producao.md", "deploy produção Windows MySQL worker DPAPI"),
     "diretrizes-de-interface": ("Diretrizes de Interface", "Tokens, componentes, temas e acessibilidade", "Padrões", "04-interface/diretrizes-de-interface.md", "CSS tema claro escuro responsividade acessibilidade"),
 }
-CATEGORY_ORDER = ("Começar", "Funcionalidades", "Dados e Integrações", "Administração", "Segurança e operação", "Padrões")
+CATEGORY_ORDER = ("Começar", "Funcionalidades", "Dados e Integrações", "OTRS", "Administração", "Segurança e operação", "Padrões")
 
 
 def _slugify(value):
@@ -169,7 +186,7 @@ def render_markdown(source):
             klass = f' class="language-{html.escape(language, quote=True)}"' if re.fullmatch(r"[\w+-]+", language) else ""
             block = f"<pre><code{klass}>{html.escape(chr(10).join(code))}</code></pre>"
             if language.casefold() == "mermaid":
-                diagram = _render_flowchart(chr(10).join(code))
+                diagram = _render_diagram(chr(10).join(code))
                 toolbar = (
                     '<div class="docs-diagram-toolbar"><button type="button" class="docs-diagram-expand" '
                     'data-docs-diagram-expand aria-haspopup="dialog">'
@@ -253,6 +270,110 @@ def render_markdown(source):
             continue
         i += 1
     return "\n".join(output), headings
+
+
+def _render_diagram(source):
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    if lines and lines[0].casefold() == "sequencediagram":
+        return _render_sequence_diagram(lines)
+    return _render_flowchart(source)
+
+
+def _render_sequence_diagram(lines):
+    """Render a small, safe Mermaid sequence-diagram subset used by the docs."""
+    participants = []
+    aliases = {}
+    messages = []
+    participant_pattern = re.compile(r"^participant\s+([A-Za-z0-9_]+)(?:\s+as\s+(.+))?$", re.I)
+    message_pattern = re.compile(r"^([A-Za-z0-9_]+)(-->>|->>)([A-Za-z0-9_]+):\s*(.+)$")
+    for line in lines[1:]:
+        participant = participant_pattern.fullmatch(line)
+        if participant:
+            key, label = participant.groups()
+            if key in aliases or len(participants) >= 6:
+                return ""
+            participants.append(key)
+            aliases[key] = (label or key).strip()
+            continue
+        message = message_pattern.fullmatch(line)
+        if not message:
+            return ""
+        left, arrow, right, label = message.groups()
+        messages.append((left, arrow, right, label.strip()))
+    if not participants or not messages or any(left not in aliases or right not in aliases for left, _, right, _ in messages):
+        return ""
+
+    padding, box_width, box_height, step_x = 24, 132, 46, 156
+    width = padding * 2 + (len(participants) - 1) * step_x + box_width
+    top, row_step = 82, 58
+    height = top + len(messages) * row_step + 24
+    positions = {key: padding + index * step_x + box_width / 2 for index, key in enumerate(participants)}
+
+    def wrap(value, limit, maximum=2):
+        words, result, current = value.split(), [], ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if current and len(candidate) > limit:
+                result.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            result.append(current)
+        if len(result) > maximum:
+            result = result[:maximum]
+            result[-1] = result[-1].rstrip(" .…") + "…"
+        return result
+
+    marker_id = "docs-sequence-arrow-" + hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:10]
+    nodes = []
+    for key in participants:
+        x = positions[key] - box_width / 2
+        label_lines = wrap(aliases[key], 19)
+        first_y = 16 + box_height / 2 - (len(label_lines) - 1) * 6
+        tspans = "".join(
+            f'<tspan x="{positions[key]}" dy="{0 if index == 0 else 13}">{html.escape(part)}</tspan>'
+            for index, part in enumerate(label_lines)
+        )
+        nodes.append(
+            f'<g class="docs-diagram-node"><rect x="{x}" y="16" width="{box_width}" height="{box_height}" rx="9"/>'
+            f'<text x="{positions[key]}" y="{first_y}" text-anchor="middle">{tspans}</text></g>'
+        )
+
+    lifelines = "".join(
+        f'<path class="docs-diagram-edge docs-diagram-lifeline" d="M {positions[key]} 62 V {height - 12}"/>'
+        for key in participants
+    )
+    arrows = []
+    descriptions = []
+    for index, (left, arrow, right, label) in enumerate(messages):
+        y = top + index * row_step
+        x1, x2 = positions[left], positions[right]
+        arrows.append(
+            f'<path class="docs-diagram-edge" d="M {x1} {y} H {x2}" marker-end="url(#{marker_id})"'
+            + (' stroke-dasharray="4 3"' if arrow == "-->>" else "")
+            + "/>"
+        )
+        label_lines = wrap(label, 22)
+        label_y = y - (len(label_lines) - 1) * 11 - 7
+        tspans = "".join(
+            f'<tspan x="{(x1 + x2) / 2}" dy="{0 if line_index == 0 else 12}">{html.escape(part)}</tspan>'
+            for line_index, part in enumerate(label_lines)
+        )
+        arrows.append(
+            f'<text class="docs-diagram-message-label" x="{(x1 + x2) / 2}" y="{label_y}" text-anchor="middle">{tspans}</text>'
+        )
+        descriptions.append(f"{aliases[left]} to {aliases[right]}: {label}")
+
+    aria = html.escape("; ".join(descriptions), quote=True)
+    return (
+        f'<svg class="docs-diagram-svg docs-diagram-svg--horizontal" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" preserveAspectRatio="xMidYMid meet" role="img" '
+        f'aria-label="{aria}" xmlns="http://www.w3.org/2000/svg">'
+        f'<defs><marker id="{marker_id}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">'
+        '<path d="M0,0 L0,6 L7,3 z"/></marker></defs>'
+        + lifelines + "".join(arrows) + "".join(nodes) + "</svg>"
+    )
 
 
 def _render_flowchart(source):

@@ -85,6 +85,8 @@ R1–R5 são níveis operacionais definidos manualmente pela Qualidade, não con
 
 O guia identifica OTRS como fonte dos tickets/TQs, CMDB/Base como fonte dos dados mestre do circuito e ARION OPS como fonte dos registros locais da Qualidade. A consulta segue o Data Scope do usuário; criação/alteração de OQs e gestão de contatos exigem os respectivos acessos funcionais.
 
+Para a mecânica de envio e correlação pelo QID, consulte [Qualidade e TQ no OTRS](otrs-qualidade-tq.md). As regras compartilhadas de estado e indicadores estão na [referência OTRS](otrs.md).
+
 ### Fontes dos indicadores do Dashboard
 
 | Indicador | Fonte |

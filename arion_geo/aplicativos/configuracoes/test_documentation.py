@@ -131,7 +131,32 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 32)
+        self.assertEqual(len(DOCUMENTS), 49)
+
+    def test_otrs_reference_is_a_navigable_and_searchable_documentation_group(self):
+        self.client.force_login(self.admin)
+        home = self.client.get(reverse("configuracoes:documentation"))
+        otrs_pages = [item for item in DocumentationService.navigation() if item["category"] == "OTRS"]
+
+        self.assertEqual(len(otrs_pages), 18)
+        self.assertContains(home, "OTRS")
+        self.assertContains(home, "18 documentos")
+        category = next(item for item in DocumentationService.categories() if item["name"] == "OTRS")
+        self.assertEqual(len(category["documents"]), 18)
+        self.assertEqual(
+            {item["slug"] for item in DocumentationService.search("OTRS-Q204")},
+            {"otrs-consultas-sql"},
+        )
+        self.assertIn("otrs-dicionario", {item["slug"] for item in DocumentationService.search("article_data_mime.a_body")})
+
+    def test_otrs_inventory_totals_match_the_documented_tables_fields_and_query_families(self):
+        tables = (DOCS_ROOT / DOCUMENTS["otrs-tabelas"][3]).read_text(encoding="utf-8-sig")
+        fields = (DOCS_ROOT / DOCUMENTS["otrs-dicionario"][3]).read_text(encoding="utf-8-sig")
+        queries = (DOCS_ROOT / DOCUMENTS["otrs-consultas-sql"][3]).read_text(encoding="utf-8-sig")
+
+        self.assertEqual(len(re.findall(r"^\| T\d{2} \|", tables, re.M)), 21)
+        self.assertEqual(len(re.findall(r"^\| OTRS-F\d{3} \|", fields, re.M)), 80)
+        self.assertEqual(len(re.findall(r"^\| OTRS-Q\d{3} \|", queries, re.M)), 48)
 
     def test_search_terms_find_current_operational_documents(self):
         cases = {
