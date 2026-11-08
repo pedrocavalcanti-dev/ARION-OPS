@@ -29,6 +29,7 @@ ERRORS = {
     "BAD_REQUEST": ErrorDefinition(400, "BAD_REQUEST", "Não foi possível processar a solicitação", "A requisição enviada é inválida ou está incompleta."),
     "AUTHENTICATION_REQUIRED": ErrorDefinition(401, "AUTHENTICATION_REQUIRED", "Autenticação necessária", "Entre novamente para continuar.", show_home=False, show_login=True),
     "ACCESS_DENIED": ErrorDefinition(403, "ACCESS_DENIED", "Acesso não permitido", "Você não possui permissão para acessar esta área ou executar esta ação."),
+    "PASSWORD_CHANGE_REQUIRED": ErrorDefinition(403, "PASSWORD_CHANGE_REQUIRED", "Atualização de senha necessária", "Confirme sua identidade e atualize a senha para voltar a acessar os módulos."),
     "NOT_FOUND": ErrorDefinition(404, "NOT_FOUND", "Página não encontrada", "O endereço pode estar incorreto, ter sido alterado ou não existir."),
     "METHOD_NOT_ALLOWED": ErrorDefinition(405, "METHOD_NOT_ALLOWED", "Ação não permitida", "Este endereço não aceita o tipo de operação enviado."),
     "REQUEST_TIMEOUT": ErrorDefinition(408, "REQUEST_TIMEOUT", "A solicitação demorou mais que o esperado", "Tente novamente.", show_retry=True),

@@ -28,8 +28,11 @@ Falhas de login geram `LOGIN_FAILED` sem registrar senha; login e logout bem-suc
 |---|---|---|
 | `/login/` (`autenticacao:login`) | GET, POST | Exibe formulário e autentica. |
 | `/logout/` (`autenticacao:logout`) | POST | Encerra sessão. |
+| `/ativacao/` (`autenticacao:activate`) | GET, POST | Define a senha pessoal e ativa o convite de primeiro acesso. |
+| `/redefinir-senha/` (`autenticacao:password-reset`) | GET, POST | Define uma senha por link administrativo individual. |
+| `/senha/obrigatoria/` (`autenticacao:required-password`) | GET, POST | Confirma e-mail por OTP e conclui troca inicial/expirada. |
 
-`LoginForm` adapta o formulário Django; `LoginView` e `LogoutView` implementam os fluxos. Signals de `aplicativos.auditoria` registram eventos de autenticação. Os testes cobrem sucesso, falha, usuário inativo, logout e eventos. Não há MFA ou política de expiração própria documentada. Erros de sessão/CSRF seguem [tratamento global de erros](tratamento-global-de-erros.md).
+`LoginForm` adapta o formulario Django; `LoginView` e `LogoutView` implementam os fluxos. Signals de `aplicativos.auditoria` registram eventos de autenticacao. O primeiro acesso e a renovacao obrigatoria usam links de uso unico ou codigo OTP via Brevo, conforme a politica ativa. O middleware protege views, APIs e sessoes antigas. Consulte [Gestao de acessos e ciclo de senhas](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md). Erros de sessao/CSRF seguem [tratamento global de erros](tratamento-global-de-erros.md).
 
 ## Identidade do login e avisos de versão
 

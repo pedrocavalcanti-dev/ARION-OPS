@@ -1,12 +1,12 @@
 from django import forms
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group, Permission
 from django.core.exceptions import ValidationError
 
 from aplicativos.base_links.models import Operadora, Projeto
 from .access_control import PERMISSION_LABELS, managed_permissions
 from .models import GroupDataScope
+from aplicativos.autenticacao.models import UserSecurityProfile
 
 
 class ScopedUserFieldsMixin:
@@ -26,13 +26,13 @@ class ScopedUserFieldsMixin:
         user.groups.set([selected_group] if selected_group else [])
 
 
-class UserCreateForm(ScopedUserFieldsMixin, UserCreationForm):
+class UserCreateForm(ScopedUserFieldsMixin, forms.ModelForm):
     first_name = forms.CharField(max_length=150, required=False, label="Nome")
     last_name = forms.CharField(max_length=150, required=False, label="Sobrenome")
-    email = forms.EmailField(required=False, label="E-mail")
+    email = forms.EmailField(required=True, label="E-mail corporativo")
     is_active = forms.BooleanField(required=False, initial=True, label="Conta ativa")
 
-    class Meta(UserCreationForm.Meta):
+    class Meta:
         model = get_user_model()
         fields = ("username", "first_name", "last_name", "email", "is_active")
 
@@ -43,10 +43,15 @@ class UserCreateForm(ScopedUserFieldsMixin, UserCreationForm):
 
     def save(self, commit=True):
         user = super().save(commit=False)
+        user.set_unusable_password()
         user.is_active = self.cleaned_data["is_active"]
         if commit:
             user.save()
             self.save_access(user)
+            UserSecurityProfile.objects.create(
+                user=user,
+                change_reason=UserSecurityProfile.ChangeReason.INVITATION,
+            )
         return user
 
 

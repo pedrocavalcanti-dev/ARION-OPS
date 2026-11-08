@@ -49,7 +49,7 @@ O banco local acumula três papéis complementares: armazenamento dos dados pró
 
 | App | Tipo | Responsabilidade | Models principais | Serviços e entradas |
 |---|---|---|---|---|
-| `autenticacao` | Core | Login, sessão e páginas de acesso | User Django | forms, views, urls |
+| `autenticacao` | Core | Login, sessão, convites, verificação e ciclo de senhas | User Django, estado de segurança, tokens e política | forms, views, services, middleware |
 | `configuracoes` | Administração | Preferências, RBAC, Data Scope e documentação | `UserPreference`, `GroupDataScope`, `LegacyUserDataScope` | `access_control.py`, `data_scope.py`, `documentation.py`, views/forms |
 | `auditoria` | Administração | Histórico de eventos relevantes | `AuditEvent` | `AuditService`, views |
 | `integracoes` | Integração | Clients, execução de sync e espelhos CMDB/OTRS | `Integration`, `IntegrationRun`, `IntegrationSyncState`, `IntegrationLease`, mirrors | clients, services e management commands |

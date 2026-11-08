@@ -176,7 +176,7 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 68)
+        self.assertEqual(len(DOCUMENTS), 69)
 
     def test_otrs_reference_is_a_navigable_and_searchable_documentation_group(self):
         self.client.force_login(self.admin)

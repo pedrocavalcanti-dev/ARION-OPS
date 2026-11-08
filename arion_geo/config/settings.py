@@ -161,6 +161,27 @@ if ARION_PRODUCTION and (
         "Produção exige DJANGO_ALLOWED_HOSTS explícito e sem wildcard."
     )
 
+ARION_PUBLIC_BASE_URL = os.getenv(
+    "ARION_PUBLIC_BASE_URL",
+    "http://localhost:8000" if not ARION_PRODUCTION else "",
+).strip().rstrip("/")
+_public_origin = urlsplit(ARION_PUBLIC_BASE_URL)
+if (
+    not ARION_PUBLIC_BASE_URL
+    or not _public_origin.hostname
+    or _public_origin.username
+    or _public_origin.password
+    or _public_origin.path not in ("", "/")
+    or _public_origin.query
+    or _public_origin.fragment
+    or (ARION_PRODUCTION and _public_origin.scheme != "https")
+    or (not ARION_PRODUCTION and _public_origin.scheme not in {"http", "https"})
+    or _public_origin.hostname.casefold() not in {host.casefold() for host in ALLOWED_HOSTS}
+):
+    raise ImproperlyConfigured(
+        "ARION_PUBLIC_BASE_URL deve ser a origem pública confiável e estar em DJANGO_ALLOWED_HOSTS; em produção, use HTTPS."
+    )
+
 
 if ARION_PRODUCTION:
     _csrf_origins = [
@@ -291,6 +312,7 @@ MIDDLEWARE = [
 
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "config.middleware.PasswordPolicyMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -397,7 +419,8 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": (
             "django.contrib.auth.password_validation."
             "MinimumLengthValidator"
-        )
+        ),
+        "OPTIONS": {"min_length": 12},
     },
     {
         "NAME": (

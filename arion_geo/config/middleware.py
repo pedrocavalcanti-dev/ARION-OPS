@@ -4,7 +4,8 @@ import secrets
 import logging
 
 from django.conf import settings
-from django.shortcuts import resolve_url
+from django.shortcuts import redirect, resolve_url
+from django.urls import reverse
 
 from .errors import _safe_user_id, error_response, html_error, is_api_request
 
@@ -27,6 +28,8 @@ STATUS_CODES = {
     504: "INTEGRATION_TIMEOUT",
 }
 logger = logging.getLogger("config.errors")
+
+SENSITIVE_AUTH_PATHS = ("/ativacao/", "/redefinir-senha/")
 
 
 class RequestErrorMiddleware:
@@ -63,7 +66,8 @@ class RequestErrorMiddleware:
                 if status >= 500:
                     logger.error(
                         "HTTP error response status=%s request_id=%s user_id=%s method=%s path=%s",
-                        status, request.request_id, _safe_user_id(request), request.method, request.path_info,
+                        status, request.request_id, _safe_user_id(request), request.method,
+                        "<sensitive-auth-flow>" if request.path_info.startswith(SENSITIVE_AUTH_PATHS) else request.path_info,
                     )
                 response = error_response(request, code, status=status, headers=headers) if api_request else html_error(request, code, status=status, headers=headers)
 
@@ -95,4 +99,39 @@ class ProductionSecurityHeadersMiddleware:
             response["Cache-Control"] = "public, max-age=300, must-revalidate"
         elif is_authenticated or not is_static:
             response["Cache-Control"] = "private, no-store"
+        if request.path_info.startswith(SENSITIVE_AUTH_PATHS):
+            response["Referrer-Policy"] = "no-referrer"
+            response.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
+                "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            )
         return response
+
+
+class PasswordPolicyMiddleware:
+    """Restrict authenticated users with pending password renewal to its recovery flow."""
+
+    allowed_paths = (
+        "/login/", "/logout/", "/ativacao/", "/redefinir-senha/", "/senha/obrigatoria/",
+    )
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        user = getattr(request, "user", None)
+        path = request.path_info
+        static_prefix = settings.STATIC_URL.rstrip("/") + "/"
+        if (
+            user and user.is_authenticated
+            and not path.startswith(self.allowed_paths)
+            and not path.startswith(static_prefix)
+        ):
+            from aplicativos.autenticacao.security import password_change_required
+
+            if password_change_required(user):
+                if is_api_request(request):
+                    return error_response(request, "PASSWORD_CHANGE_REQUIRED")
+                return redirect(reverse("autenticacao:required-password"))
+        return self.get_response(request)

@@ -1,0 +1,37 @@
+{% load static %}<!doctype html>
+<html lang="pt-br" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>{{ title }} · ARION OPS</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon/favicon-32x32.png' %}">
+  <link rel="stylesheet" href="{% static 'css/base.css' %}">
+  <link rel="stylesheet" href="{% static 'css/autenticacao/password-flow.css' %}">
+</head>
+<body class="password-flow-page">
+  <main class="password-flow-shell">
+    <section class="password-flow-panel" aria-labelledby="flow-title">
+      <a class="password-flow-brand" href="{{ return_url }}" aria-label="ARION OPS">
+        <img src="{% static 'branding/arion/arion-logo-primary.png' %}" width="190" height="64" alt="ARION OPS">
+      </a>
+      <div class="password-flow-status" role="status"><span aria-hidden="true">✓</span><span>Link gerado</span></div>
+      <h1 id="flow-title">{{ title }}</h1>
+      <p class="password-flow-description">{{ description }}</p>
+      <div class="password-flow-field">
+        <label for="issued-access-link">Link individual</label>
+        <div class="password-flow-input-wrap access-issued-copy">
+          <input id="issued-access-link" type="text" readonly value="{{ access_url }}" data-copy-source autocomplete="off">
+          <button class="password-flow-toggle" type="button" data-copy-link>Copiar</button>
+        </div>
+      </div>
+      <p class="password-flow-footnote">Validade: 48 horas, até {{ expires_at_label }}. O link aparece somente nesta emissão. Copie e encaminhe ao destinatário pelo canal corporativo seguro.</p>
+      <p class="password-flow-message" data-copy-feedback aria-live="polite"></p>
+      <a class="password-flow-button password-flow-button--secondary access-issued-back" href="{{ return_url }}">Voltar ao cadastro</a>
+      <footer class="password-flow-footer">ARION OPS <span>·</span> NOC ATACADO</footer>
+    </section>
+  </main>
+  <script src="{% arion_js 'js/configuracoes/user-access.js' %}" defer></script>
+</body>
+</html>

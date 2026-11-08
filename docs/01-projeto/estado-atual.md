@@ -1,6 +1,6 @@
 # Estado atual do ARION OPS
 
-Revisão estrutural em 06/11/2026 (Atualização incremental 1.3.1). A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
+Revisão estrutural em 08/11/2026 (Atualização incremental 1.3.1). A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
 
 Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
 
@@ -20,11 +20,13 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A dis
 | CMDB Mirror | IMPLEMENTADO | ServiceUp Search/Get | Escrita no banco ARION OPS | Sincronizado por processo separado. |
 | OTRS Mirror | IMPLEMENTADO | MySQL OTRS somente leitura; quatro filas do Cockpit | Escrita no banco ARION OPS | FAST incremental e FULL reconciliador; FAST exige FULL com cobertura completa vigente. |
 | Worker | IMPLEMENTADO | `integration_worker` | Atualiza espelhos/estado | Requer processo ativo para freshness; agenda FULL quando a cobertura configurada muda. |
-| RBAC / Data Scope | IMPLEMENTADO | Django Groups/Permissions e `GroupDataScope` | Administração protegida | Superuser técnico possui escopo global. |
+| RBAC / Data Scope | IMPLEMENTADO | Django Groups/Permissions e `GroupDataScope` | Administração protegida | Superuser técnico possui escopo global; Gestão de Acessos 2.0 adiciona convites, ciclo de senhas e bloqueio backend. |
 | Auditoria | IMPLEMENTADO | `AuditEvent` via `AuditService` | Histórico local | Metadata sanitizada; não é debug log. |
 | Central documental | IMPLEMENTADO | Markdown estruturado em `docs/` e catálogo em `docs/08-releases/releases.json` | Leitura | Inclui Atualizações e versões, páginas funcionais/arquiteturais e busca; páginas técnicas protegidas por `configuracoes.manage_groups`. |
 
-A Central de Integrações administra APIs externas Brevo e Mapbox. A API Key Brevo é protegida por DPAPI e o teste usa apenas autenticação sem envio; a autorização administrativa de envio real permanece desabilitada por padrão. O Mapbox prioriza token público configurado no banco, com fallback legado controlado pelo ambiente.
+A Central de Integrações administra APIs externas Brevo e Mapbox. As credenciais Brevo são protegidas por DPAPI e o teste de conexão não envia mensagens. O envio real deve ser autorizado para códigos de segurança; sem configuração ou autorização, o fluxo falha fechado. O Mapbox prioriza token público configurado no banco, com fallback legado controlado pelo ambiente.
+
+A Gestão de Acessos 2.0 está implementada localmente: novos usuários são criados sem senha e recebem convite individual de 48 horas; senhas exigem 12 caracteres; e-mail Brevo confirma trocas obrigatórias; a política de renovação usa 90 dias configuráveis e o middleware bloqueia contas pendentes também nas APIs e sessões antigas. A migration `autenticacao.0001_initial` marca contas preexistentes sem mudar hashes, mas a política global permanece inativa até a ativação explícita e auditada pelo comando `ativar_politica_senhas`. O grupo de consulta `Gestão` é provisionado com permissões conservadoras. Não houve implantação ou alteração em produção.
 
 No código atual, o espelho OTRS preserva `external_state_name` e normaliza Resolvido/Encerrado como `business_status=RESOLVED`; backlog e aging operacional consideram somente `OPEN` e `PENDING`. A migration de dados `0014_normalize_closed_operational_status` converte linhas locais `CLOSED` sem alterar datas ou estado bruto e foi aplicada ao banco MySQL local de desenvolvimento, confirmado em loopback com `DEBUG=True`. Não foi aplicada em produção ou banco remoto, nem publicada. Integração diferencia saúde da conexão de falha de processamento; o supervisor Windows carrega `.env` da raiz com precedência do ambiente herdado e valida o processo filho.
 
@@ -32,7 +34,7 @@ A Visão geral pessoal está disponível para qualquer usuário autenticado. A p
 
 A Central de Integrações organiza conexão, último teste, sincronização, registros, estado do worker e diagnósticos em tema verde e responsivo. Grupos e acessos oferecem busca, módulos recolhíveis, resumo de grants e aviso de alterações não salvas sem mudar as permissões provisionadas. Chamados abre com 50 itens por página e mantém paginação server-side.
 
-O ranking inclui Score Operacional comparativo com amostra mínima e métricas normalizadas por exposição; SLA não é inferido. As páginas analíticas e de Chamados compartilham consultas locais escopadas, reduzem agregações repetidas e não carregam todos os tickets antecipadamente. Não há migration de banco nova na Etapa 3; a migration de dados `integracoes.0014_normalize_closed_operational_status` das etapas anteriores ainda precisa entrar no plano da próxima publicação.
+O ranking inclui Score Operacional comparativo com amostra mínima e métricas normalizadas por exposição; SLA não é inferido. As páginas analíticas e de Chamados compartilham consultas locais escopadas, reduzem agregações repetidas e não carregam todos os tickets antecipadamente. A Gestão de Acessos acrescenta `autenticacao.0001_initial`, `configuracoes.0010_alter_groupdatascope_options` e `configuracoes.0011_seed_management_group`; a migration de dados `integracoes.0014_normalize_closed_operational_status` permanece parte do plano de publicação.
 
 ## Banco e fontes
 

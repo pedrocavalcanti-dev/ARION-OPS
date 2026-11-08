@@ -277,30 +277,34 @@ class AccessControlTests(TestCase):
 
     def test_bootstrap_is_idempotent_and_leaves_unassigned_users_unassigned(self):
         self.analyst.groups.clear()
+        manager_group = Group.objects.get(name=GROUP_MANAGER)
+        extra_permission = Permission.objects.get(content_type__app_label="configuracoes", codename="view_audit_log")
+        manager_group.permissions.add(extra_permission)
         call_command("bootstrap_access", verbosity=0)
         call_command("bootstrap_access", verbosity=0)
         self.analyst.refresh_from_db()
         self.assertFalse(self.analyst.groups.exists())
-        self.assertEqual(Group.objects.filter(name__in=(GROUP_SYSTEM_ADMIN, GROUP_MANAGER, GROUP_ANALYST, "Consulta / Auditoria")).count(), 4)
+        self.assertTrue(manager_group.permissions.filter(pk=extra_permission.pk).exists())
+        self.assertEqual(Group.objects.filter(name__in=(GROUP_SYSTEM_ADMIN, GROUP_MANAGER, GROUP_ANALYST, "Consulta / Auditoria", "Gestão")).count(), 5)
 
-    def test_admin_can_create_user_with_django_validated_initial_password(self):
+    def test_admin_can_create_user_without_setting_a_password(self):
         self.client.force_login(self.admin)
         analyst_group = Group.objects.get(name=GROUP_ANALYST)
         response = self.client.post(reverse("configuracoes:user-create"), {
             "username": "new-operator", "first_name": "Nina", "last_name": "Costa", "email": "nina@example.com",
-            "password1": "XyZ!2026_SenhaForte", "password2": "XyZ!2026_SenhaForte",
             "group": analyst_group.pk,
         })
         self.assertEqual(response.status_code, 302)
         created = self.User.objects.get(username="new-operator")
-        self.assertTrue(created.check_password("XyZ!2026_SenhaForte"))
+        self.assertFalse(created.has_usable_password())
+        self.assertIsNone(created.security_profile.first_activation_completed_at)
         self.assertEqual(list(created.groups.all()), [analyst_group])
         self.assertEqual(created.groups.count(), 1)
 
     def test_new_user_requires_one_access_profile_and_does_not_offer_user_scope(self):
         self.client.force_login(self.admin)
         response = self.client.post(reverse("configuracoes:user-create"), {
-            "username": "missing-profile", "password1": "XyZ!2026_SenhaForte", "password2": "XyZ!2026_SenhaForte",
+            "username": "missing-profile", "email": "missing@example.com",
         })
         self.assertEqual(response.status_code, 200)
         self.assertFalse(self.User.objects.filter(username="missing-profile").exists())

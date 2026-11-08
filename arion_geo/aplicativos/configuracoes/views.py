@@ -5,16 +5,15 @@ import logging
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Q
-from django.utils import timezone
 from datetime import timedelta
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from .access_control import ADMIN_PERMISSIONS, GROUP_SYSTEM_ADMIN, PERMISSION_LABELS, is_system_admin, managed_permissions
@@ -34,6 +33,9 @@ from aplicativos.auditoria.services import AuditService
 from .documentation import DocumentationService
 from .documentation_explorer import DocumentationExplorer
 from config.releases import release_catalog
+from aplicativos.autenticacao.models import AccessToken, UserSecurityProfile
+from aplicativos.autenticacao.security import current_password_policy, issue_access_token, password_access_status
+from aplicativos.autenticacao.forms import SecurePasswordChangeForm
 
 logger = logging.getLogger(__name__)
 
@@ -68,15 +70,20 @@ def about(request):
 @login_required
 def security(request):
     if request.method == "POST":
-        form = PasswordChangeForm(user=request.user, data=request.POST)
+        form = SecurePasswordChangeForm(user=request.user, data=request.POST)
         if form.is_valid():
             user = form.save()
-            update_session_auth_hash(request, user)
+            profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+            profile.password_changed_at = timezone.now()
+            profile.must_change_password = False
+            profile.change_reason = ""
+            profile.save(update_fields=("password_changed_at", "must_change_password", "change_reason", "updated_at"))
             AuditService.record(request=request, user=user, category="ACCOUNT", action="PASSWORD_CHANGED", description="Senha alterada pelo próprio usuário", obj=user)
-            messages.success(request, "Sua senha foi alterada com segurança.")
+            update_session_auth_hash(request, user)
+            messages.success(request, "Senha alterada com sucesso.")
             return redirect("configuracoes:security")
     else:
-        form = PasswordChangeForm(user=request.user)
+        form = SecurePasswordChangeForm(user=request.user)
     return render(request, "configuracoes/security.html", _settings_context(request, "security", form=form))
 
 
@@ -114,7 +121,9 @@ def user_list(request):
     group_id = request.GET.get("group", "")
     status = request.GET.get("status", "")
     scope_type = request.GET.get("scope", "")
-    users = get_user_model().objects.all().prefetch_related("groups__data_scope__allowed_operators", "groups__data_scope__allowed_projects")
+    users = get_user_model().objects.all().select_related("security_profile").prefetch_related(
+        "groups__data_scope__allowed_operators", "groups__data_scope__allowed_projects", "access_tokens",
+    )
     if query:
         users = users.filter(Q(first_name__icontains=query) | Q(last_name__icontains=query) | Q(username__icontains=query) | Q(email__icontains=query))
     if group_id.isdigit():
@@ -126,6 +135,8 @@ def user_list(request):
     if scope_type in (GroupDataScope.Mode.ALL, GroupDataScope.Mode.CUSTOM):
         users = users.filter(groups__data_scope__mode=scope_type)
     page_obj = Paginator(users.distinct().order_by("username"), 25).get_page(request.GET.get("page"))
+    can_view_access_status = request.user.has_perm("configuracoes.view_access_status")
+    access_policy = current_password_policy() if can_view_access_status else None
     for item in page_obj:
         memberships = list(item.groups.order_by("name"))
         item.primary_group = memberships[0] if len(memberships) == 1 else None
@@ -134,11 +145,14 @@ def user_list(request):
             item.group_data_scope = item.primary_group.data_scope if item.primary_group else None
         except GroupDataScope.DoesNotExist:
             item.group_data_scope = None
+        if can_view_access_status:
+            item.access_status_code, item.access_status_label = password_access_status(item, policy=access_policy)
     filters = {"q": query, "group": group_id, "status": status, "scope": scope_type}
     return render(request, "configuracoes/admin/users.html", _admin_context(request, "users", page_obj=page_obj, groups=Group.objects.order_by("name"), filters=filters))
 
 
 @login_required
+@access_required("create_users")
 @access_required("manage_users")
 def user_create(request):
     form = UserCreateForm(request.POST or None)
@@ -148,18 +162,143 @@ def user_create(request):
         AuditService.record(request=request, category="ADMINISTRATION", action="USER_CREATED", description="Usuário criado", obj=user, metadata={
             "user_id": user.pk, "username": user.username, "group": user.groups.first().name,
         })
-        messages.success(request, "Usuário criado.")
+        messages.success(request, "Usuário criado. Gere o convite somente depois de revisar o perfil e o escopo.")
         return redirect("configuracoes:user-detail", pk=user.pk)
     return render(request, "configuracoes/admin/user_form.html", _admin_context(request, "users", form=form, page_title="Novo usuário", user_object=None))
 
 
 @login_required
 @access_required("manage_users")
+@access_required("view_access_status")
 def user_detail(request, pk):
-    user = get_object_or_404(get_user_model().objects.prefetch_related("groups__data_scope__allowed_operators", "groups__data_scope__allowed_projects"), pk=pk)
+    user = get_object_or_404(get_user_model().objects.select_related("security_profile").prefetch_related(
+        "groups__data_scope__allowed_operators", "groups__data_scope__allowed_projects", "access_tokens",
+    ), pk=pk)
     memberships = list(user.groups.order_by("name"))
     group = memberships[0] if len(memberships) == 1 else None
-    return render(request, "configuracoes/admin/user_detail.html", _admin_context(request, "users", user_object=user, primary_group=group, multiple_profiles=len(memberships) > 1, data_scope=DataScopeService.get_scope(user)))
+    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    policy = current_password_policy()
+    status_code, status_label = password_access_status(user, policy=policy)
+    max_age_days = policy.max_age_days if policy else 90
+    expires_at = profile.password_expires_at(max_age_days=max_age_days) if profile.password_changed_at else None
+    active_invitation = user.access_tokens.filter(
+        purpose=AccessToken.Purpose.ACTIVATION, consumed_at__isnull=True,
+        revoked_at__isnull=True, expires_at__gt=timezone.now(),
+    ).first()
+    return render(request, "configuracoes/admin/user_detail.html", _admin_context(
+        request, "users", user_object=user, primary_group=group, multiple_profiles=len(memberships) > 1,
+        data_scope=DataScopeService.get_scope(user), access_status_code=status_code,
+        access_status_label=status_label, security_profile=profile, password_expires_at=expires_at,
+        active_invitation=active_invitation,
+    ))
+
+
+def _issue_one_time_access_link(*, user, purpose, actor):
+    token, url = issue_access_token(user=user, purpose=purpose, actor=actor)
+    return token, url
+
+
+def _access_link_issued_response(request, *, user, token, url, purpose):
+    is_activation = purpose == AccessToken.Purpose.ACTIVATION
+    response = render(request, "autenticacao/access_link_issued.html", {
+        "title": "Convite de primeiro acesso" if is_activation else "Link de redefinição de senha",
+        "description": "Encaminhe o convite ao destinatário por um canal corporativo seguro." if is_activation else "Encaminhe o link ao e-mail corporativo por um canal confiável.",
+        "access_url": url,
+        "expires_at_label": timezone.localtime(token.expires_at).strftime("%d/%m/%Y %H:%M"),
+        "return_url": reverse("configuracoes:user-detail", args=(user.pk,)),
+    })
+    response["Referrer-Policy"] = "no-referrer"
+    response["Cache-Control"] = "private, no-store"
+    response["Content-Security-Policy"] = (
+        "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; "
+        "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
+@login_required
+@access_required("generate_access_invites")
+@require_POST
+def user_issue_invitation(request, pk):
+    user = get_object_or_404(get_user_model(), pk=pk)
+    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    if not user.is_active or profile.first_activation_completed_at:
+        messages.error(request, "Não é possível emitir convite para esta conta.")
+        return redirect("configuracoes:user-detail", pk=user.pk)
+    token, url = _issue_one_time_access_link(user=user, purpose=AccessToken.Purpose.ACTIVATION, actor=request.user)
+    AuditService.record(
+        request=request, category="SECURITY", action="ACCESS_INVITATION_ISSUED",
+        module="Autenticação", description="Convite de primeiro acesso emitido.", obj=user,
+        metadata={"expires_at": token.expires_at},
+    )
+    messages.success(request, "Convite gerado. Copie e encaminhe o link ao destinatário pelo canal corporativo.")
+    return _access_link_issued_response(
+        request, user=user, token=token, url=url, purpose=AccessToken.Purpose.ACTIVATION,
+    )
+
+
+@login_required
+@access_required("revoke_access_invites")
+@require_POST
+def user_revoke_invitation(request, pk):
+    user = get_object_or_404(get_user_model(), pk=pk)
+    now = timezone.now()
+    revoked = AccessToken.objects.filter(
+        user=user, purpose=AccessToken.Purpose.ACTIVATION,
+        consumed_at__isnull=True, revoked_at__isnull=True,
+    ).update(revoked_at=now)
+    AuditService.record(
+        request=request, category="SECURITY", action="ACCESS_INVITATION_REVOKED",
+        module="Autenticação", description="Convite de primeiro acesso revogado.", obj=user,
+        metadata={"revoked_count": revoked},
+    )
+    messages.success(request, "Convite revogado." if revoked else "Não havia convite ativo para revogar.")
+    return redirect("configuracoes:user-detail", pk=user.pk)
+
+
+@login_required
+@access_required("generate_password_reset_links")
+@require_POST
+def user_issue_password_reset(request, pk):
+    user = get_object_or_404(get_user_model(), pk=pk)
+    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    if not user.is_active or not profile.first_activation_completed_at:
+        messages.error(request, "A conta precisa estar ativa e ter concluído o primeiro acesso para receber um link de redefinição.")
+        return redirect("configuracoes:user-detail", pk=user.pk)
+    token, url = _issue_one_time_access_link(user=user, purpose=AccessToken.Purpose.PASSWORD_RESET, actor=request.user)
+    AuditService.record(
+        request=request, category="SECURITY", action="ADMIN_PASSWORD_RESET_LINK_ISSUED",
+        module="Autenticação", description="Link de redefinição de senha emitido pela administração.", obj=user,
+        metadata={"expires_at": token.expires_at},
+    )
+    messages.success(request, "Link de redefinição gerado. Encaminhe-o ao e-mail corporativo por um canal confiável.")
+    return _access_link_issued_response(
+        request, user=user, token=token, url=url, purpose=AccessToken.Purpose.PASSWORD_RESET,
+    )
+
+
+@login_required
+@access_required("require_password_change")
+@require_POST
+def user_require_password_change(request, pk):
+    user = get_object_or_404(get_user_model(), pk=pk)
+    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    if profile.is_service_account:
+        messages.error(request, "Contas de serviço não podem receber troca obrigatória interativa.")
+        return redirect("configuracoes:user-detail", pk=user.pk)
+    if not profile.first_activation_completed_at:
+        messages.error(request, "Contas que aguardam primeiro acesso devem utilizar o convite de ativação.")
+        return redirect("configuracoes:user-detail", pk=user.pk)
+    profile.must_change_password = True
+    profile.change_reason = UserSecurityProfile.ChangeReason.ADMIN
+    profile.save(update_fields=("must_change_password", "change_reason", "updated_at"))
+    AuditService.record(
+        request=request, category="SECURITY", action="ADMIN_REQUIRED_PASSWORD_CHANGE",
+        module="Autenticação", description="A administração exigiu uma nova senha para a conta.", obj=user,
+    )
+    messages.success(request, "A troca de senha foi exigida para a próxima solicitação da conta.")
+    return redirect("configuracoes:user-detail", pk=user.pk)
 
 
 @login_required

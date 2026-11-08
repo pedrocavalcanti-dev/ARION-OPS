@@ -10,6 +10,7 @@ GROUP_SYSTEM_ADMIN = "Administrador do Sistema"
 GROUP_MANAGER = "Gestor"
 GROUP_ANALYST = "Analista NOC"
 GROUP_AUDITOR = "Consulta / Auditoria"
+GROUP_EXECUTIVE = "Gestão"
 
 MODULE_PERMISSIONS = (
     "view_dashboard", "view_cockpit", "save_analytics_views", "view_map",
@@ -17,12 +18,22 @@ MODULE_PERMISSIONS = (
     "view_ari", "import_cmdb", "export_base",
     "view_quality", "manage_quality_orders",
 )
-ADMIN_PERMISSIONS = ("manage_users", "manage_groups", "manage_data_scopes", "view_audit_log", "view_integrations", "manage_integrations", "run_integrations", "inspect_integrations", "view_system_info")
+ADMIN_PERMISSIONS = (
+    "manage_users", "create_users", "generate_access_invites", "revoke_access_invites",
+    "generate_password_reset_links", "require_password_change", "view_access_status",
+    "manage_groups", "manage_data_scopes", "view_audit_log", "view_integrations",
+    "manage_integrations", "run_integrations", "inspect_integrations", "view_system_info",
+)
+ACCOUNT_SECURITY_PERMISSIONS = (
+    "create_users", "generate_access_invites", "revoke_access_invites",
+    "generate_password_reset_links", "require_password_change", "view_access_status",
+)
 ALL_ACCESS_PERMISSIONS = MODULE_PERMISSIONS + ADMIN_PERMISSIONS
 REPORTS_PERMISSIONS = ("view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "finalize_with_pending", "reopen_treatments", "export_treatments", "delete_penaltycompetence", "delete_finalized_penaltycompetence")
 
 ROLE_PERMISSIONS = {
 GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS + ("delete_qualityorder",),
+GROUP_EXECUTIVE: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_reports"),
 GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality", "manage_quality_orders", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
 GROUP_ANALYST: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality"),
 GROUP_AUDITOR: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_audit_log"),
@@ -49,6 +60,12 @@ PERMISSION_LABELS = {
     "import_cmdb": ("Base", "Importar / atualizar CMDB"),
     "export_base": ("Base", "Exportar"),
     "manage_users": ("Administração", "Gerenciar usuários"),
+    "create_users": ("Administração", "Criar usuários"),
+    "generate_access_invites": ("Administração", "Gerar convites de acesso"),
+    "revoke_access_invites": ("Administração", "Revogar convites de acesso"),
+    "generate_password_reset_links": ("Administração", "Gerar links de redefinição de senha"),
+    "require_password_change": ("Administração", "Exigir troca de senha"),
+    "view_access_status": ("Administração", "Consultar situação de acesso"),
     "manage_groups": ("Administração", "Gerenciar grupos e permissões"),
     "manage_data_scopes": ("Administração", "Gerenciar escopos de dados"),
     "view_audit_log": ("Administração", "Visualizar auditoria"),
@@ -87,9 +104,11 @@ def bootstrap_access(*, using="default"):
     create_permissions(quality_app_config, verbosity=0, interactive=False, using=using)
     available = {permission.codename: permission for permission in managed_permissions(using)}
     for name, codenames in ROLE_PERMISSIONS.items():
-        group, _ = Group.objects.using(using).get_or_create(name=name)
-        group.permissions.remove(*managed_permissions(using))
-        group.permissions.add(*(available[codename] for codename in codenames if codename in available))
+        group, created = Group.objects.using(using).get_or_create(name=name)
+        if created or (name == GROUP_EXECUTIVE and not group.permissions.exists()):
+            group.permissions.add(*(available[codename] for codename in codenames if codename in available))
+        elif name == GROUP_SYSTEM_ADMIN:
+            group.permissions.add(*(available[codename] for codename in ACCOUNT_SECURITY_PERMISSIONS if codename in available))
         default_mode = GroupDataScope.Mode.ALL if name == GROUP_SYSTEM_ADMIN else GroupDataScope.Mode.CUSTOM
         GroupDataScope.objects.using(using).get_or_create(group=group, defaults={"mode": default_mode})
 def is_system_admin(user):

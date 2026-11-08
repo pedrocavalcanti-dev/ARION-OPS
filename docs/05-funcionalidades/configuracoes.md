@@ -10,7 +10,7 @@ A Central de Configurações concentra preferências da conta e administração 
 |---|---|---|
 | Minha conta e Segurança | Login obrigatório | Consultar/alterar dados da própria conta e senha. |
 | Aparência | Login obrigatório | Consultar e persistir preferência de tema. |
-| Usuários | `manage_users` | Criar, editar, ativar/desativar contas e atribuir perfil. |
+| Usuários | `manage_users`, `create_users`, permissions de convite/redefinição e `view_access_status` | Criar contas sem senha, atribuir perfil e escopo, emitir/revogar links e consultar o estado de acesso. |
 | Grupos e acessos | `manage_groups` | Administrar grupos e suas Django Permissions. |
 | Escopos de dados | `manage_data_scopes` | Configurar `GroupDataScope` por grupo. |
 | Auditoria | `view_audit_log` | Consultar e exportar eventos. |
@@ -25,7 +25,7 @@ O acesso não depende apenas de ocultar itens do menu: rotas verificam autentica
 | Usuários, grupos, escopos e auditoria | `/configuracoes/administracao/` | Rotas administrativas protegidas por permission. |
 | Tema | `/configuracoes/theme/` | POST JSON para preferência de tema. |
 
-`aplicativos.configuracoes.views` implementa as views; `access_required` protege operações administrativas; `UserPreference` persiste preferências; `AuditService` registra alterações relevantes. A estrutura de grupos e escopos está descrita em [Usuários, Grupos e Escopos](usuarios-grupos-e-escopos.md), e eventos em [Auditoria](auditoria.md).
+`aplicativos.configuracoes.views` implementa as views; `access_required` protege operações administrativas; `UserPreference` persiste preferências; `AuditService` registra alterações relevantes. Cadastro de usuários não define senhas: links de primeiro acesso são gerados após salvar e encaminhados manualmente, com validade de 48 horas. Política de troca inicial, OTP Brevo, renovação de 90 dias, permissions e implantação controlada estão descritos em [Gestão de acessos e ciclo de senhas](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md). A estrutura de grupos e escopos está descrita em [Usuários, Grupos e Escopos](usuarios-grupos-e-escopos.md), e eventos em [Auditoria](auditoria.md).
 
 ### Testes e estado
 
