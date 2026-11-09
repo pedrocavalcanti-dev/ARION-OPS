@@ -10,6 +10,8 @@ urlpatterns = [
     path("configuracao/", views.configuration, name="configuration"),
     path("entrada/<int:pk>/", views.intake_detail, name="intake_detail"),
     path("entrada/<int:pk>/acao/<str:action>/", views.intake_action, name="intake_action"),
+    path("entrada/<int:pk>/formulario/<str:action>/", views.intake_dialog, name="intake_dialog"),
     path("processos/<int:pk>/", views.detail, name="detail"),
     path("processos/<int:pk>/acao/<str:action>/", views.process_action, name="process_action"),
+    path("processos/<int:pk>/formulario/<str:action>/", views.process_dialog, name="process_dialog"),
 ]

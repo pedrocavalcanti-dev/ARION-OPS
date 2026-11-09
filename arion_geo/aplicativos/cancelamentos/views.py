@@ -7,9 +7,13 @@ from django.core.paginator import Paginator
 from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse, QueryDict
+from django.template.loader import render_to_string
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
+from django.views.decorators.cache import never_cache
+from django.views.decorators.vary import vary_on_headers
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.chamados.services import otrs_ticket_url
@@ -19,7 +23,8 @@ from .services.data_scope import CancellationScope
 from .services.otrs_intake import intake_settings, source_status, synchronization_indicator, current_intakes
 from .models import CancellationIntake, CancellationPending, CancellationProcess
 from .services.queries import query_module, TABS
-from .services.legacy_history import legacy_context
+from .services.legacy_history import legacy_context, present_events
+from .services.legacy_people import names_for
 from .services.presentation import prepare_rows
 from .services.workflow import (Conflict, require, decide_intake, act_on_process,
                                 financial_summary, completion_blockers, pending_is_financial)
@@ -68,6 +73,7 @@ def _return_url(request, default):
 
 
 @module_access
+@vary_on_headers("X-Cancellation-Fragment")
 def index(request):
     data = query_module(request.user, request.GET)
     page = Paginator(data.pop("queryset"), 40).get_page(request.GET.get("page"))
@@ -78,6 +84,7 @@ def index(request):
         intake = data["tab"] == "intake"
         row.responsible = row.assigned_to if intake else row.owner
         row.current_entry = row.pk in current_ids if intake else False
+        row.has_official = row._has_official if intake else False
         row.can_assign = request.user.has_perm("cancelamentos.assign_cancellations") and (
             (row.status == "WAITING" and row.current_entry and not row._has_official) if intake else True)
         row.assign_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assign"))
@@ -85,7 +92,7 @@ def index(request):
     assignment_form = forms.AssignmentForm()
     assignment_form.fields.pop("revision")
     assignment_form.auto_id = "id_list_%s"
-    return render(request, "cancelamentos/index.html", {
+    context = {
         **data, "page": page,
         "tabs": [{"key": key, "label": label, "url": _tab_url(request.GET, key), "metric_url": _metric_url(request.GET, key), "count": data["metrics"][key]} for key, label in TABS],
         "quick_filters": [{"label": label, "value": value, "url": _url_params(request.GET, owner=value)} for value, label in (("", "Todos"), ("me", "Meus" if data["tab"] == "intake" else "Meus cancelamentos"), ("none", "Sem responsável"))],
@@ -95,7 +102,10 @@ def index(request):
         "export_query": request.GET.urlencode(),
         "previous_url": _url_params(request.GET, page=page.previous_page_number()) if page.has_previous() else "",
         "next_url": _url_params(request.GET, page=page.next_page_number()) if page.has_next() else "",
-    })
+    }
+    if request.headers.get("X-Cancellation-Fragment") == "1":
+        return JsonResponse({"html": render_to_string("cancelamentos/_workspace.html", context, request=request)})
+    return render(request, "cancelamentos/index.html", context)
 
 
 @module_access
@@ -116,14 +126,14 @@ def intake_detail(request, pk):
         "entry": entry, "triage_form": form, "candidates": candidates, "process": process,
         "is_current_entry": current_intakes(CancellationIntake.objects.filter(pk=entry.pk)).exists(),
         "has_official_process": CancellationProcess.objects.filter(official_identity).exists(),
-        "history": history.select_related("actor"), "otrs_url": otrs_ticket_url(entry.ticket_external_id),
+        "history": present_events(history.select_related("actor")), "otrs_url": otrs_ticket_url(entry.ticket_external_id),
         "source_notice": source_notice, "source_ok": source_ok,
     })
 
 
-def _action_response(request, url, error=None, status=200):
+def _action_response(request, url, error=None, status=200, revision=None):
     if "application/json" in request.headers.get("Accept", ""):
-        return JsonResponse({"ok": error is None, "url": url, "errors": error or []}, status=status)
+        return JsonResponse({"ok": error is None, "url": url, "errors": error or [], "revision": revision}, status=status)
     if error:
         for message in error:
             messages.error(request, message)
@@ -147,9 +157,9 @@ def intake_action(request, pk, action):
         return _action_response(request, url, exc.messages, 400)
     if action in ("assign", "assume"):
         url = _return_url(request, url)
-        if "return_query" in request.POST:
+        if "return_query" in request.POST and "application/json" not in request.headers.get("Accept", ""):
             messages.success(request, "Responsável atualizado. O recorte da lista foi preservado.")
-    return _action_response(request, url)
+    return _action_response(request, _return_url(request, url), revision=entry.revision)
 
 
 def _dialog(action, title, form, *, key=None, child=None, button="Salvar"):
@@ -159,9 +169,11 @@ def _dialog(action, title, form, *, key=None, child=None, button="Salvar"):
             "child": child, "button": button}
 
 
-@module_access
-def detail(request, pk):
+def _process_context(request, pk):
     process = get_object_or_404(CancellationScope.processes(request.user).select_related("intake", "source_ticket", "owner", "treatment", "link__operator"), pk=pk)
+    process.responsible = process.owner
+    process.can_assign = request.user.has_perm("cancelamentos.assign_cancellations")
+    process.assume_url = reverse("cancelamentos:process_action", args=(pk, "assume"))
     can_finance = request.user.has_perm("cancelamentos.view_cancellation_finance")
     manage_finance = can_finance and request.user.has_perm("cancelamentos.manage_cancellation_finance")
     can_change = request.user.has_perm("cancelamentos.change_cancellation_stage")
@@ -174,6 +186,7 @@ def detail(request, pk):
         if not manage_finance:
             evidence_form.fields.pop("financial")
         dialogs += [
+            _dialog("start", "Iniciar tratativa", forms.OperationalForm(), button="Iniciar tratativa"),
             _dialog("status", "Alterar status operacional", forms.StatusForm(initial={"status": process.operational_status})),
             _dialog("move", "Mover / retornar etapa", forms.StageForm(initial={"stage": process.stage})),
             _dialog("update", "Completar informações", forms.ProcessForm(instance=process)),
@@ -192,12 +205,17 @@ def detail(request, pk):
     if not can_finance:
         pendings = pendings.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True, legacy_reference__isnull=True)
     pendings = list(pendings)
+    pending_names = names_for([p.legacy_reference.source_data.get("criada_por_id") for p in pendings
+                              if getattr(p, "legacy_reference", None) and p.legacy_reference.source_data.get("criada_por_id") is not None])
     for pending in pendings:
+        reference = getattr(pending, "legacy_reference", None)
+        pending.historical_creator = pending_names.get(reference.source_data.get("criada_por_id"), "Nome não disponível") if reference else ""
         pending.can_resolve = False
         if can_pending and pending.status == "OPEN" and (manage_finance or not pending_is_financial(pending)):
             pending.can_resolve = True
-            dialogs.append(_dialog("pending_resolve", f"Resolver pendência #{pending.pk}", forms.ResolvePendingForm(),
+            dialogs.append(_dialog("pending_resolve", "Resolver pendência", forms.ResolvePendingForm(),
                                    key=f"pending-{pending.pk}", child=pending.pk))
+            dialogs.append(_dialog("pending_update", "Editar pendência", forms.PendingForm(instance=pending, financial=manage_finance), key=f"pending-edit-{pending.pk}", child=pending.pk))
     equipment = list(process.equipment.all())
     if can_pending:
         for item in equipment:
@@ -215,13 +233,19 @@ def detail(request, pk):
     if not can_finance:
         events, evidence = events.filter(financial=False), evidence.filter(financial=False)
     history = Paginator(events, 40).get_page(request.GET.get("history_page"))
-    allowed_dialogs = [dialog for dialog in dialogs if process.stage != "COMPLETED" or dialog["action"] in ("assign", "reopen")]
+    allowed_dialogs = [dialog for dialog in dialogs if process.stage != "COMPLETED" or dialog["action"] in ("assign", "reopen", "note")]
     requested_action = request.GET.get("action", "")
     auto_dialog = next((f"action-{dialog['key']}" for dialog in allowed_dialogs if dialog["action"] == requested_action), "")
+    history.object_list = present_events(history.object_list)
+    notes = present_events(events.filter(action__in=("note", "legacy_observacaocancelamento"))[:40])
+    prepare_rows([process], request.user)
     assignment = process.events.filter(action__in=("assign", "assume")).first()
-    return render(request, "cancelamentos/detail.html", {
+    last_treatment = process.events.filter(action="treatment").first()
+    return {
         "process": process, "dialogs": allowed_dialogs, "auto_dialog": auto_dialog,
-        "assigned_at": assignment.created_at if assignment else None,
+        "assigned_at": assignment.created_at if assignment else None, "notes": notes,
+        "last_treatment_at": last_treatment.created_at if last_treatment else None,
+        "show_technical": request.user.has_perm("configuracoes.inspect_integrations") or request.user.has_perm("configuracoes.view_audit_log"),
         "pendings": pendings, "equipment": equipment,
         "obligations": obligations, "evidence": evidence, "history": history,
         "handoffs": process.handoffs.select_related("actor") if can_finance else [],
@@ -229,6 +253,60 @@ def detail(request, pk):
         "blockers": completion_blockers(process) if process.stage != "COMPLETED" else [],
         "otrs_url": otrs_ticket_url(process.external_ticket_id) if process.external_ticket_id else "",
         "legacy": legacy_context(process, request.user),
+    }
+
+
+@module_access
+def detail(request, pk):
+    return render(request, "cancelamentos/detail.html", _process_context(request, pk))
+
+
+@module_access
+@never_cache
+def process_dialog(request, pk, action):
+    context = _process_context(request, pk)
+    stage = context["process"].stage
+    if ((action == "treatment" and stage not in ("REQUEST", "PENDING"))
+            or (action == "complete" and stage not in ("REQUEST", "PENDING"))
+            or (action == "start" and stage not in ("ORDER", "PENDING"))):
+        raise PermissionDenied
+    dialogs = [d for d in context["dialogs"] if d["action"] == action]
+    child = request.GET.get("child_id", "")
+    if action in ("pending_resolve", "pending_update") and not child:
+        if not dialogs:
+            raise PermissionDenied
+        allowed = {d["child"] for d in dialogs}
+        return render(request, "cancelamentos/_pending_picker.html", {
+            "picker_url": reverse("cancelamentos:process_dialog", args=(pk, action)),
+            "pendings": [p for p in context["pendings"] if p.pk in allowed],
+            "title": "Resolver pendência" if action == "pending_resolve" else "Editar pendência",
+        })
+    dialog = next((d for d in dialogs if not d["child"] or str(d["child"]) == child), None)
+    if dialog is None:
+        raise PermissionDenied
+    return render(request, "cancelamentos/_action_dialog.html", {
+        "dialog": dialog, "process": context["process"], "revision": context["process"].revision,
+        "action_url": reverse("cancelamentos:process_action", args=(pk, action)),
+    })
+
+
+@module_access
+@never_cache
+def intake_dialog(request, pk, action):
+    require(request.user, "triage_cancellations")
+    if action not in ("approve", "reject"):
+        raise PermissionDenied
+    entry = get_object_or_404(current_intakes(CancellationScope.intakes(request.user)).filter(status="WAITING"), pk=pk)
+    identity = Q(ticket_number=entry.ticket_number) | Q(intake=entry)
+    if entry.ticket_id:
+        identity |= Q(source_ticket_id=entry.ticket_id)
+    if CancellationProcess.objects.filter(identity).exists():
+        raise PermissionDenied
+    dialog = _dialog(action, "Aprovar pedido" if action == "approve" else "Rejeitar entrada",
+        forms.TriageForm(user=request.user, intake=entry), button="Aprovar pedido" if action == "approve" else "Rejeitar entrada")
+    return render(request, "cancelamentos/_action_dialog.html", {
+        "dialog": dialog, "revision": entry.revision,
+        "action_url": reverse("cancelamentos:intake_action", args=(pk, action)),
     })
 
 
@@ -237,7 +315,7 @@ def detail(request, pk):
 def process_action(request, pk, action):
     url = reverse("cancelamentos:detail", args=(pk,))
     try:
-        act_on_process(request=request, pk=pk, action=action, data=request.POST)
+        process = act_on_process(request=request, pk=pk, action=action, data=request.POST)
     except (Conflict, IntegrityError, OperationalError) as exc:
         error = exc.messages if isinstance(exc, Conflict) else ["Conflito de atualização. Recarregue o processo antes de tentar novamente."]
         return _action_response(request, url, error, 409)
@@ -245,9 +323,9 @@ def process_action(request, pk, action):
         return _action_response(request, url, exc.messages, 400)
     if action in ("assign", "assume"):
         url = _return_url(request, url)
-        if "return_query" in request.POST:
+        if "return_query" in request.POST and "application/json" not in request.headers.get("Accept", ""):
             messages.success(request, "Responsável atualizado. O recorte da lista foi preservado.")
-    return _action_response(request, url)
+    return _action_response(request, _return_url(request, url), revision=process.revision)
 
 
 @module_access

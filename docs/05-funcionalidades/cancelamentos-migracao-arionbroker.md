@@ -73,7 +73,7 @@ Valores principais não nulos geram previsões em `FinancialObligation`: multa�
 
 Uma previsão com pendência da mesma categoria recebe `POSSIBLE_DUPLICATE`; as demais ficam `UNRECONCILED`. Isso sinaliza correspondência possível, sem eliminar evidência ou declarar equivalência. **Não somar valores principais e pendências.** Baixa financeira, última competência e confirmação sem nova cobrança são fatos históricos separados e não comprovam liquidação bancária.
 
-Responsável atual pode ser atribuído inclusive em histórico concluído, com o RBAC, escopo, revisão e auditoria existentes. Isso não altera responsável legado nem reabre o processo.
+Responsável atual pode ser atribuído inclusive em histórico concluído, com o RBAC, escopo, revisão e auditoria existentes. Isso não altera responsável legado nem reabre o processo. Nomes de responsáveis, atendentes e autores são enriquecidos separadamente por origem/ID em `LegacyPerson`; ver [consulta somente leitura e importação privada de nomes](../06-integracoes-e-dados/arionbroker/usuarios-historicos.md). A carga de nomes não reexecuta esta importação nem reescreve seus snapshots.
 
 ## Preview, dry-run, idempotência e recuperação
 

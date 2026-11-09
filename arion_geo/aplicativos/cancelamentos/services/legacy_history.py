@@ -1,5 +1,6 @@
 """Allowlisted presentation of immutable source facts after process scope checks."""
 from .legacy_import import SOURCE
+from .legacy_people import names_for
 
 
 GROUPS = (
@@ -28,12 +29,47 @@ def legacy_context(process, user):
     if reference is None:
         return None
     data = reference.source_data
+    names = names_for([v for v in (data.get("responsavel_id"), data.get("atendente_id")) if v is not None])
     groups = [{"title": title, "fields": [(label, data.get(key)) for key, label in fields]} for title, fields in GROUPS]
     if user.has_perm("cancelamentos.view_cancellation_finance"):
         groups.append({"title": "Informações e observações históricas restritas", "fields": [(label, data.get(key)) for key, label in FINANCIAL_FIELDS]})
     return {"id": reference.legacy_pk, "groups": groups, "batch": reference.batch,
             "responsible_id": data.get("responsavel_id"),
+            "responsible_name": names.get(data.get("responsavel_id"), "Nome não disponível"),
+            "attendant_name": names.get(data.get("atendente_id"), "Nome não disponível"),
+            "contact_channel": data.get("canal_contato"), "first_contact": data.get("data_primeiro_contato"),
+            "last_contact": data.get("data_ultima_interacao"), "next_action": data.get("proxima_acao"),
+            "address": " ".join(str(data.get(k) or "") for k in ("endereco", "numero", "complemento", "bairro", "cep")).strip(),
+            "observation": data.get("observacao") if user.has_perm("cancelamentos.view_cancellation_finance") else "",
             "opening_needs_review": reference.reconciliation.get("opening_date_needs_review"),
             "completion_needs_review": reference.reconciliation.get("historical_completion_needs_review"),
             "otrs_matched": reference.reconciliation.get("otrs_matched"),
             "source_timezone": reference.import_run.counts.get("source_timezone", "Consultar relatório do lote") if reference.import_run_id else "Consultar relatório do lote"}
+
+
+EVENT_TITLES = {
+    "legacy_historicofila": "Etapa alterada", "legacy_observacaocancelamento": "Observação registrada",
+    "legacy_historicocancelamento": "Atualização do atendimento", "pending_add": "Pendência adicionada",
+    "pending_update": "Pendência atualizada", "pending_resolve": "Pendência resolvida ou encaminhada",
+    "assign": "Responsável alterado", "assume": "Atendimento assumido", "note": "Observação registrada",
+    "move": "Etapa alterada", "start": "Tratativa iniciada", "status": "Status alterado",
+    "treatment": "Tratativa com o ISP registrada", "complete": "Atendimento concluído", "reopen": "Atendimento reaberto",
+    "triage_approve": "Pedido aprovado", "triage_reject": "Entrada rejeitada", "triage_wait": "Análise mantida pendente",
+    "update": "Dados atualizados", "handoff": "Encaminhado ao Financeiro", "evidence": "Evidência registrada",
+}
+
+
+def present_events(events):
+    events = list(events)
+    names = names_for([event.details["legacy_actor_id"] for event in events if event.details.get("legacy_actor_id") is not None])
+    for event in events:
+        historical = event.action.startswith("legacy_")
+        event.display_actor = names.get(event.details.get("legacy_actor_id"), "Nome não disponível") if historical else (
+            (event.actor.get_full_name() or event.actor.get_username()) if event.actor else "Nome não disponível")
+        event.display_title = EVENT_TITLES.get(event.action, "Atendimento atualizado")
+        kind = str(event.details.get("legacy_type", ""))
+        if historical and "PENDENCIA" in kind:
+            event.display_title = "Pendência adicionada" if "CRIAD" in kind else "Pendência atualizada"
+        elif historical and "CONCLU" in kind:
+            event.display_title = "Atendimento concluído"
+    return events

@@ -1,21 +1,10 @@
 {% extends "cancelamentos/base.html" %}{% load cancellation_display %}
 {% block cancellation_content %}
-<header class="canc-heading canc-heading--compact"><div><p class="canc-eyebrow">OPERAÇÃO NOC</p><h1>Cancelamentos</h1><p>Valide pedidos e acompanhe cada providência.</p></div><div class="canc-actions">
+<header class="canc-heading canc-heading--compact"><div><p class="canc-eyebrow">OPERAÇÃO NOC</p><h1>Cancelamentos</h1><p>Gerencie pedidos e acompanhe cada etapa do cancelamento.</p></div><div class="canc-actions">
 {% if perms.cancelamentos.export_cancellations %}<a class="canc-button" href="{% url 'cancelamentos:export' %}?{{ export_query }}">Exportar</a>{% endif %}
 {% if perms.cancelamentos.configure_cancellations %}<a class="canc-link" href="{% url 'cancelamentos:configuration' %}">Configuração</a>{% endif %}
 </div></header>
-<div class="canc-metrics canc-metrics--interactive" aria-label="Indicadores do recorte">
-{% for item in tabs %}<a href="{{ item.metric_url }}"{% if item.key == tab %} class="is-active" aria-current="page"{% endif %}><span>{% if item.key == 'intake' %}Aguardando triagem{% elif item.key == 'order' %}Pedidos{% else %}{{ item.label }}{% endif %}{% if item.key == 'pending' %}<span class="canc-info" title="Processos na etapa principal Pendências. Pendências individuais são consultadas separadamente." aria-label="Fila operacional Pendências">ⓘ</span>{% endif %}</span><strong>{{ item.count }}</strong></a>{% endfor %}
-</div>
-<p class="canc-secondary-metric"><a class="canc-link" href="{{ open_pending_url }}">{{ metrics.open_pending }} processo{{ metrics.open_pending|pluralize:"s" }} com pendências abertas · qualquer etapa</a></p>
-<div class="canc-tabs-row"><nav class="canc-tabs" aria-label="Etapas de Cancelamentos">{% for item in tabs %}<a href="{{ item.url }}"{% if item.key == tab %} class="is-active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}</nav>
-<details class="canc-sync canc-sync--{{ sync_indicator.code }}"><summary><span aria-hidden="true"></span>{{ sync_indicator.label }}{% if sync_indicator.source_at %} · {{ sync_indicator.source_at|date:"H:i" }}{% endif %}</summary><div class="canc-sync-detail"><strong>{{ sync_indicator.label }}</strong><p>{{ sync_indicator.notice }}</p><dl><dt>Última sincronização válida</dt><dd>{{ sync_indicator.source_at|date:"d/m/Y H:i:s"|default:"Aguardando" }}</dd><dt>Última projeção de triagem</dt><dd>{{ sync_indicator.projection_at|date:"d/m/Y H:i:s"|default:"Aguardando" }}</dd></dl>{% if perms.configuracoes.view_integrations %}<a class="canc-link" href="{% url 'configuracoes:integracoes:otrs' %}">Central de Integrações ↗</a>{% endif %}</div></details></div>
-<div class="canc-quick-row"><nav class="canc-quick" aria-label="Responsabilidade local">{% for item in quick_filters %}<a href="{{ item.url }}"{% if item.value == owner_filter %} class="is-active" aria-current="true"{% endif %}>{{ item.label }}</a>{% endfor %}</nav><small>Responsável ARION OPS · período pela abertura do ticket</small></div>
-<form class="canc-filter-form" method="get" aria-label="Pesquisar e filtrar cancelamentos">
-<input type="hidden" name="tab" value="{{ tab }}">
-<div class="canc-filter-main"><div class="canc-filter canc-filter--search">{{ form.q.label_tag }}{{ form.q }}{{ form.q.errors }}</div><div class="canc-filter">{{ form.context.label_tag }}{{ form.context }}{{ form.context.errors }}</div><div class="canc-filter">{{ form.owner.label_tag }}{{ form.owner }}{{ form.owner.errors }}</div><button type="button" class="canc-button canc-more-button" data-more-filters aria-expanded="false" aria-controls="canc-advanced">Mais filtros{% if advanced_count %}<span class="canc-filter-count">{{ advanced_count }}</span>{% endif %}</button><button class="canc-button canc-button--primary">Aplicar</button><a class="canc-link" href="{% url 'cancelamentos:index' %}?tab={{ tab }}">Limpar</a></div>
-<div class="canc-advanced" id="canc-advanced" hidden>{% for field in advanced_fields %}<div class="canc-filter"{% if field.name == 'stage' %} data-pending-stage{% if not form.with_open_pending.value %} hidden{% endif %}{% endif %}>{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}</div>{{ form.non_field_errors }}
-</form>
-{% include "cancelamentos/_list_table.html" %}
+<div data-cancellation-workspace>{% include "cancelamentos/_workspace.html" %}</div>
+<div class="canc-save-feedback" data-list-feedback role="status"></div><div data-dialog-host></div>
 {% if perms.cancelamentos.assign_cancellations %}{% include "cancelamentos/_list_assignment.html" %}{% endif %}
 {% endblock %}

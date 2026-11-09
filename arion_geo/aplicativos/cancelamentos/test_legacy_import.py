@@ -294,7 +294,8 @@ class LegacyImportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "informação financeira privada")
         self.assertNotContains(response, "Observação histórica original")
-        self.assertContains(response, "Movimentação ArionBroker")
+        self.assertContains(response, "Etapa alterada")
+        self.assertNotContains(response, "Usuário legado #")
         process.link = None
         process.save()
         self.assertFalse(CancellationScope.processes(user).filter(pk=process.pk).exists())
@@ -317,10 +318,10 @@ class LegacyImportTests(TestCase):
         process = self.run_record()
         response = self.client.get(reverse("cancelamentos:detail", args=(process.pk,)))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "data de conclusão a revisar")
+        self.assertContains(response, "Data a revisar")
         self.assertContains(response, "0026-10-02")
         self.assertContains(response, "&lt;script&gt;unsafe&lt;/script&gt;")
-        self.assertContains(response, "Usuário legado #99")
+        self.assertContains(response, "Nome não disponível")
         self.assertNotContains(response, "<script>unsafe</script>")
         for tab in ("order", "request", "pending", "completed"):
             self.assertEqual(self.client.get(reverse("cancelamentos:index"), {"tab": tab}).status_code, 200)

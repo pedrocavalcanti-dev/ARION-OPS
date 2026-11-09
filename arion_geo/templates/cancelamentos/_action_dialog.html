@@ -1,0 +1,10 @@
+<dialog class="canc-dialog" id="action-{{ dialog.key }}" aria-labelledby="title-{{ dialog.key }}">
+<header><h2 id="title-{{ dialog.key }}">{{ dialog.title }}</h2><button class="canc-close" type="button" data-close-dialog aria-label="Fechar">×</button></header>
+<form method="post" action="{% if action_url %}{{ action_url }}{% else %}{% url 'cancelamentos:process_action' process.pk dialog.action %}{% endif %}" data-canc-form>
+{% csrf_token %}<input type="hidden" name="revision" value="{% if revision != None %}{{ revision }}{% else %}{{ process.revision }}{% endif %}">{% if dialog.child %}<input type="hidden" name="child_id" value="{{ dialog.child }}">{% endif %}
+<div class="canc-dialog-body">
+{% if dialog.action == 'pending_add' or dialog.action == 'pending_update' %}{% include 'cancelamentos/_pending_fields.html' with form=dialog.form %}{% else %}{% include 'cancelamentos/_fields.html' with form=dialog.form %}{% endif %}
+{% if dialog.action == 'complete' %}<p class="canc-muted">Os requisitos da conclusão serão verificados. Concluir o atendimento não confirma pagamento.</p>{% elif dialog.action == 'move' or dialog.action == 'reopen' %}<p class="canc-muted">Justifique o movimento. A conclusão tem validação própria na ação Concluir.</p>{% elif dialog.action == 'approve' %}<p class="canc-muted">A aprovação admite um pedido local. O ticket e a CMDB permanecem inalterados.</p>{% endif %}
+<div data-form-feedback role="alert"></div></div>
+<footer><button type="button" class="canc-button" data-close-dialog>Cancelar</button>{% if dialog.action == 'pending_add' %}<button type="submit" class="canc-button" name="add_another" value="1">Adicionar outra pendência</button>{% endif %}<button class="canc-button canc-button--primary" type="submit">{% if dialog.action == 'pending_add' %}Salvar pendência{% else %}{{ dialog.button }}{% endif %}</button></footer>
+</form></dialog>

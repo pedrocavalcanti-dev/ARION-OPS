@@ -1,35 +1,35 @@
 {% load cancellation_display %}
 <section class="canc-table-section" aria-label="Registros do recorte">
 <div class="canc-table-caption"><h2>{% for item in tabs %}{% if item.key == tab %}{{ item.label }}{% endif %}{% endfor %}{% if tab == 'pending' and form.with_open_pending.value %} · Com pendências abertas{% endif %}</h2><span>{{ page.paginator.count }} registro{{ page.paginator.count|pluralize:"s" }}{% if tab == 'intake' %} · {% if form.presence.value == 'history' %}Histórico fora do KPI 1{% elif form.presence.value == 'all' %}Atuais e históricas{% else %}KPI 1 atual{% endif %}{% endif %}</span></div>
-<div class="canc-table-scroll"><table class="canc-compact-table"><thead><tr><th>Ticket</th>
+<div class="canc-table-scroll"><table class="canc-compact-table canc-table--{{ tab }}"><thead><tr><th>Ticket</th>
 {% if tab == 'intake' or tab == 'order' or tab == 'request' %}<th>Designação</th>{% endif %}
 <th>Cliente final{% if tab == 'intake' %} / projeto{% endif %}</th>{% if tab == 'order' %}<th>Localidade</th>{% endif %}<th>ISP</th>
-{% if tab == 'request' or tab == 'completed' %}<th>Protocolo</th>{% endif %}{% if tab == 'pending' %}<th>Pendências abertas</th>{% endif %}
+{% if tab == 'pending' %}<th title="Pendências abertas">Pendências</th>{% endif %}
 {% if tab == 'completed' %}<th>Cancelamento</th>{% endif %}
-{% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}<th class="canc-money">Multa (R$)</th><th class="canc-money">Equipamento (R$)</th><th class="canc-money">Outros (R$)</th><th class="canc-money">Total (R$)</th>{% endif %}{% endif %}
-<th>{% if tab == 'completed' %}Conclusão{% elif tab == 'pending' %}Próxima ação{% else %}Abertura{% endif %}</th>{% if tab != 'completed' %}<th>Status</th>{% endif %}<th>Responsável</th>{% if tab == 'order' %}<th>Observações</th>{% endif %}<th>Ações</th></tr></thead><tbody>
+{% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}<th class="canc-money">Multa (R$)</th><th class="canc-money" title="Equipamentos (R$)">Equip. (R$)</th><th class="canc-money">Outros (R$)</th><th class="canc-money">Total (R$)</th>{% endif %}{% endif %}
+<th>{% if tab == 'completed' %}Conclusão{% elif tab == 'pending' %}Próxima ação{% else %}Abertura{% endif %}</th>{% if tab != 'completed' %}<th>Status</th>{% endif %}<th>Responsável</th><th>Ações</th></tr></thead><tbody>
 {% for obj in page %}<tr>{% if tab == 'intake' %}
 <td><a class="canc-record" href="{% url 'cancelamentos:intake_detail' obj.pk %}">{{ obj.ticket_number }}</a></td>
 <td><span class="canc-truncate" title="{{ obj.designation_snapshot }}">{{ obj.designation_snapshot|default:"Vínculo a revisar" }}</span></td>
 <td><span class="canc-truncate" title="{{ obj.client_snapshot }} · {{ obj.project_snapshot }}">{{ obj.client_snapshot|default:"Não identificado" }} · {{ obj.project_snapshot|default:"—" }}</span></td>
 <td><span class="canc-truncate" title="{{ obj.link.operator.name }}">{{ obj.link.operator.name|default:"—" }}</span></td>
-<td>{{ obj.source_created_at|date:"d/m/Y H:i"|default:"—" }}</td><td><span class="canc-status">{{ obj.get_status_display }}</span>{% if not obj.current_entry %}<small>Fora do KPI 1</small>{% endif %}</td>
+<td>{{ obj.source_created_at|date:"d/m/Y"|default:"—" }}</td><td><span class="canc-status">{{ obj.get_status_display }}</span>{% if not obj.current_entry %}<small>Fora do KPI 1</small>{% endif %}</td>
 {% else %}
-<td><a class="canc-record" title="{{ obj.code }} · {{ obj.designation }}" href="{% url 'cancelamentos:detail' obj.pk %}">{{ obj.display_ticket_number|default:obj.code }}</a></td>
+<td><a class="canc-record" title="{{ obj.display_ticket_number }} · {{ obj.designation }}" href="{% url 'cancelamentos:detail' obj.pk %}">{{ obj.display_ticket_number|default:obj.code }}</a></td>
 {% if tab == 'order' or tab == 'request' %}<td><span class="canc-truncate" title="{{ obj.designation }}">{{ obj.designation|default:"Vínculo a revisar" }}</span></td>{% endif %}
 <td><span class="canc-truncate" title="{{ obj.final_client }}">{{ obj.final_client|default:"Não informado" }}</span></td>
 {% if tab == 'order' %}<td><span class="canc-truncate" title="{{ obj.city }} / {{ obj.state }}">{{ obj.city|default:"—" }} / {{ obj.state|default:"—" }}</span></td>{% endif %}
 <td><span class="canc-truncate" title="{{ obj.isp }}">{{ obj.isp|default:"—" }}</span></td>
-{% if tab == 'request' or tab == 'completed' %}<td><span class="canc-truncate" title="{{ obj.treatment.protocol }}">{{ obj.treatment.protocol|default:"—" }}</span></td>{% endif %}
+
 {% if tab == 'pending' %}<td><a class="canc-link" href="{% url 'cancelamentos:detail' obj.pk %}#pendencias">{{ obj.open_pending_count }} pendência{{ obj.open_pending_count|pluralize:"s" }}</a></td>{% endif %}
-{% if tab == 'completed' %}<td>{{ obj.table_effective|date:"d/m/Y"|default:"Data a revisar" }}</td>{% endif %}
+{% if tab == 'completed' %}<td>{% if obj.table_effective %}{{ obj.table_effective|date:"d/m/Y" }}{% elif obj.effective_review %}Data a revisar{% else %}Não informada{% endif %}</td>{% endif %}
 {% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}
-<td class="canc-money">{{ obj.finance.fine|brl }}</td><td class="canc-money">{{ obj.finance.equipment|brl }}</td><td class="canc-money">{{ obj.finance.other|brl }}</td><td class="canc-money">{% if obj.finance.review %}<span title="Valores informados; conciliar cobranças principais e pendências. Não confirma pagamento.">A conferir</span>{% else %}{{ obj.finance.total|brl }}{% endif %}</td>
+<td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.fine|brl }}</td><td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.equipment|brl }}</td><td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.other|brl }}</td><td class="canc-money">{% if obj.finance.review %}<span title="Valores informados; conciliar cobranças principais e pendências. Não confirma pagamento.">A conferir</span>{% else %}{{ obj.finance.total|brl }}{% endif %}</td>
 {% endif %}{% endif %}
-<td>{% if tab == 'pending' %}{{ obj.next_action_at|date:"d/m/Y H:i"|default:"Não definida" }}{% elif tab == 'completed' %}{{ obj.table_completed|date:"d/m/Y H:i"|default:"Data a revisar" }}{% elif obj.opening_review %}<span class="canc-muted">Data a revisar</span>{% else %}{{ obj.table_opened|date:"d/m/Y"|default:"—" }}{% endif %}</td>
+<td>{% if tab == 'pending' %}{{ obj.next_action_at|date:"d/m/Y"|default:"Não definida" }}{% elif tab == 'completed' %}{{ obj.table_completed|date:"d/m/Y"|default:"Data a revisar" }}{% elif obj.opening_review %}<span class="canc-muted">Data a revisar</span>{% else %}{{ obj.table_opened|date:"d/m/Y"|default:"—" }}{% endif %}</td>
 {% if tab != 'completed' %}<td><span class="canc-status" title="Etapa: {{ obj.get_stage_display }}">{{ obj.table_status }}</span></td>{% endif %}{% endif %}
 <td><span class="canc-truncate" data-owner-label title="{{ obj.responsible|person_name }}">{{ obj.responsible|person_name }}</span></td>
-{% if tab == 'order' %}<td><a class="canc-link" href="{% url 'cancelamentos:detail' obj.pk %}#historico">Consultar</a></td>{% endif %}
+
 <td>{% include 'cancelamentos/_list_actions.html' %}</td></tr>
 {% empty %}<tr><td colspan="20"><div class="canc-empty"><strong>Nenhum registro neste recorte</strong><p>{% if tab == 'intake' %}A triagem atual inclui apenas tickets elegíveis no KPI 1. Use Mais filtros para consultar entradas históricas e decisões anteriores.{% else %}Revise os filtros ou acompanhe os pedidos admitidos pela triagem.{% endif %}</p></div></td></tr>{% endfor %}
 </tbody></table></div><footer class="canc-pagination"><span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span><div>{% if previous_url %}<a class="canc-button" href="{{ previous_url }}">Anterior</a>{% endif %}{% if next_url %}<a class="canc-button" href="{{ next_url }}">Próxima</a>{% endif %}</div></footer></section>

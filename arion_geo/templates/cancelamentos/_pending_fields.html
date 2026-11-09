@@ -1,0 +1,3 @@
+{{ form.non_field_errors }}
+{% for field in form %}{% if field.name != 'owner' and field.name != 'evidence_reference' %}<div class="canc-field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endif %}{% endfor %}
+<details class="canc-extra-fields"><summary>Responsável e evidência (opcional)</summary>{% for field in form %}{% if field.name == 'owner' or field.name == 'evidence_reference' %}<div class="canc-field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endif %}{% endfor %}</details>

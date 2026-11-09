@@ -75,6 +75,7 @@ def query_module(user, params):
         "request": grouped.get("REQUEST", 0), "completed": grouped.get("COMPLETED", 0),
         "pending": grouped.get("PENDING", 0),
         "open_pending": processes.filter(has_pending=True).count(),
+        "total": sum(grouped.values()),
         "documents": processes.exclude(stage="COMPLETED").filter(
             Q(Exists(documents_pending)) | Q(Exists(waiting_document))
         ).count(),

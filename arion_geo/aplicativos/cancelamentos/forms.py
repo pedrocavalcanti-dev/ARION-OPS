@@ -1,3 +1,5 @@
+import re
+
 from django import forms
 from django.contrib.auth import get_user_model
 from django.db.models import Q
@@ -76,7 +78,18 @@ class TreatmentForm(forms.ModelForm):
         return data
 
 
+class BRLAmountField(forms.DecimalField):
+    def to_python(self, value):
+        if isinstance(value, str) and "," in value:
+            if not re.fullmatch(r"-?(?:\d+|\d{1,3}(?:\.\d{3})+),\d{1,2}", value.strip()):
+                raise forms.ValidationError("Informe um valor como 1.234,50.")
+            value = value.strip().replace(".", "").replace(",", ".")
+        return super().to_python(value)
+
+
 class PendingForm(forms.ModelForm):
+    amount = BRLAmountField(label="Valor (R$)", required=False, max_digits=14, decimal_places=2, min_value=0,
+                            widget=forms.TextInput(attrs={"inputmode": "decimal", "placeholder": "0,00"}))
     class Meta:
         model = CancellationPending
         fields = ("kind", "description", "amount", "expected_date", "owner", "evidence_reference")
@@ -85,6 +98,9 @@ class PendingForm(forms.ModelForm):
 
     def __init__(self, *args, financial=False, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["amount"].localize = True
+        self.fields["amount"].widget.is_localized = True
+        self.fields["amount"].widget.attrs.update(inputmode="decimal", placeholder="0,00")
         self.fields["owner"].queryset = assignable_users()
         if not financial:
             self.fields.pop("amount")

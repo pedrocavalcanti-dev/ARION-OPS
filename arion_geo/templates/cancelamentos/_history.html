@@ -1,5 +1,6 @@
 {% load cancellation_display %}
 <ol class="canc-timeline">
-{% for item in history %}<li><small>{{ item.origin_label }}{% if item.details.legacy_id %} · #{{ item.details.legacy_id }}{% endif %}{% if item.details.legacy_type %} · {{ item.details.legacy_type }}{% endif %}</small><div><strong>{% if item.action|slice:':7' == 'legacy_' %}{% if item.details.legacy_actor_id %}Usuário legado #{{ item.details.legacy_actor_id }}{% else %}Autor histórico não informado{% endif %}{% else %}{{ item.actor|person_name }}{% endif %}</strong><time>{{ item.created_at|date:"d/m/Y H:i:s" }}</time></div><p>{{ item.description|linebreaksbr }}</p>{% if item.financial and perms.cancelamentos.view_cancellation_finance and item.details and item.action|slice:':7' != 'legacy_' %}<dl>{% for label, value in item.details.items %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>{% endif %}</li>
-{% empty %}<li class="canc-empty">Nenhuma atividade registrada.</li>{% endfor %}
-</ol>
+{% for item in history %}<li><div class="canc-event-heading"><strong>{{ item.display_title|default:"Atendimento atualizado" }}</strong><time>{{ item.created_at|date:"d/m/Y" }} às {{ item.created_at|date:"H:i" }}</time></div><small>{{ item.display_actor|default:"Nome não disponível" }}</small>
+{% if item.description|length > 260 %}<details class="canc-event-description"><summary>{{ item.description|truncatechars:180 }}</summary><p>{{ item.description|linebreaksbr }}</p></details>{% else %}<p>{{ item.description|linebreaksbr }}</p>{% endif %}
+{% if show_technical %}<details class="canc-event-technical"><summary>Rastreabilidade</summary><small>{{ item.origin_label }} · {{ item.details.legacy_id|default:item.pk }} · {{ item.action }}{% if item.details.legacy_actor_id %} · autor de origem {{ item.details.legacy_actor_id }}{% endif %}</small></details>{% endif %}
+</li>{% empty %}<li class="canc-empty">Nenhuma atividade registrada.</li>{% endfor %}</ol>

@@ -155,6 +155,7 @@ ACTION_PERMISSIONS = {
     "update": "change_cancellation_stage", "start": "change_cancellation_stage",
     "treatment": "change_cancellation_stage", "note": "change_cancellation_stage", "link": "change_cancellation_stage",
     "pending_add": "manage_cancellation_pending", "pending_resolve": "manage_cancellation_pending",
+    "pending_update": "manage_cancellation_pending",
     "equipment_add": "manage_cancellation_pending", "equipment_update": "manage_cancellation_pending",
     "obligation_add": "manage_cancellation_finance", "obligation_update": "manage_cancellation_finance",
     "handoff": "manage_cancellation_finance", "evidence": "change_cancellation_stage",
@@ -237,9 +238,9 @@ def act_on_process(*, request, pk, action, data):
     process = get_object_or_404(CancellationScope.processes(request.user).select_for_update(), pk=pk)
     revision = valid(forms.OperationalForm(data))["revision"]
     check_revision(process, revision)
-    if process.stage == CancellationProcess.Stage.COMPLETED and action not in ("assign", "assume", "reopen"):
+    if process.stage == CancellationProcess.Stage.COMPLETED and action not in ("assign", "assume", "reopen", "note"):
         raise ValidationError("Processo concluído: o histórico permanece preservado para consulta.")
-    if action in ("pending_resolve", "equipment_update", "obligation_update"):
+    if action in ("pending_resolve", "pending_update", "equipment_update", "obligation_update"):
         try:
             child_id = int(data.get("child_id", ""))
             if child_id <= 0:
@@ -324,9 +325,21 @@ def act_on_process(*, request, pk, action, data):
                        f"Retorno: {treatment.response or 'não informado'}. Evidência: {treatment.evidence_reference or 'não informada'}.")
     elif action == "note":
         description = valid(forms.NoteForm(data))["note"]
-    elif action == "pending_add":
+    elif action in ("pending_add", "pending_update"):
+        previous = None
+        previous_financial = False
+        if action == "pending_update":
+            previous = get_object_or_404(process.pendings.select_related("legacy_reference"), pk=child_id)
+            if previous.status != "OPEN":
+                raise Conflict("Somente uma pendência aberta pode ser editada.")
+            if pending_is_financial(previous):
+                previous_financial = True
+                require(request.user, "view_cancellation_finance")
+                require(request.user, "manage_cancellation_finance")
+            details["before"] = {key: str(getattr(previous, key)) if getattr(previous, key) is not None else None
+                                 for key in ("kind", "description", "amount", "expected_date", "owner_id", "evidence_reference")}
         can_finance = request.user.has_perm("cancelamentos.view_cancellation_finance") and request.user.has_perm("cancelamentos.manage_cancellation_finance")
-        form = forms.PendingForm(data, financial=can_finance)
+        form = forms.PendingForm(data, financial=can_finance, instance=previous)
         values = valid(form)
         pending = form.save(commit=False)
         _owner = pending.owner
@@ -334,8 +347,12 @@ def act_on_process(*, request, pk, action, data):
             raise ValidationError("O responsável pela pendência não possui acesso ao processo.")
         pending.process = process
         pending.save()
-        financial = pending.kind in forms.FINANCIAL_PENDING_KINDS or pending.amount is not None
-        description = f"Pendência #{pending.pk} criada: {pending.get_kind_display()}. {pending.description}"
+        financial = previous_financial or pending.kind in forms.FINANCIAL_PENDING_KINDS or pending.amount is not None
+        if previous:
+            details["after"] = {key: str(getattr(pending, key)) if getattr(pending, key) is not None else None
+                                for key in ("kind", "description", "amount", "expected_date", "owner_id", "evidence_reference")}
+        description = f"Pendência #{pending.pk} {'atualizada' if previous else 'criada'}: {pending.get_kind_display()}. {pending.description}"
+        metadata["pending_id"] = pending.pk
     elif action == "pending_resolve":
         pending = get_object_or_404(process.pendings.select_related("legacy_reference"), pk=child_id)
         financial = pending_is_financial(pending)
@@ -405,7 +422,7 @@ def act_on_process(*, request, pk, action, data):
         financial = True
         description = f"Encaminhamento manual #{handoff.pk} ao Financeiro registrado com evidência. Não confirma pagamento."
     elif action == "complete":
-        if process.stage != CancellationProcess.Stage.REQUEST:
+        if process.stage not in (CancellationProcess.Stage.REQUEST, CancellationProcess.Stage.PENDING):
             raise ValidationError("Inicie e registre a tratativa antes de concluir.")
         values = valid(forms.CompletionForm(data))
         blockers = completion_blockers(process)

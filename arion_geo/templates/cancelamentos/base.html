@@ -1,7 +1,7 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}Cancelamentos · ARION OPS{% endblock %}
 {% block body_class %}cancellation-page{% endblock %}
-{% block extra_css %}<link rel="stylesheet" href="{% static 'css/cancelamentos/cancelamentos.css' %}">{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{% static 'css/cancelamentos/cancelamentos.css' %}"><link rel="stylesheet" href="{% static 'css/cancelamentos/refinements.css' %}">{% endblock %}
 {% block extra_js %}{{ block.super }}<script defer src="{% arion_js 'js/cancelamentos/cancelamentos.js' %}"></script>{% endblock %}
 {% block content %}
 <div class="canc-shell">

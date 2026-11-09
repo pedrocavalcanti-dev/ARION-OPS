@@ -1,8 +1,8 @@
 {% if legacy %}
-<details class="canc-section" open><summary>Importado do ArionBroker · #{{ legacy.id }}</summary>
+<details class="canc-section"><summary>Importado do ArionBroker · #{{ legacy.id }}</summary>
 <p class="canc-muted">Responsáveis históricos são referências do legado. A atribuição atual do ARION OPS é independente. Datas abaixo são valores originais; o fuso declarado está no relatório do lote.</p>
-{% if legacy.opening_needs_review %}<p class="canc-notice">Data de abertura histórica a revisar: o valor bruto foi preservado sem conversão de ano.</p>{% endif %}
-{% if legacy.completion_needs_review %}<p class="canc-notice">Situação histórica a revisar: fila Concluídos sem data de conclusão comprovada.</p>{% endif %}
+{% if legacy.opening_needs_review %}<p class="canc-notice">Data a revisar — abertura histórica: o valor bruto foi preservado sem conversão de ano.</p>{% endif %}
+{% if legacy.completion_needs_review %}<p class="canc-notice">Data a revisar — conclusão histórica sem data comprovada.</p>{% endif %}
 {% if not legacy.otrs_matched %}<p class="canc-notice">Número operacional preservado. Vínculo OTRS não localizado no espelho da importação.</p>{% endif %}
 {% for group in legacy.groups %}<details><summary>{{ group.title }}</summary><dl class="canc-facts">{% for label, value in group.fields %}<div><dt>{{ label }}</dt><dd>{% if value == None %}Não informado (nulo){% elif value == '' %}Não informado{% else %}{{ value|linebreaksbr }}{% endif %}</dd></div>{% endfor %}</dl></details>{% endfor %}
 {% if not perms.cancelamentos.view_cancellation_finance %}<p class="canc-muted">Textos livres importados e dados financeiros exigem permissão financeira até a revisão de sua classificação.</p>{% endif %}

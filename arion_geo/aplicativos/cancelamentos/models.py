@@ -334,6 +334,23 @@ class LegacyImportRun(models.Model):
     counts = models.JSONField(default=dict)
 
 
+class LegacyPerson(models.Model):
+    """Historical labels only: never an account, grant or Django user mapping."""
+    source = models.CharField(max_length=80)
+    external_id = models.PositiveBigIntegerField()
+    username = models.CharField(max_length=150, blank=True)
+    first_name = models.CharField(max_length=150, blank=True)
+    last_name = models.CharField(max_length=150, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("source", "external_id"), name="cancel_legacy_person_identity")]
+
+    @property
+    def display_name(self):
+        return " ".join(filter(None, (self.first_name.strip(), self.last_name.strip()))) or self.username or "Nome não disponível"
+
+
 class LegacyCancellationReference(models.Model):
     """Immutable source facts and identity; exposed only through scoped services."""
     source = models.CharField(max_length=80)
