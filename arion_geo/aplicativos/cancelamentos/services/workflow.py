@@ -17,6 +17,7 @@ from ..models import (CancellationIntake, CancellationProcess, CancellationEvent
                      FinancialHandoff, HandoffObligation)
 from .data_scope import CancellationScope
 from .otrs_intake import source_status, intake_settings, ticket_is_eligible
+from .identity import normalize_ticket_number
 
 
 class Conflict(ValidationError):
@@ -39,8 +40,8 @@ def event(*, request, intake, action, description, process=None, financial=False
     # Business text belongs in the scoped timeline, never in central audit metadata.
     audit = AuditService.record(request=request, category="cancellation", module="cancelamentos", action=action,
                                 description="Operação local de Cancelamentos registrada.", obj=process or intake,
-                                metadata={"intake_id": intake.pk, "process_id": process.pk if process else None,
-                                          "ticket_external_id": intake.ticket_external_id, **(metadata or {})})
+                                metadata={"intake_id": intake.pk if intake else None, "process_id": process.pk if process else None,
+                                          "ticket_external_id": intake.ticket_external_id if intake else process.external_ticket_id if process else None, **(metadata or {})})
     return CancellationEvent.objects.create(intake=intake, process=process, actor=request.user, action=action,
                                              description=description, details=details or {}, financial=financial, audit_event=audit)
 
@@ -60,6 +61,9 @@ def decide_intake(*, request, pk, action, data):
     check_revision(entry, values["revision"])
     if entry.status != CancellationIntake.Status.WAITING:
         raise Conflict("A entrada já possui decisão. Ela permanece disponível no histórico.")
+    if CancellationProcess.objects.filter(Q(intake=entry) | Q(ticket_number=normalize_ticket_number(entry.ticket_number))
+                                          | Q(source_ticket__external_id=entry.ticket_external_id)).exists():
+        raise Conflict("Este ticket já possui processo oficial, inclusive por importação histórica. Consulte o registro existente.")
     if action not in ("approve", "reject", "wait", "assume", "assign"):
         raise ValidationError("Ação de triagem inválida.")
     if action in ("assign", "assume") and (not entry.eligible or not ticket_is_eligible(entry.ticket)):
@@ -119,7 +123,7 @@ def decide_intake(*, request, pk, action, data):
         if link and not OTRSTicketConfigItem.objects.filter(ticket=ticket, cmdb_link=link, is_present_in_source=True).exists():
             raise Conflict("O vínculo CMDB mudou. Revise os candidatos.")
         process = CancellationProcess.objects.create(
-            intake=entry, owner=request.user, link=link,
+            intake=entry, ticket_number=normalize_ticket_number(entry.ticket_number), owner=request.user, link=link,
             config_item_id=link.source_config_item_id if link else "",
             contracting_client=link.contracting_client if link else "",
             project=(link.business_project or link.legacy_project) if link else "",
@@ -164,9 +168,14 @@ def _assign(process, user):
     process.owner = user
 
 
+def pending_is_financial(pending):
+    return (pending.kind in forms.FINANCIAL_PENDING_KINDS or pending.amount is not None
+            or getattr(pending, "legacy_reference", None) is not None)
+
+
 def financial_summary(process):
     treatment = process.treatment
-    lines = [f"Assunto: Cancelamento {process.intake.ticket_number} | {process.code} | {process.isp} | {process.designation}",
+    lines = [f"Assunto: Cancelamento {process.display_ticket_number} | {process.code} | {process.isp} | {process.designation}",
              "", f"Cliente: {process.contracting_client}", f"Cliente final: {process.final_client or 'Não informado'}",
              f"Projeto: {process.project}", f"Circuito: {process.designation}", f"Localidade: {process.city} / {process.state}",
              f"Data efetiva: {treatment.effective_date or 'Não confirmada'}",
@@ -178,6 +187,8 @@ def financial_summary(process):
                      f"cobrado R$ {obligation.charged_amount if obligation.charged_amount is not None else 'não informado'}; "
                      f"vencimento {obligation.due_date or 'não informado'}; {obligation.get_document_status_display()}; "
                      f"documento {obligation.document_reference or 'não disponível'}; referência {obligation.reference_number or 'não informada'}.")
+        if obligation.legacy_field:
+            lines.append(f"  Origem histórica: {obligation.legacy_field}; {obligation.get_reconciliation_state_display()}. Não somar com pendências sem conciliação.")
     if not process.obligations.exists():
         lines.append("- Nenhuma obrigação registrada.")
     lines += ["", "Documentos e evidências:"]
@@ -224,7 +235,7 @@ def act_on_process(*, request, pk, action, data):
     process = get_object_or_404(CancellationScope.processes(request.user).select_for_update(), pk=pk)
     revision = valid(forms.OperationalForm(data))["revision"]
     check_revision(process, revision)
-    if process.stage == CancellationProcess.Stage.COMPLETED:
+    if process.stage == CancellationProcess.Stage.COMPLETED and action not in ("assign", "assume"):
         raise ValidationError("Processo concluído: o histórico permanece preservado para consulta.")
     if action in ("pending_resolve", "equipment_update", "obligation_update"):
         try:
@@ -257,7 +268,7 @@ def act_on_process(*, request, pk, action, data):
     elif action == "link":
         # Explicit reassociation uses only current Ticket–CI candidates and the same scope as triage.
         require(request.user, "triage_cancellations")
-        values = valid(forms.TriageForm(data, user=request.user, intake=process.intake))
+        values = valid(forms.TriageForm(data, user=request.user, intake=process.intake, ticket=process.source_ticket))
         link = values.get("link")
         if not link or not values["reason"].strip():
             raise ValidationError("Selecione um circuito atual e justifique a associação.")
@@ -268,7 +279,7 @@ def act_on_process(*, request, pk, action, data):
         process.isp = link.operator.name if link.operator else ""
         description = f"Vínculo CMDB validado: CI {link.source_config_item_id}. {values['reason']}"
     elif action == "start":
-        if process.stage != CancellationProcess.Stage.ORDER:
+        if process.stage not in (CancellationProcess.Stage.ORDER, CancellationProcess.Stage.PENDING):
             raise ValidationError("A tratativa já foi iniciada.")
         process.stage = CancellationProcess.Stage.REQUEST
         description = "Tratativa com o ISP iniciada."
@@ -300,8 +311,8 @@ def act_on_process(*, request, pk, action, data):
         financial = pending.kind in forms.FINANCIAL_PENDING_KINDS or pending.amount is not None
         description = f"Pendência #{pending.pk} criada: {pending.get_kind_display()}. {pending.description}"
     elif action == "pending_resolve":
-        pending = get_object_or_404(process.pendings, pk=child_id)
-        financial = pending.kind in forms.FINANCIAL_PENDING_KINDS or pending.amount is not None
+        pending = get_object_or_404(process.pendings.select_related("legacy_reference"), pk=child_id)
+        financial = pending_is_financial(pending)
         if financial:
             require(request.user, "view_cancellation_finance")
             require(request.user, "manage_cancellation_finance")

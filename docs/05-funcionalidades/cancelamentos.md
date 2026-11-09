@@ -1,6 +1,6 @@
 # Cancelamentos — operação NOC
 
-Estado: segunda entrega operacional em DEV (correção da elegibilidade OTRS e refinamento da lista). O módulo acompanha cancelamentos de circuitos com triagem humana, tratativa ISP, equipamentos, pendências simultâneas, obrigações documentais e encaminhamento manual ao Financeiro. Não houve deploy nem carga histórica. Não representa a versão 1.4.0.
+Estado: operação em DEV com elegibilidade OTRS corrigida e importador histórico preparado. O módulo acompanha cancelamentos de circuitos com triagem humana, tratativa ISP, equipamentos, pendências simultâneas, obrigações documentais e encaminhamento manual ao Financeiro. Preview e pré-reconciliação do snapshot ArionBroker foram realizados; Apply aguarda MySQL DEV. Não houve deploy nem carga histórica. Não representa a versão 1.4.0.
 
 ## Acesso e telas
 
@@ -150,7 +150,7 @@ Permissions `cancelamentos.*` registradas no catálogo de Grupos e acessos, sem 
 | `manage_cancellation_finance` | Obrigações e registro manual de encaminhamento, também exige consulta financeira |
 | `export_cancellations` | CSV operacional escopado |
 | `configure_cancellations` | Configuração da projeção local |
-| `import_cancellation_history` | Reserva para futura execução controlada; não existe importador nesta entrega |
+| `import_cancellation_history` | Execução controlada do importador histórico, com consulta e escopo global; Apply exclusivo MySQL DEV validado |
 
 Conceder permissions explicitamente na Central de Configurações, com `GroupDataScope` apropriado. Superuser mantém acesso nativo. A permissão de administrar integrações não admite pedidos; acesso ao Cockpit não concede acesso ao módulo.
 
@@ -170,9 +170,9 @@ Os indicadores de pendências/documentos/envios podem se sobrepor às etapas pri
 
 ## Models, migrations e worker
 
-App: `arion_geo/aplicativos/cancelamentos/`. Models: `IntakeSettings`, `CancellationIntake`, `CancellationProcess`, `ISPTreatment`, `CancellationPending`, `CancellationEquipment`, `FinancialObligation`, `CancellationEvidence`, `FinancialHandoff`, `HandoffObligation`, `CancellationEvent` e `LegacyCancellationReference`.
+App: `arion_geo/aplicativos/cancelamentos/`. Models: `IntakeSettings`, `CancellationIntake`, `CancellationProcess`, `ISPTreatment`, `CancellationPending`, `CancellationEquipment`, `FinancialObligation`, `CancellationEvidence`, `FinancialHandoff`, `HandoffObligation`, `CancellationEvent`, `LegacyImportRun` e `LegacyCancellationReference`.
 
-Migrations aditivas: `0001_initial`, `0002_cancellationevent_details`. Aplicar pelo Python da `.venv` no banco DEV confirmado. O ambiente desta entrega está configurado para SQLite, sem bootstrap/candidato MySQL; isso não é validação MySQL e não altera a configuração operacional de outros ambientes. Build frontend inclui `frontend_src/js/cancelamentos/cancelamentos.js` pelo mecanismo existente.
+Migrations aditivas: `0001_initial`, `0002_cancellationevent_details`, `0003_cancellationprocess_origin_and_more` e `0004_alter_financialobligation_legacy_field_and_more`. As duas últimas preservam identidades/fatos históricos e admissão sem triagem somente para origem ArionBroker. Aplicar pelo Python da `.venv` no banco DEV confirmado. O checkout continua em SQLite, sem candidato MySQL; as migrations locais preservaram dados após backup e não constituem validação MySQL. Build frontend inclui `frontend_src/js/cancelamentos/cancelamentos.js` pelo mecanismo existente.
 
 ## Nota original OTRS — dependência
 
@@ -180,13 +180,13 @@ A leitura genérica do client bloqueia artigos/corpos/anexos. `fetch_quality_art
 
 Nesta entrega nenhum corpo de artigo foi consultado, persistido ou enviado ao frontend/auditoria. A evolução exige contrato autorizado por TicketID, autor/horário, seleção do primeiro artigo válido, Data Scope, armazenamento privado e apresentação segura do conteúdo. A origem será identificada como **OTRS**, separada das observações locais **ARION OPS**. Essa dependência não bloqueia o fluxo atual.
 
-## Migração histórica futura e limites
+## Importação histórica e limites
 
-`LegacyCancellationReference` reserva origem, entidade, PK, lote, versão de mapeamento, checksum, destino e data com unicidade de origem/entidade/PK. Histórico tem datas próprias e modelos separados para observações/valores. O importador ainda não existe; o banco real do legado não foi disponibilizado. `ArionBroken1`/RECs e os 162 registros de uma captura não são fonte de Cancelamentos e não foram carregados.
+`importar_cancelamentos_legado` oferece preview, dry-run e Apply protegido. O dump real e o schema das cinco tabelas foram conferidos: 162 cancelamentos e 1.985 filhos, totalizando 2.147 registros. As referências guardam origem/entidade/PK única, checksum, lote, fatos estruturados e destino. O Apply exige MySQL 8 local `arion_geo_dev`, migrations, backup/restauração verificados, conta autorizada e relatório aprovado para o plano atual; permanece bloqueado neste checkout SQLite.
 
-Procedimento futuro: identificar esquema real → extrair snapshot autorizado → mapear chaves/estados/datas/valores → preview privado → dry-run sem alterar domínio → reconciliar totais novos/já importados/conflitos/inválidos → revisar → aplicar em lotes com checkpoint/backup → conferir novamente. Resolver TicketID, Ticket#, pedido e CI sem deduplicar por texto semelhante; reaplicar lote não pode criar outro processo. Preservar datas legadas sem inventar decisões atuais. Ver [plano de integração](cancelamentos-plano-integracao.md).
+O processo oficial importado reutiliza `CancellationProcess`, sem criar triagem ou aprovação fictícia quando não houver entrada correspondente. Fila determina a etapa; status original, responsável legado e datas brutas ficam separados da operação atual. Concluídos sem data são sinalizados, ano 0026 não é convertido, DESCARTADA é distinta de RESOLVIDA e pendências abertas continuam visíveis mesmo em histórico concluído. Identidade OTRS usa número operacional exato; vínculo CMDB exige evidência. Atribuição atual, inclusive em concluídos, não altera responsável legado. Textos livres importados têm exposição financeira conservadora até revisão. Ver [mapeamento completo, configuração e comandos](cancelamentos-migracao-arionbroker.md) e [plano de integração](cancelamentos-plano-integracao.md).
 
-Permanecem futuros: migração histórica, reconciliação CMDB, múltiplos processos por ticket, reconsideração/reabertura, upload privado de anexos, envio automático, painel Financeiro, confirmação de pagamento e gráficos financeiros. Não há automação remota, dados fabricados ou deploy nesta entrega.
+Permanecem futuros: configurar/homologar MySQL DEV e executar a carga histórica, reconciliação de status CMDB, múltiplos processos por ticket, reconsideração/reabertura, upload privado de anexos, envio automático, painel Financeiro, confirmação de pagamento e gráficos financeiros. Não há automação remota, dados fabricados ou deploy nesta entrega.
 
 ## Validação
 

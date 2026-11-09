@@ -1,5 +1,5 @@
 {% load cancellation_display %}
 <ol class="canc-timeline">
-{% for item in history %}<li><div><strong>{{ item.actor|person_name }}</strong><time>{{ item.created_at|date:"d/m/Y H:i" }}</time></div><p>{{ item.description|linebreaksbr }}</p>{% if item.financial and perms.cancelamentos.view_cancellation_finance and item.details %}<dl>{% for label, value in item.details.items %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>{% endif %}</li>
+{% for item in history %}<li><small>{{ item.origin_label }}{% if item.details.legacy_id %} · #{{ item.details.legacy_id }}{% endif %}{% if item.details.legacy_type %} · {{ item.details.legacy_type }}{% endif %}</small><div><strong>{% if item.action|slice:':7' == 'legacy_' %}{% if item.details.legacy_actor_id %}Usuário legado #{{ item.details.legacy_actor_id }}{% else %}Autor histórico não informado{% endif %}{% else %}{{ item.actor|person_name }}{% endif %}</strong><time>{{ item.created_at|date:"d/m/Y H:i:s" }}</time></div><p>{{ item.description|linebreaksbr }}</p>{% if item.financial and perms.cancelamentos.view_cancellation_finance and item.details and item.action|slice:':7' != 'legacy_' %}<dl>{% for label, value in item.details.items %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>{% endif %}</li>
 {% empty %}<li class="canc-empty">Nenhuma atividade registrada.</li>{% endfor %}
 </ol>

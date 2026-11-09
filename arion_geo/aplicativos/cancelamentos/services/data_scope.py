@@ -58,5 +58,12 @@ class CancellationScope:
         if DataScopeService.is_global(user):
             return qs
         allowed_links = DataScopeService.filter_queryset(user, CMDBLinkMirror.objects.filter(is_present_in_source=True))
-        qs = qs.filter(intake__in=cls.intakes(user), link__in=allowed_links)
+        # An imported official record may have no intake. Its verified current CI
+        # and both identity dimensions still have to be authorized independently.
+        invalid = OTRSTicketConfigItem.objects.filter(ticket_id=OuterRef("source_ticket_id"), is_present_in_source=True).filter(
+            Q(cmdb_link__isnull=True) | ~Q(cmdb_link__in=allowed_links))
+        current = OTRSTicketConfigItem.objects.filter(ticket_id=OuterRef("source_ticket_id"), cmdb_link_id=OuterRef("link_id"), is_present_in_source=True)
+        qs = qs.annotate(_legacy_invalid=Exists(invalid), _legacy_current=Exists(current)).filter(
+            Q(intake__in=cls.intakes(user)) | Q(origin="ARIONBROKER", intake__isnull=True,
+                _legacy_invalid=False) & (Q(source_ticket__isnull=True) | Q(_legacy_current=True)), link__in=allowed_links)
         return cls._current_identity(user, cls._identity(user, qs, "contracting_client", "project"))

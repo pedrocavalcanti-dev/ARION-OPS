@@ -5,6 +5,7 @@ from django.contrib.auth.decorators import login_required, permission_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, OperationalError, transaction
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -16,10 +17,11 @@ from aplicativos.chamados.services import otrs_ticket_url
 from . import forms
 from .services.data_scope import CancellationScope
 from .services.otrs_intake import intake_settings, source_status, synchronization_indicator, current_intakes
-from .models import CancellationIntake, CancellationPending
+from .models import CancellationIntake, CancellationPending, CancellationProcess
 from .services.queries import query_module, TABS
+from .services.legacy_history import legacy_context
 from .services.workflow import (Conflict, require, decide_intake, act_on_process,
-                                financial_summary, completion_blockers)
+                                financial_summary, completion_blockers, pending_is_financial)
 
 
 def module_access(view):
@@ -72,13 +74,13 @@ def index(request):
         row.responsible = row.assigned_to if intake else row.owner
         row.current_entry = row.pk in current_ids if intake else False
         row.can_assign = request.user.has_perm("cancelamentos.assign_cancellations") and (
-            (row.status == "WAITING" and row.current_entry) if intake else row.stage != "COMPLETED")
+            (row.status == "WAITING" and row.current_entry and not row._has_official) if intake else True)
         row.assign_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assign"))
         row.assume_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assume"))
     if data["tab"] == "pending":
         visible = CancellationPending.objects.filter(process_id__in=[row.pk for row in page], status="OPEN").order_by("expected_date", "pk")
         if not request.user.has_perm("cancelamentos.view_cancellation_finance"):
-            visible = visible.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True)
+            visible = visible.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True, legacy_reference__isnull=True)
         by_process = {}
         for pending in visible:
             by_process.setdefault(pending.process_id, []).append(pending)
@@ -108,11 +110,15 @@ def intake_detail(request, pk):
     history = entry.events.filter(process__isnull=True) | entry.events.filter(action="triage_approve")
     if not can_finance:
         history = history.filter(financial=False)
-    process = CancellationScope.processes(request.user).filter(intake=entry).first()
+    official_identity = Q(intake=entry) | Q(ticket_number=entry.ticket_number)
+    if entry.ticket_id:
+        official_identity |= Q(source_ticket_id=entry.ticket_id)
+    process = CancellationScope.processes(request.user).filter(official_identity).first()
     source_ok, source_notice, _ = source_status()
     return render(request, "cancelamentos/intake_detail.html", {
         "entry": entry, "triage_form": form, "candidates": candidates, "process": process,
         "is_current_entry": current_intakes(CancellationIntake.objects.filter(pk=entry.pk)).exists(),
+        "has_official_process": CancellationProcess.objects.filter(official_identity).exists(),
         "history": history.select_related("actor"), "otrs_url": otrs_ticket_url(entry.ticket_external_id),
         "source_notice": source_notice, "source_ok": source_ok,
     })
@@ -158,7 +164,7 @@ def _dialog(action, title, form, *, key=None, child=None, button="Salvar"):
 
 @module_access
 def detail(request, pk):
-    process = get_object_or_404(CancellationScope.processes(request.user).select_related("intake", "owner", "treatment", "link__operator"), pk=pk)
+    process = get_object_or_404(CancellationScope.processes(request.user).select_related("intake", "source_ticket", "owner", "treatment", "link__operator"), pk=pk)
     can_finance = request.user.has_perm("cancelamentos.view_cancellation_finance")
     manage_finance = can_finance and request.user.has_perm("cancelamentos.manage_cancellation_finance")
     can_change = request.user.has_perm("cancelamentos.change_cancellation_stage")
@@ -176,18 +182,18 @@ def detail(request, pk):
             _dialog("treatment", "Registrar retorno e confirmação ISP", forms.TreatmentForm(instance=process.treatment)),
             _dialog("evidence", "Registrar referência de evidência", evidence_form),
         ]
-        if request.user.has_perm("cancelamentos.triage_cancellations"):
-            dialogs.append(_dialog("link", "Validar circuito principal", forms.TriageForm(user=request.user, intake=process.intake, initial={"link": process.link_id})))
+        if request.user.has_perm("cancelamentos.triage_cancellations") and (process.intake_id or process.source_ticket_id):
+            dialogs.append(_dialog("link", "Validar circuito principal", forms.TriageForm(user=request.user, intake=process.intake, ticket=process.source_ticket, initial={"link": process.link_id})))
     if can_pending:
         dialogs += [_dialog("pending_add", "Nova pendência", forms.PendingForm(financial=manage_finance)),
                     _dialog("equipment_add", "Adicionar equipamento", forms.EquipmentForm())]
-    pendings = process.pendings.select_related("owner")
+    pendings = process.pendings.select_related("owner", "legacy_reference")
     if not can_finance:
-        pendings = pendings.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True)
+        pendings = pendings.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True, legacy_reference__isnull=True)
     pendings = list(pendings)
     for pending in pendings:
         pending.can_resolve = False
-        if can_pending and pending.status == "OPEN" and (manage_finance or (pending.kind not in forms.FINANCIAL_PENDING_KINDS and pending.amount is None)):
+        if can_pending and pending.status == "OPEN" and (manage_finance or not pending_is_financial(pending)):
             pending.can_resolve = True
             dialogs.append(_dialog("pending_resolve", f"Resolver pendência #{pending.pk}", forms.ResolvePendingForm(),
                                    key=f"pending-{pending.pk}", child=pending.pk))
@@ -214,7 +220,8 @@ def detail(request, pk):
         "handoffs": process.handoffs.select_related("actor") if can_finance else [],
         "summary": financial_summary(process) if can_finance else "",
         "blockers": completion_blockers(process) if process.stage != "COMPLETED" else [],
-        "otrs_url": otrs_ticket_url(process.intake.ticket_external_id),
+        "otrs_url": otrs_ticket_url(process.external_ticket_id) if process.external_ticket_id else "",
+        "legacy": legacy_context(process, request.user),
     })
 
 
@@ -279,7 +286,7 @@ def export(request):
                       obj.client_snapshot, obj.project_snapshot, obj.designation_snapshot,
                       obj.link.operator.name if obj.link_id and obj.link.operator else "", obj.assigned_to or "", "")
         else:
-            values = ("Processo ARION OPS", obj.intake.ticket_external_id, obj.intake.ticket_number, obj.code,
+            values = (obj.get_origin_display(), obj.external_ticket_id, obj.display_ticket_number, obj.code,
                       obj.get_stage_display(), obj.contracting_client, obj.project, obj.designation, obj.isp, obj.owner or "", obj.completed_at)
         writer.writerow([_csv_value(value) for value in values])
     AuditService.record(request=request, category="cancellation", module="cancelamentos", action="export",

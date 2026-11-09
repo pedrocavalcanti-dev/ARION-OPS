@@ -80,9 +80,15 @@ class CancellationProcess(models.Model):
     class Stage(models.TextChoices):
         ORDER = "ORDER", "Pedido"
         REQUEST = "REQUEST", "Solicitação"
+        PENDING = "PENDING", "Pendências (origem histórica)"
         COMPLETED = "COMPLETED", "Concluído"
 
-    intake = models.OneToOneField(CancellationIntake, on_delete=models.PROTECT, related_name="process")
+    intake = models.OneToOneField(CancellationIntake, null=True, blank=True, on_delete=models.PROTECT, related_name="process")
+    origin = models.CharField(max_length=20, default="ARION_OPS", choices=(("ARION_OPS", "ARION OPS"), ("ARIONBROKER", "Importado do ArionBroker")))
+    source_ticket = models.ForeignKey("integracoes.OTRSTicket", null=True, blank=True, on_delete=models.SET_NULL,
+                                      related_name="legacy_cancellation_processes")
+    ticket_number = models.CharField(max_length=80, null=True, blank=True, unique=True)
+    ticket_opened_on = models.DateField(null=True, blank=True)
     stage = models.CharField(max_length=12, choices=Stage.choices, default=Stage.ORDER, db_index=True)
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
                               on_delete=models.SET_NULL, related_name="cancellation_processes")
@@ -108,10 +114,23 @@ class CancellationProcess(models.Model):
     class Meta:
         ordering = ("-created_at", "-pk")
         permissions = PERMISSIONS
+        constraints = [models.CheckConstraint(condition=models.Q(intake__isnull=False) | models.Q(origin="ARIONBROKER"), name="cancel_process_admission_origin")]
 
     @property
     def code(self):
         return f"CANC-{self.pk:06d}"
+
+    @property
+    def display_ticket_number(self):
+        return self.ticket_number or (self.intake.ticket_number if self.intake_id else "")
+
+    @property
+    def external_ticket_id(self):
+        return self.source_ticket.external_id if self.source_ticket_id else self.intake.ticket_external_id if self.intake_id else None
+
+    @property
+    def observed_queue_name(self):
+        return self.source_ticket.queue_name if self.source_ticket_id else self.intake.queue_name if self.intake_id else "Não localizado"
 
     def __str__(self):
         return self.code
@@ -147,6 +166,7 @@ class CancellationPending(models.Model):
         OPEN = "OPEN", "Aberta"
         RESOLVED = "RESOLVED", "Resolvida"
         REFERRED = "REFERRED", "Encaminhada à área responsável"
+        DISCARDED = "DISCARDED", "Descartada"
 
     process = models.ForeignKey(CancellationProcess, on_delete=models.CASCADE, related_name="pendings")
     kind = models.CharField("Tipo", max_length=20, choices=Kind.choices)
@@ -219,6 +239,10 @@ class FinancialObligation(models.Model):
     document_status = models.CharField("Situação documental", max_length=12, choices=DocumentStatus.choices, default=DocumentStatus.WAITING)
     document_reference = models.CharField("Documento / referência privada", max_length=1000, blank=True)
     financial_status = models.CharField(max_length=12, choices=FinancialStatus.choices, default=FinancialStatus.UNKNOWN)
+    legacy_field = models.CharField(max_length=40, null=True, blank=True)
+    reconciliation_state = models.CharField(max_length=20, default="NOT_REQUIRED", choices=(
+        ("NOT_REQUIRED", "Sem reconciliação legada"), ("UNRECONCILED", "Valor legado a reconciliar"),
+        ("POSSIBLE_DUPLICATE", "Possível correspondência com pendência legada")))
     paid_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     confirmed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
@@ -228,6 +252,7 @@ class FinancialObligation(models.Model):
 
     class Meta:
         constraints = [
+            models.UniqueConstraint(fields=("process", "legacy_field"), name="cancel_legacy_amount_unique"),
             models.CheckConstraint(condition=models.Q(estimated_amount__isnull=True) | models.Q(estimated_amount__gte=0), name="cancel_estimated_nonnegative"),
             models.CheckConstraint(condition=models.Q(charged_amount__isnull=True) | models.Q(charged_amount__gte=0), name="cancel_charged_nonnegative"),
         ]
@@ -270,7 +295,7 @@ class HandoffObligation(models.Model):
 
 
 class CancellationEvent(models.Model):
-    intake = models.ForeignKey(CancellationIntake, on_delete=models.PROTECT, related_name="events")
+    intake = models.ForeignKey(CancellationIntake, null=True, blank=True, on_delete=models.PROTECT, related_name="events")
     process = models.ForeignKey(CancellationProcess, null=True, blank=True, on_delete=models.PROTECT, related_name="events")
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
@@ -283,9 +308,27 @@ class CancellationEvent(models.Model):
     class Meta:
         ordering = ("-created_at", "-pk")
 
+    @property
+    def origin_label(self):
+        return {"legacy_historicocancelamento": "Histórico ArionBroker",
+                "legacy_historicofila": "Movimentação ArionBroker",
+                "legacy_observacaocancelamento": "Observação ArionBroker"}.get(self.action, "Ação ARION OPS")
+
+
+class LegacyImportRun(models.Model):
+    batch = models.CharField(max_length=80, unique=True)
+    snapshot_checksum = models.CharField(max_length=64)
+    schema_checksum = models.CharField(max_length=64)
+    mapping_version = models.CharField(max_length=40)
+    status = models.CharField(max_length=16, default="RUNNING", choices=(("RUNNING", "Em execução"), ("SUCCESS", "Concluída"), ("FAILED", "Falhou")))
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True)
+    counts = models.JSONField(default=dict)
+
 
 class LegacyCancellationReference(models.Model):
-    """Mapping contract only. There is deliberately no legacy importer yet."""
+    """Immutable source facts and identity; exposed only through scoped services."""
     source = models.CharField(max_length=80)
     entity = models.CharField(max_length=80)
     legacy_pk = models.CharField(max_length=160)
@@ -294,6 +337,11 @@ class LegacyCancellationReference(models.Model):
     mapping_version = models.CharField(max_length=40)
     checksum = models.CharField(max_length=64)
     imported_at = models.DateTimeField(default=timezone.now)
+    source_data = models.JSONField(default=dict)
+    reconciliation = models.JSONField(default=dict)
+    import_run = models.ForeignKey(LegacyImportRun, null=True, blank=True, on_delete=models.PROTECT, related_name="references")
+    event = models.OneToOneField(CancellationEvent, null=True, blank=True, on_delete=models.PROTECT, related_name="legacy_reference")
+    pending = models.OneToOneField(CancellationPending, null=True, blank=True, on_delete=models.PROTECT, related_name="legacy_reference")
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=("source", "entity", "legacy_pk"), name="cancel_legacy_identity_unique")]

@@ -19,11 +19,12 @@ class TriageForm(OperationalForm):
     link = forms.ModelChoiceField(label="Circuito principal validado", queryset=CMDBLinkMirror.objects.none(), required=False,
                                   empty_label="Sem vínculo confiável — manter pendente de associação")
 
-    def __init__(self, *args, user, intake, **kwargs):
+    def __init__(self, *args, user, intake, ticket=None, **kwargs):
         super().__init__(*args, **kwargs)
         from aplicativos.integracoes.services.analytics import LinkQueryService
-        candidates = LinkQueryService.base(user).filter(ticket_relations__ticket_id=intake.ticket_id,
-                                                        ticket_relations__is_present_in_source=True).distinct()
+        ticket_id = intake.ticket_id if intake else ticket.pk if ticket else None
+        candidates = LinkQueryService.base(user).filter(ticket_relations__ticket_id=ticket_id,
+                                                        ticket_relations__is_present_in_source=True).distinct() if ticket_id else CMDBLinkMirror.objects.none()
         self.fields["link"].queryset = candidates
         self.fields["link"].label_from_instance = lambda link: f"{link.designation or link.name} · CI {link.source_config_item_id}"
 
