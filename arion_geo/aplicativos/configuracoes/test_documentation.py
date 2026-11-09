@@ -32,7 +32,7 @@ class DocumentationPortalTests(TestCase):
         self.assertContains(home, "Segurança e operação")
         self.assertContains(home, "Dados e Integrações")
         self.assertContains(home, "10 documentos")
-        self.assertContains(home, "7 documentos")
+        self.assertContains(home, "8 documentos")
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Caminho da request")
 

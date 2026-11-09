@@ -30,10 +30,25 @@ class LoginForm(AuthenticationForm):
 
 
 class PasswordSetForm(SetPasswordForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "new_password1" in self.fields:
+            self.fields["new_password1"].label = "Nova senha"
+            self.fields["new_password1"].widget.attrs.update({
+                "placeholder": "Digite sua nova senha",
+                "autocomplete": "new-password",
+            })
+        if "new_password2" in self.fields:
+            self.fields["new_password2"].label = "Confirmar nova senha"
+            self.fields["new_password2"].widget.attrs.update({
+                "placeholder": "Confirme sua nova senha",
+                "autocomplete": "new-password",
+            })
+
     def clean(self):
         cleaned = super().clean()
         password = cleaned.get("new_password2")
-        if password and self.user.check_password(password):
+        if password and self.user and self.user.check_password(password):
             self.add_error("new_password2", ValidationError("A nova senha deve ser diferente da senha atual."))
         return cleaned
 

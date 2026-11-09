@@ -11,6 +11,7 @@ from .forms import PasswordSetForm, VerifiedPasswordSetForm
 from .models import AccessToken, UserSecurityProfile
 from .security import (
     apply_access_token_password,
+    apply_required_password_change,
     apply_verified_password_change,
     get_security_profile,
     mask_email,
@@ -112,58 +113,30 @@ def _complete_link_password(request, purpose):
 def required_password(request):
     if not password_change_required(request.user):
         return redirect("painel:index")
-    profile, _ = UserSecurityProfile.objects.get_or_create(user=request.user)
-    reason = "Sua senha completou o prazo de 90 dias." if profile.change_reason == UserSecurityProfile.ChangeReason.EXPIRED else "A política de segurança exige que você defina uma senha pessoal antes de continuar."
-    if request.method == "POST" and request.POST.get("action") == "send_code":
-        sent, result = send_password_verification_code(request.user)
-        if sent:
-            AuditService.record(
-                request=request, category="SECURITY", action="PASSWORD_VERIFICATION_CODE_SENT",
-                module="Autenticação", description="Código de segurança enviado para confirmação de identidade.", obj=request.user,
-            )
-            messages.success(request, "Se o e-mail corporativo estiver configurado, o código chegará em instantes.")
-        else:
-            AuditService.record(
-                request=request, category="SECURITY", action="PASSWORD_VERIFICATION_CODE_SEND_FAILED",
-                result="FAILURE", module="Autenticação",
-                description="Não foi possível enviar o código de segurança.", obj=request.user,
-                metadata={"reason": result},
-            )
-            messages.error(request, "Não foi possível enviar o código. Verifique a configuração de e-mail com a administração.")
-        return redirect("autenticacao:required-password")
-
-    form = VerifiedPasswordSetForm(request.user, request.POST or None) if request.method == "POST" else VerifiedPasswordSetForm(request.user)
-    if request.method == "POST" and request.POST.get("action") == "change_password" and form.is_valid():
-        changed, result = apply_verified_password_change(
+    profile = get_security_profile(request.user)
+    form = PasswordSetForm(request.user, request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        apply_required_password_change(
             request.user,
-            code=form.cleaned_data["verification_code"],
             new_password=form.cleaned_data["new_password1"],
         )
-        if changed:
-            AuditService.record(
-                request=request, category="SECURITY", action="PASSWORD_VERIFICATION_CODE_VALIDATED",
-                module="Autenticação", description="Código de segurança validado para alteração de senha.", obj=request.user,
-            )
-            AuditService.record(
-                request=request, user=request.user, category="SECURITY",
-                action="PASSWORD_CHANGED_INITIAL" if profile.change_reason != UserSecurityProfile.ChangeReason.EXPIRED else "PASSWORD_RENEWED",
-                module="Autenticação", description="Senha alterada após confirmação de identidade.", obj=request.user,
-            )
-            logout(request)
-            messages.success(request, "Senha atualizada. Entre novamente com sua nova senha.")
-            return redirect("autenticacao:login")
         AuditService.record(
-            request=request, category="SECURITY", action="PASSWORD_VERIFICATION_CODE_INVALID",
-            result="FAILURE", module="Autenticação", description="Código de segurança inválido, expirado ou bloqueado.",
-            obj=request.user, metadata={"reason": result},
+            request=request,
+            user=request.user,
+            category="SECURITY",
+            action="PASSWORD_CHANGED_INITIAL" if profile.change_reason != UserSecurityProfile.ChangeReason.EXPIRED else "PASSWORD_RENEWED",
+            module="Autenticação",
+            description="Senha pessoal atualizada no fluxo obrigatório de segurança.",
+            obj=request.user,
         )
-        form.add_error("verification_code", {
-            "expirado": "O código expirou. Solicite outro código.",
-            "limite": "O limite de tentativas foi atingido. Solicite um novo código mais tarde.",
-        }.get(result, "O código não é válido. Confira os dígitos ou solicite um novo código."))
+        logout(request)
+        messages.success(request, "Senha atualizada com sucesso. Acesse sua conta com a nova senha.")
+        return redirect("autenticacao:login")
     response = render(request, "autenticacao/password_flow.html", {
-        "flow": "required", "title": "Atualização obrigatória de senha",
-        "description": reason, "form": form, "masked_email": mask_email(request.user.email),
+        "flow": "required",
+        "title": "Atualize sua senha",
+        "description": "Por segurança, você precisa definir uma nova senha pessoal para continuar utilizando o ARION OPS.",
+        "form": form,
         "invalid_link": False,
     })
     _set_sensitive_flow_headers(response)

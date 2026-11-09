@@ -311,3 +311,25 @@ def apply_verified_password_change(user, *, code, new_password, now=None):
         profile.password_changed_at = now
         profile.save(update_fields=("must_change_password", "change_reason", "password_changed_at", "updated_at"))
         return True, "alterado"
+
+
+def apply_required_password_change(user, *, new_password, now=None):
+    """Atomically set the new password and update the security profile state."""
+    now = now or timezone.now()
+    with transaction.atomic():
+        profile, _ = UserSecurityProfile.objects.select_for_update().get_or_create(user=user)
+        user.set_password(new_password)
+        user.save(update_fields=("password",))
+        profile.must_change_password = False
+        profile.change_reason = ""
+        profile.password_changed_at = now
+        if not profile.first_activation_completed_at:
+            profile.first_activation_completed_at = now
+        profile.save(update_fields=(
+            "must_change_password", "change_reason", "password_changed_at",
+            "first_activation_completed_at", "updated_at",
+        ))
+        VerificationChallenge.objects.filter(
+            user=user, consumed_at__isnull=True,
+        ).update(code_hash="", consumed_at=now)
+        return user

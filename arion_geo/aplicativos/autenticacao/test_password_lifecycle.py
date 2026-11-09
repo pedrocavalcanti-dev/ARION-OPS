@@ -295,7 +295,26 @@ class PasswordLifecycleTests(TestCase):
         }, follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.request["PATH_INFO"], reverse("autenticacao:required-password"))
-        self.assertContains(response, "Atualização obrigatória de senha")
+        self.assertContains(response, "Atualize sua senha")
+        self.assertContains(response, "SEGURANÇA DA CONTA")
+        self.assertContains(response, "Por segurança, você precisa definir uma nova senha pessoal para continuar utilizando o ARION OPS.")
+        self.assertContains(response, "Atualizar senha e continuar")
+        self.assertNotContains(response, "Código de verificação")
+        self.assertNotContains(response, "Enviar código por e-mail")
+        self.assertNotContains(response, "E-mail corporativo cadastrado")
+
+    def test_unauthenticated_user_cannot_access_required_password(self):
+        self.client.logout()
+        get_res = self.client.get(reverse("autenticacao:required-password"))
+        self.assertEqual(get_res.status_code, 302)
+        self.assertTrue(get_res["Location"].startswith(reverse("autenticacao:login")))
+        post_res = self.client.post(reverse("autenticacao:required-password"), {
+            "username": self.user.username,
+            "new_password1": GOOD_PASSWORD,
+            "new_password2": GOOD_PASSWORD,
+        })
+        self.assertEqual(post_res.status_code, 302)
+        self.assertTrue(post_res["Location"].startswith(reverse("autenticacao:login")))
 
     def test_password_expires_exactly_at_90_days(self):
         self.activate_policy()
@@ -395,19 +414,15 @@ class PasswordLifecycleTests(TestCase):
             self.user, code="12345678", new_password=GOOD_PASSWORD, now=self.now,
         ), (False, "expirado"))
 
-    def test_valid_otp_changes_password_preserves_access_and_ends_old_session(self):
+    def test_required_password_change_without_otp_preserves_access_and_ends_old_session(self):
         self.make_pending()
         self.activate_policy()
         scope, _ = GroupDataScope.objects.get_or_create(group=self.group)
         scope.mode = GroupDataScope.Mode.ALL
         scope.save()
-        code = "12345678"
-        VerificationChallenge.objects.create(
-            user=self.user, code_hash=make_password(code), expires_at=self.now + timedelta(minutes=10),
-        )
         self.client.force_login(self.user)
         response = self.client.post(reverse("autenticacao:required-password"), {
-            "action": "change_password", "verification_code": code,
+            "action": "change_password",
             "new_password1": GOOD_PASSWORD, "new_password2": GOOD_PASSWORD,
         })
         self.assertEqual(response.status_code, 302)
@@ -420,10 +435,74 @@ class PasswordLifecycleTests(TestCase):
         self.assertLessEqual((timezone.now() - profile.password_changed_at).total_seconds(), 5)
         self.assertEqual(list(self.user.groups.all()), [self.group])
         self.assertEqual(self.group.data_scope.mode, GroupDataScope.Mode.ALL)
-        self.assertTrue(VerificationChallenge.objects.get(user=self.user).consumed_at)
         audit = list(AuditEvent.objects.filter(object_id=str(self.user.pk)).values_list("action", "metadata"))
-        self.assertIn("PASSWORD_VERIFICATION_CODE_VALIDATED", {row[0] for row in audit})
-        self.assertNotIn(code, str(audit))
+        self.assertIn("PASSWORD_CHANGED_INITIAL", {row[0] for row in audit})
+
+        # Login with old password fails
+        login_fail = self.client.post(reverse("autenticacao:login"), {
+            "username": self.user.username, "password": "Legacy-Operator-Password-2024!",
+        })
+        self.assertEqual(login_fail.status_code, 200)
+        self.assertContains(login_fail, "senha corretos")
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+        # Login with new password succeeds and grants access to painel
+        login_success = self.client.post(reverse("autenticacao:login"), {
+            "username": self.user.username, "password": GOOD_PASSWORD,
+        }, follow=True)
+        self.assertEqual(login_success.status_code, 200)
+        self.assertEqual(login_success.request["PATH_INFO"], reverse("painel:index"))
+
+    def test_full_mandatory_password_journey_dev(self):
+        # 1. Existing user logs in with current password
+        self.make_pending()
+        self.activate_policy()
+        login_res = self.client.post(reverse("autenticacao:login"), {
+            "username": self.user.username,
+            "password": "Legacy-Operator-Password-2024!",
+        }, follow=True)
+        # 2. Redirected to mandatory change
+        self.assertEqual(login_res.status_code, 200)
+        self.assertEqual(login_res.request["PATH_INFO"], reverse("autenticacao:required-password"))
+        # 3. Screen does not request code or email
+        self.assertContains(login_res, "Atualize sua senha")
+        self.assertContains(login_res, "SEGURANÇA DA CONTA")
+        self.assertContains(login_res, "Atualizar senha e continuar")
+        self.assertNotContains(login_res, "Código de verificação")
+        self.assertNotContains(login_res, "Enviar código por e-mail")
+        self.assertNotContains(login_res, "E-mail corporativo cadastrado")
+        # 4. Sets new password
+        post_res = self.client.post(reverse("autenticacao:required-password"), {
+            "action": "change_password",
+            "new_password1": GOOD_PASSWORD,
+            "new_password2": GOOD_PASSWORD,
+        }, follow=True)
+        self.assertEqual(post_res.status_code, 200)
+        self.assertEqual(post_res.request["PATH_INFO"], reverse("autenticacao:login"))
+        self.assertContains(post_res, "Senha atualizada com sucesso")
+        # 5. Old password no longer works
+        old_login = self.client.post(reverse("autenticacao:login"), {
+            "username": self.user.username,
+            "password": "Legacy-Operator-Password-2024!",
+        })
+        self.assertEqual(old_login.status_code, 200)
+        self.assertContains(old_login, "senha corretos")
+        # 6. Access is released with new password
+        new_login = self.client.post(reverse("autenticacao:login"), {
+            "username": self.user.username,
+            "password": GOOD_PASSWORD,
+        }, follow=True)
+        self.assertEqual(new_login.status_code, 200)
+        self.assertEqual(new_login.request["PATH_INFO"], reverse("painel:index"))
+        # 7. Date of change is updated
+        self.user.refresh_from_db()
+        profile = self.user.security_profile
+        self.assertFalse(profile.must_change_password)
+        self.assertIsNotNone(profile.password_changed_at)
+        self.assertLessEqual((timezone.now() - profile.password_changed_at).total_seconds(), 5)
+        # 8. Next expiration is scheduled for 90 days
+        self.assertFalse(password_change_required(self.user, now=profile.password_changed_at + timedelta(days=89)))
+        self.assertTrue(password_change_required(self.user, now=profile.password_changed_at + timedelta(days=91)))
 
     def test_management_activation_is_dry_run_idempotent_and_keeps_admin_in_scope(self):
         service = self.User.objects.create_user(username="svc_worker", password="service-pass")
