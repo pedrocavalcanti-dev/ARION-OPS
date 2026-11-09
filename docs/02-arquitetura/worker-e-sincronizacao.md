@@ -29,6 +29,7 @@ O scheduler compara a ultima execucao e o estado sincronizado de cada fonte. OTR
 | OTRS FAST | 2 min | Delta por `ticket.change_time`; janela de segurança de 2 min. |
 | OTRS FULL | 30 min | Reconcilia as quatro filas configuradas para o Cockpit e relações; tem prioridade sobre FAST. Um FULL é antecipado quando a cobertura configurada ainda não foi aplicada. |
 | CMDB FULL | 10 min | Busca Search/Get completa e reconcilia snapshot validado. |
+| Entrada Cancelamentos | 2 min; retry até 30 min | Projeção local da fila `NOC - CANCELAMENTOS NGO`, após avaliar as sincronizações; lease/estado `cancellation_intake`, execuções `RECONCILE`. Exige FULL aplicado e origem recente. Nunca cria pedidos oficiais. |
 | Retry de falha | 2-30 min | Backoff progressivo persistido; preserva o mirror atual e informa a proxima tentativa. |
 
 Primeira carga e reconstrução requerem FULL. O scheduler é verificado em intervalos menores do que as cadências. Horários abaixo mostram somente uma sequência ilustrativa de um ciclo estável; início real depende do processo e não é promessa de minuto civil:

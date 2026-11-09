@@ -1,0 +1,5 @@
+{% load cancellation_display %}
+<ol class="canc-timeline">
+{% for item in history %}<li><div><strong>{{ item.actor|person_name }}</strong><time>{{ item.created_at|date:"d/m/Y H:i" }}</time></div><p>{{ item.description|linebreaksbr }}</p>{% if item.financial and perms.cancelamentos.view_cancellation_finance and item.details %}<dl>{% for label, value in item.details.items %}<dt>{{ label }}</dt><dd>{{ value }}</dd>{% endfor %}</dl>{% endif %}</li>
+{% empty %}<li class="canc-empty">Nenhuma atividade registrada.</li>{% endfor %}
+</ol>

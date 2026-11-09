@@ -53,6 +53,7 @@ class Command(BaseCommand):
                     self.stderr.write(self.style.ERROR("Worker lease lost; stopping to avoid duplicate scheduling."))
                     break
                 self._schedule_once(timezone.now())
+                self._cancellation_intake()
                 if options["once"]:
                     break
                 time.sleep(interval)
@@ -101,6 +102,17 @@ class Command(BaseCommand):
         if self._run_due(fast_run, full_success, self.FAST_CADENCE, now, retry_state=otrs_state):
             self._due("otrs_fast", now, self._otrs_fast)
         self._quality_tq_correlation(now)
+
+    def _cancellation_intake(self):
+        from aplicativos.cancelamentos.services.otrs_intake import project_intakes
+
+        try:
+            result = project_intakes()
+            if "found" in result:
+                self.stdout.write(f"Cancelamentos: entradas={result['found']}; novas={result['created']}; pedidos automáticos=0.")
+        except Exception as exc:
+            # The intake owns its persistent diagnostics/retry. Its failure cannot undo an OTRS FULL.
+            self.stderr.write(f"Falha na projeção local de Cancelamentos ({type(exc).__name__}); reexecução pelo worker.")
 
     def _quality_tq_correlation(self, now):
         from aplicativos.qualidade.models import QualityCorrelationCheckpoint

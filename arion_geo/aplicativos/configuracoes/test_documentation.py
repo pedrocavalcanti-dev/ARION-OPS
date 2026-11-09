@@ -31,8 +31,8 @@ class DocumentationPortalTests(TestCase):
         self.assertContains(home, "Como podemos ajudar?")
         self.assertContains(home, "Segurança e operação")
         self.assertContains(home, "Dados e Integrações")
-        self.assertContains(home, "10 documentos")
-        self.assertContains(home, "8 documentos")
+        self.assertContains(home, "12 documentos")
+        self.assertContains(home, "Cancelamentos")
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Caminho da request")
 
@@ -176,7 +176,7 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 69)
+        self.assertEqual(len(DOCUMENTS), 71)
 
     def test_otrs_reference_is_a_navigable_and_searchable_documentation_group(self):
         self.client.force_login(self.admin)

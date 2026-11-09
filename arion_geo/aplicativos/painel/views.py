@@ -45,6 +45,7 @@ def index(request):
         "can_view_map": request.user.has_perm("configuracoes.view_map"),
         "can_view_rankings": request.user.has_perm("configuracoes.view_rankings"),
         "can_view_quality": request.user.has_perm("qualidade.view_quality"),
+        "can_view_cancellations": request.user.has_perm("cancelamentos.view_cancellations"),
         "can_view_ari": request.user.has_perm("configuracoes.view_ari"),
         "can_view_integrations": request.user.has_perm("configuracoes.view_integrations"),
         "can_manage_users": request.user.has_perm("configuracoes.manage_users"),
@@ -56,7 +57,7 @@ def index(request):
     }
     access["can_view_operation"] = any(access[key] for key in (
         "can_view_dashboard", "can_view_chamados", "can_view_base", "can_view_cockpit",
-        "can_view_map", "can_view_rankings", "can_view_quality", "can_view_ari",
+        "can_view_map", "can_view_rankings", "can_view_quality", "can_view_ari", "can_view_cancellations",
     ))
     access["can_view_admin_area"] = any(access[key] for key in (
         "can_view_integrations", "can_manage_users", "can_manage_groups", "can_manage_scopes",

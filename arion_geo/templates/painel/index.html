@@ -67,6 +67,13 @@
           <span class="overview-module-cta">Abrir Qualidade <b aria-hidden="true">&rarr;</b></span>
         </a>
         {% endif %}
+        {% if can_view_cancellations %}
+        <a class="overview-module-card" href="{% url 'cancelamentos:index' %}">
+          <span class="overview-module-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5"/></svg></span>
+          <span class="overview-module-copy"><strong>Cancelamentos</strong><span>Valide entradas OTRS, acompanhe o ISP, as pendências e o encaminhamento financeiro.</span></span>
+          <span class="overview-module-cta">Abrir Cancelamentos <b aria-hidden="true">&rarr;</b></span>
+        </a>
+        {% endif %}
         {% if can_view_base %}
         <a class="overview-module-card" href="{% url 'base_links:index' %}">
           <span class="overview-module-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5h16v14H4zM8 9h8M8 12.5h8M8 16h5"/></svg></span>

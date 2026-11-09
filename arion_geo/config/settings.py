@@ -288,6 +288,7 @@ INSTALLED_APPS = [
     "aplicativos.chamados.apps.ChamadosConfig",
     "aplicativos.relatorios.apps.RelatoriosConfig",
     "aplicativos.qualidade.apps.QualidadeConfig",
+    "aplicativos.cancelamentos.apps.CancelamentosConfig",
 ]
 
 

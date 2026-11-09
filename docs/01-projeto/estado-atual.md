@@ -10,6 +10,7 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A dis
 |---|---|---|---|---|
 | Dashboard | IMPLEMENTADO | `CMDBLinkMirror`, `OTRSTicket`, relações e queries locais | Sem escrita CMDB/OTRS | KPIs atuais e séries por criação têm recortes diferentes. |
 | Chamados | IMPLEMENTADO | Tickets atuais da fila NOC + `TicketTracking` | Acompanhamento apenas no ARION OPS | OTRS somente leitura. |
+| Cancelamentos | IMPLEMENTADO EM DEV (primeira entrega operacional) | Entrada projetada do mirror OTRS + vínculos CMDB e registros locais | Triagem humana, tratativa ISP, pendências, equipamentos, obrigações e encaminhamento manual | Um processo por TicketID; conclusão NOC não confirma pagamento. Migrations aditivas; sem carga histórica, automação de e-mail, mudança CMDB ou deploy. Ver [Cancelamentos](../05-funcionalidades/cancelamentos.md). |
 | Cockpit | IMPLEMENTADO | Espelhos OTRS/CMDB; filas de Suporte e Cancelamentos | `SavedAnalyticsView` local; exportação de leitura | Contextos Suporte, Cancelamentos e Geral; classificação por etapa e Data Scope no backend. |
 | Mapa | IMPLEMENTADO | Espelhos e relações Ticket–ConfigItem | Sem edição da fonte | Agrega por UF; não geocodifica. |
 | Rankings | IMPLEMENTADO | Snapshot CMDB atual + chamados validos OTRS | Consulta e exportacao de leitura | Score comparativo de 0-100, melhores/atencao/mais links, regras de amostra e periodos documentados; Data Scope no backend. |

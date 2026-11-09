@@ -1,0 +1,5 @@
+{% extends "cancelamentos/base.html" %}
+{% block cancellation_content %}
+<a class="canc-back" href="{% url 'cancelamentos:index' %}">← Cancelamentos</a><header class="canc-heading"><div><p class="canc-eyebrow">CONFIGURAÇÃO DO MÓDULO</p><h1>Entrada OTRS</h1><p>Projeção local da fila NOC - CANCELAMENTOS NGO pelo worker existente.</p></div></header>
+<section class="canc-section canc-configuration"><p>{{ source_notice }}</p><form method="post">{% csrf_token %}{% include "cancelamentos/_fields.html" %}<button class="canc-button canc-button--primary">Salvar configuração</button></form><p class="canc-muted">A conexão e as credenciais permanecem na Central de Integrações. Esta configuração não muda filas, cobertura do Cockpit ou dados oficiais.</p>{% if perms.configuracoes.view_integrations %}<a class="canc-link" href="{% url 'configuracoes:integracoes:otrs' %}">Consultar integração OTRS</a>{% endif %}</section>
+{% endblock %}

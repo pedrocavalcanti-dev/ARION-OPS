@@ -31,6 +31,10 @@ ACCOUNT_SECURITY_PERMISSIONS = (
 ALL_ACCESS_PERMISSIONS = MODULE_PERMISSIONS + ADMIN_PERMISSIONS
 REPORTS_PERMISSIONS = ("view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "finalize_with_pending", "reopen_treatments", "export_treatments", "delete_penaltycompetence", "delete_finalized_penaltycompetence")
 
+# Exposed for explicit administration only: no existing group gains these grants.
+from aplicativos.cancelamentos.models import PERMISSIONS as CANCELLATION_PERMISSION_CATALOG
+CANCELLATION_PERMISSIONS = tuple(code for code, _label in CANCELLATION_PERMISSION_CATALOG)
+
 ROLE_PERMISSIONS = {
 GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS + ("delete_qualityorder",),
 GROUP_EXECUTIVE: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_reports"),
@@ -79,6 +83,7 @@ PERMISSION_LABELS = {
     "manage_quality_orders": ("Qualidade", "Gerenciar Ordens de Qualidade"),
     "delete_qualityorder": ("Qualidade", "Arquivar Ordens de Qualidade"),
 }
+PERMISSION_LABELS.update({code: ("Cancelamentos", label) for code, label in CANCELLATION_PERMISSION_CATALOG})
 
 
 def managed_permissions(using="default"):
@@ -87,10 +92,13 @@ def managed_permissions(using="default"):
     report_content_type = ContentType.objects.db_manager(using).get_for_model(report_model)
     quality_model = GroupDataScope._meta.apps.get_model("qualidade", "QualityOrder")
     quality_content_type = ContentType.objects.db_manager(using).get_for_model(quality_model)
+    cancellation_model = GroupDataScope._meta.apps.get_model("cancelamentos", "CancellationProcess")
+    cancellation_content_type = ContentType.objects.db_manager(using).get_for_model(cancellation_model)
     return Permission.objects.using(using).filter(
         models.Q(content_type=content_type, codename__in=ALL_ACCESS_PERMISSIONS)
         | models.Q(content_type=report_content_type, codename__in=REPORTS_PERMISSIONS)
         | models.Q(content_type=quality_content_type, codename__in=("view_quality", "manage_quality_orders", "delete_qualityorder"))
+        | models.Q(content_type=cancellation_content_type, codename__in=CANCELLATION_PERMISSIONS)
     )
 
 
@@ -102,6 +110,7 @@ def bootstrap_access(*, using="default"):
     create_permissions(reports_app_config, verbosity=0, interactive=False, using=using)
     quality_app_config = GroupDataScope._meta.apps.get_app_config("qualidade")
     create_permissions(quality_app_config, verbosity=0, interactive=False, using=using)
+    create_permissions(GroupDataScope._meta.apps.get_app_config("cancelamentos"), verbosity=0, interactive=False, using=using)
     available = {permission.codename: permission for permission in managed_permissions(using)}
     for name, codenames in ROLE_PERMISSIONS.items():
         group, created = Group.objects.using(using).get_or_create(name=name)

@@ -1,0 +1,6 @@
+{{ form.non_field_errors }}
+{% for field in form %}{% if field.is_hidden %}{{ field }}{% else %}
+<div class="canc-field{% if field.field.widget.input_type == 'checkbox' %} canc-field--check{% endif %}">
+  {{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+</div>
+{% endif %}{% endfor %}

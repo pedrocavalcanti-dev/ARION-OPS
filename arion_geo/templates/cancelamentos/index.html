@@ -1,0 +1,34 @@
+{% extends "cancelamentos/base.html" %}{% load cancellation_display %}
+{% block cancellation_content %}
+<header class="canc-heading"><div><p class="canc-eyebrow">OPERAÇÃO NOC</p><h1>Cancelamentos</h1><p>Da entrada do pedido à conclusão operacional, com cada decisão documentada.</p></div><div class="canc-actions">
+{% if perms.cancelamentos.export_cancellations %}<a class="canc-button" href="{% url 'cancelamentos:export' %}?{{ export_query }}">Exportar recorte</a>{% endif %}
+{% if perms.cancelamentos.configure_cancellations %}<a class="canc-link" href="{% url 'cancelamentos:configuration' %}">Configuração</a>{% endif %}
+</div></header>
+<dl class="canc-metrics" aria-label="Indicadores do recorte">
+  <div><dt>Aguardando triagem</dt><dd>{{ metrics.intake }}</dd></div><div><dt>Pedidos</dt><dd>{{ metrics.order }}</dd></div>
+  <div><dt>Em solicitação</dt><dd>{{ metrics.request }}</dd></div><div><dt>Com pendências¹</dt><dd>{{ metrics.pending }}</dd></div>
+  <div><dt>Concluídos NOC</dt><dd>{{ metrics.completed }}</dd></div>
+</dl>
+<div class="canc-context"><span>¹ Pendências podem coexistir com Solicitação. Documentos / boletos: <strong>{{ metrics.documents }}</strong> · Encaminhados ao Financeiro: <strong>{{ metrics.sent }}</strong>.</span><span>Período pela abertura do ticket OTRS.</span></div>
+<nav class="canc-tabs" aria-label="Etapas de Cancelamentos">{% for item in tabs %}<a href="{{ item.url }}"{% if item.key == tab %} class="is-active" aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}</nav>
+<form class="canc-filters" method="get" aria-label="Pesquisar e filtrar cancelamentos">
+  <input type="hidden" name="tab" value="{{ tab }}">
+  {% for field in form %}{% if field.name != 'tab' %}{% if field.name != 'situation' or tab == 'intake' %}<div class="canc-filter">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endif %}{% endif %}{% endfor %}
+  <div class="canc-filter-actions"><button class="canc-button canc-button--primary" type="submit">Aplicar</button><a class="canc-link" href="{% url 'cancelamentos:index' %}?tab={{ tab }}">Limpar</a></div>
+  {{ form.non_field_errors }}
+</form>
+{% if tab == 'intake' %}
+<div class="canc-source{% if not source_ok %} canc-source--warning{% endif %}"><div><strong>Entrada OTRS</strong><p>{{ source_notice }}</p></div><small>Última sincronização: {{ source_state.last_success_at|date:"d/m/Y H:i"|default:"aguardando" }}<br>Projeção: {{ projection_state.last_success_at|date:"d/m/Y H:i"|default:"aguardando worker" }}</small></div>
+{% if projection_state.last_error_at %}<p class="canc-notice">Há uma falha na projeção da triagem. O worker repetirá a operação preservando as decisões anteriores.</p>{% endif %}
+{% endif %}
+<section class="canc-table-section" aria-label="Registros do recorte">
+  <div class="canc-table-caption"><h2>{% for item in tabs %}{% if item.key == tab %}{{ item.label }}{% endif %}{% endfor %}</h2><span>{{ page.paginator.count }} registro{{ page.paginator.count|pluralize:"s" }}</span></div>
+  <div class="canc-table-scroll"><table><thead><tr><th>Ticket / pedido</th><th>Circuito</th><th>Cliente / projeto</th><th>ISP</th><th>Situação</th><th>Responsável</th><th>{% if tab == 'completed' %}Conclusão NOC{% else %}Próxima ação / origem{% endif %}</th></tr></thead><tbody>
+  {% for obj in page %}
+    {% if tab == 'intake' %}<tr><td><a class="canc-record" href="{% url 'cancelamentos:intake_detail' obj.pk %}">{{ obj.ticket_number }}</a><small>TicketID {{ obj.ticket_external_id }}</small></td><td>{{ obj.designation_snapshot|default:"Vínculo a revisar" }}</td><td>{{ obj.client_snapshot|default:"Não identificado" }}<small>{{ obj.project_snapshot|default:"Projeto não identificado" }}</small></td><td>{{ obj.link.operator.name|default:"—" }}</td><td><span class="canc-status">{{ obj.get_status_display }}</span></td><td>{{ obj.assigned_to|person_name }}</td><td>{{ obj.source_synced_at|date:"d/m/Y H:i"|default:"—" }}{% if not obj.eligible %}<small>Fora da fila de entrada</small>{% endif %}</td></tr>
+    {% else %}<tr><td><a class="canc-record" href="{% url 'cancelamentos:detail' obj.pk %}">{{ obj.code }}</a><small>{{ obj.intake.ticket_number }}</small></td><td>{{ obj.designation|default:"Vínculo a revisar" }}</td><td>{{ obj.contracting_client|default:"Não identificado" }}<small>{{ obj.project|default:"—" }}</small></td><td>{{ obj.isp|default:"—" }}</td><td><span class="canc-status">{{ obj.get_stage_display }}</span>{% if obj.has_pending %}<small>Pendências abertas</small>{% endif %}</td><td>{{ obj.owner|person_name }}</td><td>{% if tab == 'completed' %}{{ obj.completed_at|date:"d/m/Y H:i" }}{% else %}{{ obj.next_action_at|date:"d/m/Y H:i"|default:"Não definida" }}{% endif %}</td></tr>{% endif %}
+  {% empty %}<tr><td colspan="7"><div class="canc-empty"><strong>Nenhum registro neste recorte</strong><p>{% if tab == 'intake' %}Tickets da fila NOC - CANCELAMENTOS NGO serão apresentados pelo worker após sincronização válida. Somente a aprovação humana cria um pedido.{% else %}Os processos aprovados aparecerão aqui conforme a etapa e os filtros selecionados.{% endif %}</p></div></td></tr>{% endfor %}
+  </tbody></table></div>
+  <footer class="canc-pagination"><span>Página {{ page.number }} de {{ page.paginator.num_pages }}</span><div>{% if previous_url %}<a class="canc-button" href="{{ previous_url }}">Anterior</a>{% endif %}{% if next_url %}<a class="canc-button" href="{{ next_url }}">Próxima</a>{% endif %}</div></footer>
+</section>
+{% endblock %}

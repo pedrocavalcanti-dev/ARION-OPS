@@ -107,6 +107,12 @@ html[data-theme="light"] .mobile-navigation__brand-fallback-logo--light { displa
 .login-page .pwa-launch { background:var(--bg-primary); }
 .docs-sidebar .pwa-install-action { display:none; }
 .docs-sidebar .pwa-install-action[hidden] { display:none; }
+/* The extra operational module needs the existing compact menu on notebooks. */
+@media (min-width:901px) and (max-width:1200px) {
+  .app-header[data-cancellations-nav] .header-nav,
+  .app-header[data-cancellations-nav] > .user-menu { display:none; }
+  .app-header[data-cancellations-nav] .mobile-nav-toggle { display:grid; }
+}
 @media (max-width:900px) {
   :root { --arion-global-header-height:calc(56px + env(safe-area-inset-top)); }
   .app-header { height:var(--arion-global-header-height); padding:env(safe-area-inset-top) 16px 0; }

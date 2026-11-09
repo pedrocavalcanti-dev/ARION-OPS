@@ -54,6 +54,7 @@ O banco local acumula três papéis complementares: armazenamento dos dados pró
 | `auditoria` | Administração | Histórico de eventos relevantes | `AuditEvent` | `AuditService`, views |
 | `integracoes` | Integração | Clients, execução de sync e espelhos CMDB/OTRS | `Integration`, `IntegrationRun`, `IntegrationSyncState`, `IntegrationLease`, mirrors | clients, services e management commands |
 | `chamados` | Operacional | Fila e acompanhamento local | `TicketTracking`, `TicketTrackingNote`, `TicketTrackingEvent`, `TicketQueueView` | services, forms, views/API |
+| `cancelamentos` | Operacional | Triagem humana, ciclo NOC e preparação documental financeira | `CancellationIntake`, `CancellationProcess`, tratativa ISP, pendências, equipamentos, obrigações, encaminhamentos e eventos | Projeção do mirror no worker existente; services locais com permissions e Data Scope, sem escrita OTRS/CMDB |
 | `base_links` | Operacional e compatibilidade | Consulta atual de links; mantém models antigos e dimensões usadas pelo escopo | mirrors consultados pela Base; `Operadora`, `Projeto`; models legados | query services, views |
 | `painel` | Analytics | Dashboard, Cockpit e consultas analíticas | `SavedAnalyticsView` | `services/analytics.py`, views/APIs |
 | `mapa` | Analytics | Agregações por UF e modos geográficos | Sem model de domínio próprio | `services/analytics.py`, views |

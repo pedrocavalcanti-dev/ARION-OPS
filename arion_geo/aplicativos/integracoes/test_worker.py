@@ -68,23 +68,15 @@ class WindowsSupervisorEnvironmentTests(TestCase):
                 self.assertEqual(os.environ["ARION_ENV"], "testing")
 
     def test_status_requires_the_child_service_process_not_only_supervisor_lock(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            previous_run_root = RUN_PROCESS.RUN_ROOT
-            RUN_PROCESS.RUN_ROOT = Path(temp_dir)
-            RUN_PROCESS.RUN_ROOT.mkdir(parents=True, exist_ok=True)
-            RUN_PROCESS._pid_path("worker").write_text("1234", encoding="ascii")
-            RUN_PROCESS._child_pid_path("worker").write_text("5678", encoding="ascii")
-            try:
-                with patch.object(RUN_PROCESS, "_is_locked", return_value=True), \
-                     patch.object(RUN_PROCESS, "_pid_is_running", return_value=False), \
-                     patch("builtins.print"):
-                    self.assertEqual(RUN_PROCESS._print_status("worker"), 2)
-                with patch.object(RUN_PROCESS, "_is_locked", return_value=True), \
-                     patch.object(RUN_PROCESS, "_pid_is_running", return_value=True), \
-                     patch("builtins.print"):
-                    self.assertEqual(RUN_PROCESS._print_status("worker"), 0)
-            finally:
-                RUN_PROCESS.RUN_ROOT = previous_run_root
+        # The supervisor now uses verified process records, not bare .child.pid files.
+        supervisor = {"pid": 1234}
+        launcher = {"pid": 5678, "created_at": 10, "running": True}
+        child = {"pid": 5678, "created_at": 10, "executable": "python.exe"}
+        with patch.object(RUN_PROCESS, "_is_locked", return_value=True), patch("builtins.print"):
+            with patch.object(RUN_PROCESS, "_read_process_record", side_effect=[supervisor, launcher, None]):
+                self.assertEqual(RUN_PROCESS._print_status("worker"), 2)
+            with patch.object(RUN_PROCESS, "_read_process_record", side_effect=[supervisor, launcher, child]):
+                self.assertEqual(RUN_PROCESS._print_status("worker"), 0)
 
 
 class IntegrationLeaseTests(TestCase):
