@@ -103,22 +103,56 @@
   document.querySelectorAll(".canc-dialog").forEach(wireDialog);
   const autoDialog = document.getElementById(document.querySelector("[data-auto-dialog]")?.dataset.autoDialog);
   if (autoDialog instanceof HTMLDialogElement) autoDialog.showModal();
-  document.addEventListener("toggle", (event) => {
-    const menu = event.target;
-    if (!menu.matches?.(".canc-action-menu[open]")) return;
-    document.querySelectorAll(".canc-action-menu[open]").forEach((other) => { if (other !== menu) other.open = false; });
+  const positionMenu = (menu) => {
     const box = menu.querySelector("summary").getBoundingClientRect();
     const panel = menu.querySelector("div");
+    if (box.bottom < 0 || box.top > innerHeight) { menu.open = false; return; }
     panel.style.left = `${Math.max(12, Math.min(box.right - panel.offsetWidth, innerWidth - panel.offsetWidth - 12))}px`;
     panel.style.top = `${box.bottom + panel.offsetHeight < innerHeight - 12 ? box.bottom + 4 : Math.max(12, box.top - panel.offsetHeight - 4)}px`;
+  };
+  document.addEventListener("toggle", (event) => {
+    const menu = event.target;
+    if (!menu.matches?.(".canc-action-menu")) return;
+    const summary = menu.querySelector("summary");
+    const panel = menu.querySelector("div");
+    summary.setAttribute("aria-expanded", String(menu.open));
+    if (!menu.open) { if (panel.matches(":popover-open")) panel.hidePopover(); return; }
+    document.querySelectorAll(".canc-action-menu[open]").forEach((other) => { if (other !== menu) other.open = false; });
+    // Native top layer escapes the table's sticky cells and overflow contexts.
+    panel.setAttribute("popover", "manual");
+    panel.showPopover();
+    positionMenu(menu);
   }, true);
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMenus(); });
+  document.addEventListener("keydown", (event) => {
+    const menu = event.target.closest(".canc-action-menu");
+    if (event.key === "Escape") {
+      const summary = document.querySelector(".canc-action-menu[open]>summary");
+      closeMenus(); summary?.focus();
+    }
+    if (!menu || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const items = [...menu.querySelectorAll("div>a,div>button,div form button")];
+    if (!menu.open) {
+      menu.open = true;
+      requestAnimationFrame(() => items[event.key === "ArrowUp" ? items.length - 1 : 0]?.focus());
+      return;
+    }
+    const index = items.indexOf(document.activeElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 :
+      (index + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+    items[next]?.focus();
+  });
   document.addEventListener("change", (event) => {
     if (!event.target.matches("[name=with_open_pending]")) return;
     const stage = document.querySelector("[data-pending-stage]");
     if (stage) { stage.hidden = !event.target.checked; if (stage.hidden) stage.querySelector("select").value = ""; }
   });
   window.addEventListener("resize", closeMenus);
+  document.addEventListener("scroll", (event) => {
+    if (!event.target.closest?.(".canc-action-menu>div")) {
+      requestAnimationFrame(() => document.querySelectorAll(".canc-action-menu[open]").forEach(positionMenu));
+    }
+  }, true);
   document.addEventListener("click", async (event) => {
     if (!event.target.closest(".canc-action-menu")) closeMenus();
     const remote = event.target.closest("[data-dialog-url]");
@@ -146,7 +180,7 @@
       }
     }
     const open = event.target.closest("[data-open-dialog]");
-    if (open) { const dialog = document.getElementById(open.dataset.openDialog); if (dialog instanceof HTMLDialogElement) { opener = open; wireDialog(dialog); dialog.showModal(); } }
+    if (open) { const dialog = document.getElementById(open.dataset.openDialog); if (dialog instanceof HTMLDialogElement) { opener = open.closest(".canc-action-menu")?.querySelector("summary") || open; closeMenus(); wireDialog(dialog); dialog.showModal(); } }
     const close = event.target.closest("[data-close-dialog]");
     if (close) close.closest("dialog")?.close();
     const copy = event.target.closest("[data-copy-target]");

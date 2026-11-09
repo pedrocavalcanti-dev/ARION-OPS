@@ -57,3 +57,22 @@ O Apply é transacional, restrito ao DEV e idempotente. Repetir o mesmo arquivo 
 O detalhe resolve responsável e atendente anteriores; a timeline resolve autores históricos; pendências resolvem o autor anterior quando informado. Sem correspondência, a interface apresenta **Nome não disponível**. IDs e fatos originais permanecem armazenados. Informações técnicas são consultáveis somente com as permissões administrativas existentes de inspeção/auditoria.
 
 CSV, JSON de pessoas, bancos, backups e relatórios ficam fora do Git. Não disponibilizar esses arquivos por `static`, templates ou rotas públicas. A carga não altera OTRS, CMDB, contas ou concessões de acesso e não constitui deploy.
+
+## Enriquecimento pelo Excel original
+
+O comando `enriquecer_nomes_cancelamentos` lê somente as abas **Cancelamentos** e **Pendências** do relatório original. Ele reutiliza `LegacyPerson`; não exige migrations nem reimporta processos. O Excel é tratado como evidência de dados, sem execução de fórmulas ou instruções de células.
+
+```powershell
+$arquivoExcel = "$env:USERPROFILE\Downloads\relatorio_cancelamentos_20261109_162444.xlsx"
+# Definir $actorId com o ID local autorizado, como na carga CSV.
+.venv\Scripts\python.exe arion_geo\gerenciar.py enriquecer_nomes_cancelamentos --file $arquivoExcel --actor $actorId --report var/cancelamentos-excel/preview.json
+.venv\Scripts\python.exe arion_geo\gerenciar.py enriquecer_nomes_cancelamentos --file $arquivoExcel --actor $actorId --report var/cancelamentos-excel/apply.json --apply
+```
+
+O preview não escreve nomes. O relatório JSON deve ficar em `var/`, fora do Git, e contém contagens de correspondências, nomes recuperáveis/recuperados, inalterados, ausentes e conflitos por linha/ID, sem nomes pessoais. O comando é restrito ao DEV, exige a mesma autorização de importação histórica e registra checksum do arquivo, IDs legados e contagens na auditoria do Apply. Replay inalterado não altera timestamps nem cria nova auditoria.
+
+A associação de cancelamentos exige **Ticket Arion** único e compatível com a referência importada e o ticket local. Na ausência de ID individual de pendência, exige correspondência única da combinação ticket, tipo, descrição com espaços normalizados, valor decimal, status original, data prevista e criação com precisão de segundos. A criação do dump é convertida do fuso registrado no lote de importação para o fuso do relatório (`--report-timezone`, padrão `America/Sao_Paulo`); não se presume um fuso ausente. Valores e datas são usados apenas para conferir a evidência, sem atualizar o domínio. Linhas duplicadas ou correspondências ambíguas não identificam autores.
+
+O nome **Responsável** é associado ao `responsavel_id` do processo; **Criada por** identifica `criada_por_id` da pendência conciliada. Na aba Pendências, **Responsável** corresponde ao responsável do atendimento pai: a tabela legada de pendências não possui responsável individual. A interface explicita esse contexto e mantém a atribuição atual independente. Só se publica um nome por ID legado quando todas as evidências desse ID concordam; divergência com nome já confirmado é reportada e preserva o cadastro existente. Células vazias e rótulos como “Sem responsável” não criam pessoas nem apagam nomes.
+
+Os eventos históricos resolvem o nome pelo próprio ID de autor preservado no evento, sem usar o responsável do processo como autor presumido. Visão geral e pendências continuam submetidas ao RBAC e Data Scope existentes. O comando não altera responsáveis atuais, decisões, etapas, valores, observações, eventos originais ou snapshots importados.

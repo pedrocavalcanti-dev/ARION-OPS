@@ -68,3 +68,8 @@ deploy/windows/cloudflare/*.json
 *.pem
 *.p12
 *.pfx
+
+# Evidências privadas da migração de Cancelamentos
+arion-migracao/
+relatorio_cancelamentos_*.xlsx
+cancelamentos-usuarios-legados.csv

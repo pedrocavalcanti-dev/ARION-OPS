@@ -205,11 +205,13 @@ def _process_context(request, pk):
     if not can_finance:
         pendings = pendings.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True, legacy_reference__isnull=True)
     pendings = list(pendings)
+    legacy = legacy_context(process, request.user)
     pending_names = names_for([p.legacy_reference.source_data.get("criada_por_id") for p in pendings
                               if getattr(p, "legacy_reference", None) and p.legacy_reference.source_data.get("criada_por_id") is not None])
     for pending in pendings:
         reference = getattr(pending, "legacy_reference", None)
         pending.historical_creator = pending_names.get(reference.source_data.get("criada_por_id"), "Nome não disponível") if reference else ""
+        pending.historical_responsible = legacy["responsible_name"] if reference and legacy else ""
         pending.can_resolve = False
         if can_pending and pending.status == "OPEN" and (manage_finance or not pending_is_financial(pending)):
             pending.can_resolve = True
@@ -252,7 +254,7 @@ def _process_context(request, pk):
         "summary": financial_summary(process) if can_finance else "",
         "blockers": completion_blockers(process) if process.stage != "COMPLETED" else [],
         "otrs_url": otrs_ticket_url(process.external_ticket_id) if process.external_ticket_id else "",
-        "legacy": legacy_context(process, request.user),
+        "legacy": legacy,
     }
 
 
