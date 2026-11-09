@@ -393,14 +393,10 @@
       x: ((index + Number(row.backlog_position ?? .5)) / rows.length) * 1000,
       y: toY(row.backlog),
     });
-    const segments = [];
-    let segment = [];
-    points.forEach(point => {
-      if (point) segment.push(point);
-      else if (segment.length) { segments.push(segment); segment = []; }
-    });
-    if (segment.length) segments.push(segment);
-    const linePath = segments.map(part => part.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")).join(" ");
+    // Sparse FULL snapshots still form a real, ordered time series. Connect
+    // observed points directly across empty buckets without inventing values.
+    const observedPoints = points.filter(Boolean);
+    const linePath = observedPoints.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
     const grain = operational.granularity || operational.grain || "day";
     const lineVisible = backlogAvailable && (mode === "all" || mode === "backlog");
     const lastBacklogIndex = points.reduce((last, point, index) => point ? index : last, -1);
@@ -469,8 +465,14 @@
     }).join("");
     const legendItems = definitions.map(([, label, cls]) => `<span><i class="${cls}"></i>${escapeHTML(label)}</span>`);
     if (lineVisible) legendItems.push('<span><i class="backlog-line-key"></i>Backlog observado</span>');
-    const note = !hasFlow && mode !== "backlog"
-      ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "";
+    const singleObservation = rows.find(row => row.backlog !== null && row.backlog !== undefined);
+    const singleBacklogObservation = (mode === "all" || mode === "backlog")
+      && backlogAvailable && Number(history.observation_count) === 1 && Boolean(singleObservation);
+    const backlogHistoryNote = singleBacklogObservation
+      ? `Hist\u00f3rico insuficiente para exibir evolu\u00e7\u00e3o do backlog. Valor observado: ${number.format(singleObservation.backlog)} em ${singleObservation.backlog_observed_label || history.last_observed_at || "hor\u00e1rio indispon\u00edvel"}.`
+      : "";
+    const note = backlogHistoryNote || (!hasFlow && mode !== "backlog"
+      ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "");
     return `<article class="cockpit-ops-chart" data-mode="${mode}" data-grain="${escapeHTML(grain)}" style="--ops-plot-height:${visualHeight}px"><div class="cockpit-ops-legend" aria-label="S\u00e9ries do gr\u00e1fico">${legendItems.join("")}</div>${chartNote(note)}<div class="cockpit-ops-chart-frame"><div class="cockpit-ops-axis cockpit-ops-axis-left" aria-hidden="true">${makeAxis(flowTicks)}</div><div class="cockpit-ops-plot-area"><div class="cockpit-ops-grid-lines" aria-hidden="true"></div>${svg}<div class="cockpit-ops-point-grid" style="--series-count:${rows.length}" role="group" aria-label="Pontos do per\u00edodo">${pointsHTML}</div></div><div class="cockpit-ops-axis cockpit-ops-axis-right" aria-hidden="true">${makeAxis(backlogTicks)}</div></div></article>`;
   }
 
