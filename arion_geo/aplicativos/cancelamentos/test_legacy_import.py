@@ -188,12 +188,39 @@ class LegacyImportTests(TestCase):
     def test_pending_stage_and_open_pending_on_completed_record_remain_visible(self):
         process = self.run_record()
         process.pendings.update(status="OPEN")
-        self.assertEqual(query_module(self.admin, {"tab": "pending"})["metrics"]["pending"], 1)
-        self.assertEqual(query_module(self.admin, {"tab": "pending"})["queryset"].get().pk, process.pk)
+        self.assertEqual(query_module(self.admin, {"tab": "pending"})["metrics"]["pending"], 0)
+        self.assertFalse(query_module(self.admin, {"tab": "pending"})["queryset"].exists())
+        expanded = query_module(self.admin, {"tab": "pending", "with_open_pending": "on"})
+        self.assertEqual(expanded["queryset"].get().pk, process.pk)
+        self.assertEqual(expanded["metrics"]["open_pending"], 1)
         process.pendings.update(status="DISCARDED")
         process.stage = "PENDING"
         process.save()
         self.assertEqual(query_module(self.admin, {"tab": "pending"})["queryset"].get().pk, process.pk)
+
+    def test_imported_process_continues_operation_without_changing_source_facts(self):
+        from django.test import RequestFactory
+        from .services.workflow import act_on_process
+        process = self.run_record()
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("cancelamentos:index"), {"tab": "completed"})
+        self.assertContains(response, "Data a revisar")
+        original = list(process.legacy_references.order_by("pk").values())
+        request = RequestFactory().post("/cancelamentos/")
+        request.user = self.admin
+        for action, data in (("reopen", {"stage": "ORDER", "reason": "Conferência autorizada"}),
+                             ("assume", {}), ("status", {"status": "ANALYSIS", "reason": "Retomada"}),
+                             ("move", {"stage": "REQUEST", "reason": "Contato ISP"}),
+                             ("pending_add", {"kind": "DOCUMENT", "description": "Documento novo"})):
+            process.refresh_from_db()
+            act_on_process(request=request, pk=process.pk, action=action, data={"revision": process.revision, **data})
+        process.refresh_from_db()
+        self.assertEqual(process.owner_id, self.admin.pk)
+        self.assertEqual(process.stage, "REQUEST")
+        self.assertEqual(process.operational_status, "ANALYSIS")
+        self.assertEqual(list(process.legacy_references.order_by("pk").values()), original)
+        self.assertEqual(process.events.filter(action__startswith="legacy_").count(), 3)
+        self.assertEqual(process.events.filter(action__in=("reopen", "assume", "status", "move", "pending_add"), audit_event__isnull=False).count(), 5)
 
     def test_replay_does_not_duplicate_or_overwrite_current_owner_and_changed_source_conflicts(self):
         process = self.run_record()

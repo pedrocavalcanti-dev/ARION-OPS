@@ -20,6 +20,7 @@ from .services.otrs_intake import intake_settings, source_status, synchronizatio
 from .models import CancellationIntake, CancellationPending, CancellationProcess
 from .services.queries import query_module, TABS
 from .services.legacy_history import legacy_context
+from .services.presentation import prepare_rows
 from .services.workflow import (Conflict, require, decide_intake, act_on_process,
                                 financial_summary, completion_blockers, pending_is_financial)
 
@@ -38,7 +39,7 @@ def _url_params(params, **changes):
 
 def _tab_url(params, tab):
     query = params.copy()
-    for key in (("pending_kind", "sent", "stage") if tab == "intake" else ("situation", "presence")):
+    for key in (("pending_kind", "sent", "stage", "with_open_pending") if tab == "intake" else ("situation", "presence")):
         query.pop(key, None)
     if tab != "pending":
         query.pop("stage", None)
@@ -47,6 +48,8 @@ def _tab_url(params, tab):
 
 def _metric_url(params, tab):
     query = params.copy()
+    query.pop("with_open_pending", None)
+    query.pop("stage", None)
     if tab == "intake":
         query.pop("presence", None)
         query.pop("situation", None)
@@ -68,6 +71,8 @@ def _return_url(request, default):
 def index(request):
     data = query_module(request.user, request.GET)
     page = Paginator(data.pop("queryset"), 40).get_page(request.GET.get("page"))
+    if data["tab"] != "intake":
+        page.object_list = prepare_rows(page.object_list, request.user)
     current_ids = set(current_intakes(CancellationIntake.objects.filter(pk__in=[row.pk for row in page])).values_list("pk", flat=True)) if data["tab"] == "intake" else set()
     for row in page:
         intake = data["tab"] == "intake"
@@ -77,15 +82,6 @@ def index(request):
             (row.status == "WAITING" and row.current_entry and not row._has_official) if intake else True)
         row.assign_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assign"))
         row.assume_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assume"))
-    if data["tab"] == "pending":
-        visible = CancellationPending.objects.filter(process_id__in=[row.pk for row in page], status="OPEN").order_by("expected_date", "pk")
-        if not request.user.has_perm("cancelamentos.view_cancellation_finance"):
-            visible = visible.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True, legacy_reference__isnull=True)
-        by_process = {}
-        for pending in visible:
-            by_process.setdefault(pending.process_id, []).append(pending)
-        for row in page:
-            row.table_pendings = by_process.get(row.pk, [])
     assignment_form = forms.AssignmentForm()
     assignment_form.fields.pop("revision")
     assignment_form.auto_id = "id_list_%s"
@@ -95,6 +91,7 @@ def index(request):
         "quick_filters": [{"label": label, "value": value, "url": _url_params(request.GET, owner=value)} for value, label in (("", "Todos"), ("me", "Meus" if data["tab"] == "intake" else "Meus cancelamentos"), ("none", "Sem responsável"))],
         "sync_indicator": synchronization_indicator(), "assignment_form": assignment_form,
         "list_query": request.GET.urlencode(),
+        "open_pending_url": _url_params(request.GET, tab="pending", with_open_pending="on", stage=""),
         "export_query": request.GET.urlencode(),
         "previous_url": _url_params(request.GET, page=page.previous_page_number()) if page.has_previous() else "",
         "next_url": _url_params(request.GET, page=page.next_page_number()) if page.has_next() else "",
@@ -177,11 +174,15 @@ def detail(request, pk):
         if not manage_finance:
             evidence_form.fields.pop("financial")
         dialogs += [
+            _dialog("status", "Alterar status operacional", forms.StatusForm(initial={"status": process.operational_status})),
+            _dialog("move", "Mover / retornar etapa", forms.StageForm(initial={"stage": process.stage})),
             _dialog("update", "Completar informações", forms.ProcessForm(instance=process)),
             _dialog("note", "Registrar observação", forms.NoteForm()),
             _dialog("treatment", "Registrar retorno e confirmação ISP", forms.TreatmentForm(instance=process.treatment)),
             _dialog("evidence", "Registrar referência de evidência", evidence_form),
         ]
+        if process.stage == "COMPLETED" and request.user.has_perm("cancelamentos.reopen_cancellations"):
+            dialogs.append(_dialog("reopen", "Reabrir com justificativa", forms.StageForm(), button="Confirmar reabertura"))
         if request.user.has_perm("cancelamentos.triage_cancellations") and (process.intake_id or process.source_ticket_id):
             dialogs.append(_dialog("link", "Validar circuito principal", forms.TriageForm(user=request.user, intake=process.intake, ticket=process.source_ticket, initial={"link": process.link_id})))
     if can_pending:
@@ -214,8 +215,14 @@ def detail(request, pk):
     if not can_finance:
         events, evidence = events.filter(financial=False), evidence.filter(financial=False)
     history = Paginator(events, 40).get_page(request.GET.get("history_page"))
+    allowed_dialogs = [dialog for dialog in dialogs if process.stage != "COMPLETED" or dialog["action"] in ("assign", "reopen")]
+    requested_action = request.GET.get("action", "")
+    auto_dialog = next((f"action-{dialog['key']}" for dialog in allowed_dialogs if dialog["action"] == requested_action), "")
+    assignment = process.events.filter(action__in=("assign", "assume")).first()
     return render(request, "cancelamentos/detail.html", {
-        "process": process, "dialogs": dialogs, "pendings": pendings, "equipment": equipment,
+        "process": process, "dialogs": allowed_dialogs, "auto_dialog": auto_dialog,
+        "assigned_at": assignment.created_at if assignment else None,
+        "pendings": pendings, "equipment": equipment,
         "obligations": obligations, "evidence": evidence, "history": history,
         "handoffs": process.handoffs.select_related("actor") if can_finance else [],
         "summary": financial_summary(process) if can_finance else "",

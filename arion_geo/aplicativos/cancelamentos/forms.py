@@ -156,6 +156,16 @@ class CompletionForm(OperationalForm):
     exception_evidence = forms.CharField(label="Evidência da exceção", max_length=1000, required=False)
 
 
+class StatusForm(OperationalForm):
+    status = forms.ChoiceField(label="Status operacional local", choices=CancellationProcess.OperationalStatus.choices)
+    reason = forms.CharField(label="Justificativa", max_length=3000, strip=True, widget=forms.Textarea(attrs={"rows": 3}))
+
+
+class StageForm(OperationalForm):
+    stage = forms.ChoiceField(label="Etapa de destino", choices=CancellationProcess.Stage.choices[:3])
+    reason = forms.CharField(label="Justificativa do movimento / retorno", max_length=3000, strip=True, widget=forms.Textarea(attrs={"rows": 3}))
+
+
 class SettingsForm(forms.ModelForm):
     class Meta:
         model = IntakeSettings
@@ -180,9 +190,11 @@ class QueryForm(forms.Form):
     situation = forms.ChoiceField(required=False, label="Situação da entrada", choices=(("", "Aguardando triagem"), ("all", "Todas as decisões"),
                              ("WAITING", "Aguardando triagem"), ("APPROVED", "Aprovados"), ("REJECTED", "Rejeitados")))
     presence = forms.ChoiceField(required=False, label="Presença no KPI 1", choices=(("", "Entradas atuais"), ("history", "Histórico — fora do KPI 1"), ("all", "Atuais e históricas")))
-    stage = forms.ChoiceField(required=False, label="Etapa principal", choices=(("", "Todas"), *CancellationProcess.Stage.choices))
+    stage = forms.ChoiceField(required=False, label="Etapa na consulta ampliada", choices=(("", "Todas"), *CancellationProcess.Stage.choices))
     pending_kind = forms.ChoiceField(required=False, label="Tipo de pendência", choices=(("", "Qualquer pendência"), *CancellationPending.Kind.choices))
     sent = forms.BooleanField(required=False, label="Encaminhados ao Financeiro")
+    with_open_pending = forms.BooleanField(required=False, label="Com pendências abertas",
+        widget=forms.CheckboxInput(attrs={"title": "Na aba Pendências, consulta qualquer etapa; nas demais, mantém a etapa selecionada."}))
     start = forms.DateField(required=False, label="Desde", widget=forms.DateInput(attrs={"type": "date"}))
     end = forms.DateField(required=False, label="Até", widget=forms.DateInput(attrs={"type": "date"}))
 

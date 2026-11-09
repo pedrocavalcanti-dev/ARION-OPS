@@ -38,7 +38,7 @@ O destino oficial continua sendo `CancellationProcess`. `origin=ARIONBROKER` ide
 | CONCLUIDO / CONCLUIDO_CANCELAMENTO | COMPLETED — classificação histórica | 139 |
 | CONCLUIDO / CANCELAMENTO_CONFIRMADO | COMPLETED, sem fabricar data/confirmação | 2 |
 
-PENDING preserva a fila principal histórica sem classificar os dois registros artificialmente como Solicitação. A ação humana existente Iniciar tratativa permite retomar esses registros em REQUEST. Nos processos atuais, as pendências continuam coexistindo com a etapa principal. A aba Pendências também mostra pendências abertas de processos históricos concluídos; a contagem sobrepõe outras etapas e não deve ser somada aos totais exclusivos Pedido/Solicitação/Concluídos.
+PENDING preserva a fila principal histórica sem classificar os dois registros artificialmente como Solicitação. A ação humana existente Iniciar tratativa permite retomar esses registros em REQUEST. Nos processos atuais, as pendências continuam coexistindo com a etapa principal. A aba Pendências usa somente a etapa PENDING (2 processos). Mais filtros → Com pendências abertas permite consultar as pendências de outras etapas, incluindo Concluídos, sem mudar o KPI principal. No snapshot atual são 93 processos com filhos OPEN; a união antiga com a etapa PENDING produzia 94 por sobreposição de um registro. As 172 pendências são preservadas.
 
 | Colunas de origem | Destino / preservação |
 |---|---|
@@ -98,7 +98,7 @@ A importação no banco SQLite do ambiente DEV foi autorizada expressamente e ex
 3. **Dry-run executado (`--allow-sqlite-dev`):** 162 candidatos novos, 161 tickets OTRS identificados, 149 vínculos CMDB identificados, 0 conflitos, `ready_for_apply=true`.
 4. **Apply executado:** lote `191937e19dbc4d60aa75c1996f43ebe3`, status `SUCCESS`. 162 cancelamentos criados, 1.084 eventos históricos, 594 movimentações, 135 observações, 172 pendências, 421 obrigações financeiras e 2.147 referências persistidas.
 5. **Dry-run pós-importação:** confirmou 162 processos existentes, 0 novos, 0 conflitos, 0 duplicidades.
-6. **Interface `/cancelamentos/`:** exibe os 162 cancelamentos nas abas correspondentes (Pedido: 14, Solicitação: 5, Pendências: 2 + sobreposições, Concluídos: 141), com navegação detalhada e consulta de todas as dimensões históricas e financeiras.
+6. **Interface `/cancelamentos/`:** exibe os 162 cancelamentos nas abas correspondentes (Pedido: 14, Solicitação: 5, Pendências: 2; consulta ampliada separada: 93 com pendências abertas, Concluídos: 141), com navegação detalhada e consulta de todas as dimensões históricas e financeiras.
 
 ```powershell
 # Comandos executados para a importação em SQLite DEV:

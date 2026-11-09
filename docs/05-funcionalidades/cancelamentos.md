@@ -1,6 +1,6 @@
 # Cancelamentos — operação NOC
 
-Estado: operação em DEV com elegibilidade OTRS corrigida e importador histórico preparado. O módulo acompanha cancelamentos de circuitos com triagem humana, tratativa ISP, equipamentos, pendências simultâneas, obrigações documentais e encaminhamento manual ao Financeiro. Preview e pré-reconciliação do snapshot ArionBroker foram realizados; Apply aguarda MySQL DEV. Não houve deploy nem carga histórica. Não representa a versão 1.4.0.
+Estado: operação em DEV com 162 cancelamentos históricos importados do ArionBroker no SQLite DEV autorizado. A fila Pendências usa a etapa principal; pendências individuais são consultadas separadamente. Triagem humana, tratativa ISP, responsáveis, equipamentos e encaminhamento manual ao Financeiro permanecem locais, sem escrita OTRS/CMDB. Não houve deploy nem alteração de versão.
 
 ## Acesso e telas
 
@@ -84,9 +84,9 @@ Um operador global autorizado pode admitir sem vínculo confiável com justifica
 
 ## Etapa principal e pendências
 
-`CancellationProcess.stage` diferencia **Pedido**, **Solicitação** e **Concluído**. **Pendências** é uma visão dos processos em andamento com pendências abertas, e pode coexistir com Pedido/Solicitação. Assim o operador mantém o contexto da tratativa mesmo quando há retirada, documento e boleto simultâneos.
+`CancellationProcess.stage` diferencia quatro etapas exclusivas: **Pedido**, **Solicitação**, **Pendências** e **Concluído**. A aba e o KPI principal Pendências usam somente `stage=PENDING`. Em **Mais filtros → Com pendências abertas**, a aba Pendências consulta qualquer etapa, com recorte opcional por etapa principal; nas demais abas o filtro mantém a etapa selecionada. O indicador secundário abre essa consulta ampliada. Pendências individuais não movem etapas nem resolvem a si mesmas.
 
-Pedido → Iniciar tratativa → Solicitação → Concluir NOC. As mudanças são explícitas, autorizadas e locais. Nenhuma mudança de fila OTRS avança o processo. Concluídos ficam disponíveis para consulta; esta entrega não oferece reabertura ou edição posterior da conclusão.
+Pedido → Iniciar tratativa → Solicitação → Concluir NOC permanece disponível. Mover / retornar etapa permite destinos abertos Pedido, Solicitação e Pendências, com justificativa obrigatória. Concluídos exige a ação de conclusão existente e suas validações; não é destino livre no formulário de movimento. Reabrir exige `reopen_cancellations` **e** `change_cancellation_stage`, destino aberto e justificativa; data, autor e eventual exceção da conclusão anterior ficam preservados no evento. Atribuir não reabre o processo. Todos os movimentos são locais, transacionais, escopados, auditados e protegidos por revisão concorrente.
 
 O detalhe permite responsável atual, cliente final, próxima ação e observações anexadas à timeline. As identidades CMDB permanecem snapshots controlados pela associação, sem edição livre de cliente/projeto que contorne o escopo. Retornos ISP são preservados no histórico de cada atualização, além do estado atual de tratativa.
 
@@ -107,7 +107,7 @@ O detalhe permite responsável atual, cliente final, próxima ação e observaç
 
 Pode haver várias abertas simultaneamente. Resolver ou encaminhar à área responsável exige justificativa e evidência, com data registrada. Encaminhada não significa pagamento realizado. Pendência monetária não cria obrigação automaticamente: a obrigação é o registro financeiro próprio, evitando interpretar previsão ou multa anotada como cobrança já confirmada.
 
-Pendências monetárias e categorias financeiras exigem permissions financeiras para consulta/alteração; responsáveis sem acesso ao processo não podem ser atribuídos. Sem permission financeira, valores e pendências financeiras são omitidos do detalhe; indicadores gerais ainda apontam a existência de providências no processo, sem revelar documentos ou quantias.
+Pendências monetárias e categorias financeiras exigem permissions financeiras para consulta/alteração; responsáveis sem acesso ao processo não podem ser atribuídos. Sem permission financeira, valores e pendências financeiras são omitidos do detalhe; contagens e filtros de pendências consideram apenas filhos autorizados, sem revelar documentos ou quantias.
 
 ## Obrigações e encaminhamento manual
 
@@ -142,7 +142,8 @@ Permissions `cancelamentos.*` registradas no catálogo de Grupos e acessos, sem 
 | `view_cancellations` | Acesso ao módulo e consultas autorizadas |
 | `triage_cancellations` | Decisões humanas e validação de vínculo |
 | `assign_cancellations` | Assumir e atribuir responsáveis |
-| `change_cancellation_stage` | Início, tratativa, dados, observações e evidências operacionais |
+| `change_cancellation_stage` | Status local, etapas abertas, retornos, tratativa, dados e observações |
+| `reopen_cancellations` | Reabertura explícita justificada; exige também alteração de etapas |
 | `manage_cancellation_pending` | Pendências e equipamentos |
 | `complete_cancellations` | Conclusão NOC |
 | `override_cancellation_completion` | Exceções justificadas na conclusão |
@@ -150,7 +151,7 @@ Permissions `cancelamentos.*` registradas no catálogo de Grupos e acessos, sem 
 | `manage_cancellation_finance` | Obrigações e registro manual de encaminhamento, também exige consulta financeira |
 | `export_cancellations` | CSV operacional escopado |
 | `configure_cancellations` | Configuração da projeção local |
-| `import_cancellation_history` | Execução controlada do importador histórico, com consulta e escopo global; Apply exclusivo MySQL DEV validado |
+| `import_cancellation_history` | Execução controlada do importador histórico, com consulta e escopo global; Apply DEV controlado, com autorização adicional explícita para SQLite |
 
 Conceder permissions explicitamente na Central de Configurações, com `GroupDataScope` apropriado. Superuser mantém acesso nativo. A permissão de administrar integrações não admite pedidos; acesso ao Cockpit não concede acesso ao módulo.
 
@@ -160,19 +161,25 @@ Escopo é aplicado antes de filtros, indicadores, paginação, detalhe, POST e e
 
 ## Indicadores e exportação
 
-A página principal mantém cinco indicadores compactos clicáveis, cada um levando à sua aba. **Concluídos** perdeu o sufixo NOC apenas na navegação da lista; a conclusão continua operacional e independente do pagamento. A coexistência de Pendências com Pedido/Solicitação é explicada discretamente no indicador. A tabela de Pendências mostra tipos, quantidade visível, previsões e valores informados quando autorizados.
+A página principal mantém cinco indicadores compactos clicáveis, filtros em uma linha e Mais filtros inicialmente fechado. As tabelas compartilham densidade, Ticket em destaque, truncamento, responsável atual e Visualizar sempre disponível. O menu Ações oferece apenas operações autorizadas e abre os mesmos formulários do detalhe. Pendências mostra quantidade com link ao detalhe, sem empilhar filhos; Pedido, Solicitação e Concluídos têm colunas adequadas à etapa. Scroll horizontal fica restrito à tabela.
 
 A sincronização usa um indicador compacto na linha das abas: atualizado, sincronizando, desatualizado ou falha. Seu detalhe apresenta os horários reais de sucesso do espelho/projeção e acesso à Central de Integrações quando permitido. Considera leases ativas e erros posteriores ao sucesso; recarregar a página não renova freshness.
 
-Todos os indicadores usam registros reais do recorte autorizado. Aguardando triagem conta entradas WAITING, sem confundi-las com pedidos oficiais. Pedido, Solicitação e Concluídos são contagens de processos com etapas mutuamente exclusivas. Com pendências conta processos não concluídos com pelo menos uma pendência OPEN; não soma o número de pendências. Documentos/boletos conta processos em andamento com pendência documental aberta ou obrigação aguardando documento. Encaminhados conta processos distintos com algum envio registrado, não quantidade de e-mails nem pagamentos.
+Todos os indicadores usam o recorte autorizado antes de contagens e paginação. Pedido, Solicitação, Pendências e Concluídos são exclusivos. No snapshot DEV de 09/11/2026: **14 / 5 / 2 / 141**. Há **93 processos com pendências abertas** (92 Concluídos + 1 Pendências). A consulta antiga unia esses 93 aos 2 da etapa PENDING, com interseção de 1, produzindo 94. Nenhum registro ou pendência foi excluído para corrigir a população. O filtro ampliado não substitui o KPI principal de 2. A triagem atual continua usando o KPI 1 e excluindo tickets com processo oficial.
 
-Os indicadores de pendências/documentos/envios podem se sobrepor às etapas principais e são identificados assim na tela. Pesquisa, responsável, cliente, projeto, ISP e período da abertura do ticket são aplicados ao mesmo universo. CSV reutiliza a consulta e protege células contra fórmulas; financeiro não é incluído na exportação inicial.
+Documentos/boletos e encaminhamentos permanecem conceitos secundários que podem se sobrepor às etapas. Pendências abertas consultadas/contadas respeitam também a autorização financeira. Pesquisa, responsável, cliente, projeto, ISP e período da abertura do ticket usam o mesmo universo; CSV reutiliza a consulta e protege células contra fórmulas, sem incluir financeiro.
+
+`operational_status` é independente da etapa e do status original imutável: Em análise, Aguardando retorno ou Pendência identificada. Alterar status exige justificativa e permission de alteração; não confirma ISP, pagamento, resolução ou conclusão. Sem status local, a lista mostra o status histórico ou a etapa. Tratativa ISP pode ser atualizada em Solicitação ou Pendências; a conclusão continua passando por Solicitação e pelas verificações existentes.
+
+Pendências e Concluídos exibem Multa, Equipamento, Outros e Total em BRL, alinhados à direita e somente com permission financeira. Usa-se uma única vez o valor cobrado ou, na sua ausência, o previsto da obrigação. Valores de filhos só preenchem categorias sem obrigação; nunca são somados à categoria já registrada. Havendo `UNRECONCILED`, `POSSIBLE_DUPLICATE`, valor desconhecido ou pendência monetária sem conciliação, Total mostra **A conferir**. Zero e NULL permanecem distintos; valor informado não significa pagamento.
+
+Aberturas anômalas e conclusões/datas efetivas indisponíveis aparecem como **Data a revisar**, sem corrigir a origem. O detalhe autorizado preserva datas brutas e responsável histórico por ID quando o nome não existe na extração, separado do responsável atual, data de atribuição local e timeline. Nenhum usuário é criado ou associado por coincidência de ID.
 
 ## Models, migrations e worker
 
 App: `arion_geo/aplicativos/cancelamentos/`. Models: `IntakeSettings`, `CancellationIntake`, `CancellationProcess`, `ISPTreatment`, `CancellationPending`, `CancellationEquipment`, `FinancialObligation`, `CancellationEvidence`, `FinancialHandoff`, `HandoffObligation`, `CancellationEvent`, `LegacyImportRun` e `LegacyCancellationReference`.
 
-Migrations aditivas: `0001_initial`, `0002_cancellationevent_details`, `0003_cancellationprocess_origin_and_more` e `0004_alter_financialobligation_legacy_field_and_more`. As duas últimas preservam identidades/fatos históricos e admissão sem triagem somente para origem ArionBroker. Aplicar pelo Python da `.venv` no banco DEV confirmado. O checkout continua em SQLite, sem candidato MySQL; as migrations locais preservaram dados após backup e não constituem validação MySQL. Build frontend inclui `frontend_src/js/cancelamentos/cancelamentos.js` pelo mecanismo existente.
+Migrations aditivas: `0001_initial`, `0002_cancellationevent_details`, `0003_cancellationprocess_origin_and_more`, `0004_alter_financialobligation_legacy_field_and_more` e `0005_alter_cancellationprocess_options_and_more`. A 0005 adiciona status local inicialmente vazio e a permission de reabertura, sem concedê-la a grupos nem alterar fatos históricos. As migrations 0003/0004 preservam identidades/fatos históricos e admissão sem triagem somente para origem ArionBroker. Aplicar pelo Python da `.venv` no banco DEV confirmado. O checkout continua em SQLite, sem candidato MySQL; as migrations locais preservaram dados após backup e não constituem validação MySQL. Build frontend inclui `frontend_src/js/cancelamentos/cancelamentos.js` pelo mecanismo existente.
 
 ## Nota original OTRS — dependência
 
@@ -182,15 +189,15 @@ Nesta entrega nenhum corpo de artigo foi consultado, persistido ou enviado ao fr
 
 ## Importação histórica e limites
 
-`importar_cancelamentos_legado` oferece preview, dry-run e Apply protegido. O dump real e o schema das cinco tabelas foram conferidos: 162 cancelamentos e 1.985 filhos, totalizando 2.147 registros. As referências guardam origem/entidade/PK única, checksum, lote, fatos estruturados e destino. O Apply exige MySQL 8 local `arion_geo_dev`, migrations, backup/restauração verificados, conta autorizada e relatório aprovado para o plano atual; permanece bloqueado neste checkout SQLite.
+`importar_cancelamentos_legado` oferece preview, dry-run e Apply protegido. O snapshot real foi importado em SQLite DEV por autorização explícita anterior, com `--allow-sqlite-dev`, backup e reconciliação. Esta correção não reexecuta o importador. Permanecem 162 processos, 1.084 históricos, 594 movimentações, 135 observações, 172 pendências, 421 previsões financeiras e 2.147 referências. O caminho MySQL 8 DEV continua exigindo configuração e validação próprias; SQLite não o homologa.
 
 O processo oficial importado reutiliza `CancellationProcess`, sem criar triagem ou aprovação fictícia quando não houver entrada correspondente. Fila determina a etapa; status original, responsável legado e datas brutas ficam separados da operação atual. Concluídos sem data são sinalizados, ano 0026 não é convertido, DESCARTADA é distinta de RESOLVIDA e pendências abertas continuam visíveis mesmo em histórico concluído. Identidade OTRS usa número operacional exato; vínculo CMDB exige evidência. Atribuição atual, inclusive em concluídos, não altera responsável legado. Textos livres importados têm exposição financeira conservadora até revisão. Ver [mapeamento completo, configuração e comandos](cancelamentos-migracao-arionbroker.md) e [plano de integração](cancelamentos-plano-integracao.md).
 
-Permanecem futuros: configurar/homologar MySQL DEV e executar a carga histórica, reconciliação de status CMDB, múltiplos processos por ticket, reconsideração/reabertura, upload privado de anexos, envio automático, painel Financeiro, confirmação de pagamento e gráficos financeiros. Não há automação remota, dados fabricados ou deploy nesta entrega.
+Permanecem futuros: configurar/homologar MySQL DEV, reconciliação de status CMDB, múltiplos processos por ticket, reconsideração da decisão de triagem, upload privado de anexos, envio automático, painel Financeiro, confirmação de pagamento e gráficos financeiros. Não há automação remota ou deploy nesta entrega.
 
 ## Validação
 
-`check` passou e `makemigrations --check --dry-run` não detectou alterações pendentes. As duas migrations foram confirmadas como aplicadas no DEV configurado, com backup local antes da alteração de schema.
+Na correção operacional passaram os **72 testes focados do módulo**, `check`, `makemigrations --check --dry-run` e build frontend. A migration 0005 está aplicada no DEV, sem operações pendentes. O navegador validou as cinco abas em claro/escuro, nas larguras 1920, 1440, 1366, 1024 e 390 px: linhas de 52 px, paginação e ausência de overflow global. Atribuir, assumir, status, movimento, adicionar/resolver pendência, concluir e reabrir foram executados somente em base sintética isolada. A consulta ampliada preserva o KPI principal. Na base real, verificação somente leitura e hashes anteriores confirmaram preservação integral das oito entidades de processos/históricos/valores; nove tabelas de contas, grupos, permissions e escopos foram conferidas sem alteração. Nenhum importador real foi reexecutado.
 
 Na primeira entrega passaram 61 testes focados de Cancelamentos, worker e contratos documentais, além da validação da administração de acessos; os 35 testes do módulo foram repetidos após a revisão final do serviço de conclusão. Os cenários incluem replay e falha parcial da projeção, admissão única, decisões preservadas, vínculo CMDB, pendências simultâneas, equipamentos, cobranças e documentos, encaminhamento, exceções, escopo, CSRF, auditoria e exportação. Smoke tests cobriram as principais páginas autenticadas depois da inclusão da navegação.
 

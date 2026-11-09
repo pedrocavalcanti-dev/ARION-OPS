@@ -159,6 +159,8 @@ ACTION_PERMISSIONS = {
     "obligation_add": "manage_cancellation_finance", "obligation_update": "manage_cancellation_finance",
     "handoff": "manage_cancellation_finance", "evidence": "change_cancellation_stage",
     "complete": "complete_cancellations",
+    "status": "change_cancellation_stage", "move": "change_cancellation_stage",
+    "reopen": "reopen_cancellations",
 }
 
 
@@ -235,7 +237,7 @@ def act_on_process(*, request, pk, action, data):
     process = get_object_or_404(CancellationScope.processes(request.user).select_for_update(), pk=pk)
     revision = valid(forms.OperationalForm(data))["revision"]
     check_revision(process, revision)
-    if process.stage == CancellationProcess.Stage.COMPLETED and action not in ("assign", "assume"):
+    if process.stage == CancellationProcess.Stage.COMPLETED and action not in ("assign", "assume", "reopen"):
         raise ValidationError("Processo concluído: o histórico permanece preservado para consulta.")
     if action in ("pending_resolve", "equipment_update", "obligation_update"):
         try:
@@ -261,6 +263,30 @@ def act_on_process(*, request, pk, action, data):
         metadata.update(previous_owner_id=process.owner_id, owner_id=owner.pk if owner else None)
         _assign(process, owner)
         description = f"Responsável: {owner.get_full_name() or owner.get_username() if owner else 'não atribuído'}."
+    elif action == "status":
+        values = valid(forms.StatusForm(data))
+        if process.operational_status == values["status"]:
+            raise ValidationError("Selecione um status diferente do atual.")
+        metadata.update(previous_status=process.operational_status, status=values["status"])
+        process.operational_status = values["status"]
+        description = f"Status operacional: {process.get_operational_status_display()}. {values['reason']}"
+    elif action in ("move", "reopen"):
+        values = valid(forms.StageForm(data))
+        previous_stage = process.stage
+        if action == "reopen":
+            require(request.user, "change_cancellation_stage")
+            if previous_stage != "COMPLETED":
+                raise ValidationError("Somente um processo concluído pode ser reaberto.")
+            details["previous_completion"] = {
+                "completed_at": process.completed_at.isoformat() if process.completed_at else None,
+                "completed_by_id": process.completed_by_id, "exception": process.completion_exception,
+            }
+            process.completed_at, process.completed_by, process.completion_exception = None, None, ""
+        elif values["stage"] == previous_stage:
+            raise ValidationError("Selecione uma etapa diferente da atual.")
+        metadata.update(previous_stage=previous_stage, stage=values["stage"])
+        process.stage = values["stage"]
+        description = f"{'Reabertura autorizada' if action == 'reopen' else 'Movimento local'}: {previous_stage} → {process.get_stage_display()}. {values['reason']}"
     elif action == "update":
         valid(forms.ProcessForm(data, instance=process))
         next_action = timezone.localtime(process.next_action_at).strftime("%d/%m/%Y %H:%M") if process.next_action_at else "não definida"
@@ -284,7 +310,7 @@ def act_on_process(*, request, pk, action, data):
         process.stage = CancellationProcess.Stage.REQUEST
         description = "Tratativa com o ISP iniciada."
     elif action == "treatment":
-        if process.stage != CancellationProcess.Stage.REQUEST:
+        if process.stage not in (CancellationProcess.Stage.REQUEST, CancellationProcess.Stage.PENDING):
             raise ValidationError("Inicie a tratativa antes de registrar confirmação do ISP.")
         form = forms.TreatmentForm(data, instance=process.treatment)
         valid(form)

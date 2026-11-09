@@ -2,6 +2,28 @@
 
 (() => {
   let opener = null;
+  const closeMenus = () => document.querySelectorAll(".canc-action-menu[open]").forEach((menu) => { menu.open = false; });
+  document.addEventListener("toggle", (event) => {
+    const menu = event.target;
+    if (!menu.matches?.(".canc-action-menu[open]")) return;
+    document.querySelectorAll(".canc-action-menu[open]").forEach((other) => { if (other !== menu) other.open = false; });
+    const box = menu.querySelector("summary").getBoundingClientRect();
+    const panel = menu.querySelector("div");
+    panel.style.left = `${Math.max(12, Math.min(box.right - panel.offsetWidth, innerWidth - panel.offsetWidth - 12))}px`;
+    panel.style.top = `${box.bottom + panel.offsetHeight < innerHeight - 12 ? box.bottom + 4 : Math.max(12, box.top - panel.offsetHeight - 4)}px`;
+  }, true);
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeMenus(); });
+  document.addEventListener("click", (event) => { if (!event.target.closest(".canc-action-menu")) closeMenus(); });
+  window.addEventListener("resize", closeMenus);
+  const autoDialog = document.getElementById(document.querySelector("[data-auto-dialog]")?.dataset.autoDialog);
+  if (autoDialog instanceof HTMLDialogElement) autoDialog.showModal();
+  document.querySelector("[name=with_open_pending]")?.addEventListener("change", (event) => {
+    const stage = document.querySelector("[data-pending-stage]");
+    if (stage) {
+      stage.hidden = !event.target.checked;
+      if (stage.hidden) stage.querySelector("select").value = "";
+    }
+  });
   document.addEventListener("click", async (event) => {
     const more = event.target.closest("[data-more-filters]");
     if (more) {
@@ -13,6 +35,7 @@
     }
     const assign = event.target.closest("[data-assign-entry]");
     if (assign) {
+      closeMenus();
       const dialog = document.getElementById("list-assignment");
       const form = dialog?.querySelector("[data-assignment-form]");
       if (form) {
@@ -21,7 +44,7 @@
         form.elements.owner.value = assign.dataset.owner;
         form.querySelector("[data-assignment-record]").textContent = assign.dataset.record;
         form.querySelector("[data-form-feedback]").textContent = "";
-        opener = assign;
+        opener = assign.closest(".canc-action-menu")?.querySelector("summary") || assign;
         dialog.showModal();
       }
     }

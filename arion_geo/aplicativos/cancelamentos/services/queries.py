@@ -1,6 +1,6 @@
 from django.db.models import Count, Exists, OuterRef, Q
 
-from ..forms import QueryForm
+from ..forms import QueryForm, FINANCIAL_PENDING_KINDS
 from ..models import CancellationPending, CancellationProcess, FinancialObligation
 from .data_scope import CancellationScope
 from .otrs_intake import current_intakes
@@ -56,6 +56,8 @@ def query_module(user, params):
                 intakes = intakes.filter(**{f"source_created_at__date__{lookup}": data[key]})
                 processes = processes.filter(Q(**{f"intake__source_created_at__date__{lookup}": data[key]}) | Q(**{f"ticket_opened_on__{lookup}": data[key]}))
     active_pending = CancellationPending.objects.filter(process_id=OuterRef("pk"), status="OPEN")
+    if not user.has_perm("cancelamentos.view_cancellation_finance"):
+        active_pending = active_pending.exclude(kind__in=FINANCIAL_PENDING_KINDS).filter(amount__isnull=True, legacy_reference__isnull=True)
     waiting_document = FinancialObligation.objects.filter(process_id=OuterRef("pk"), document_status="WAITING")
     processes = processes.annotate(has_pending=Exists(active_pending))
     tab = data.get("tab") or "intake"
@@ -63,15 +65,16 @@ def query_module(user, params):
         processes = processes.filter(Exists(active_pending.filter(kind=data["pending_kind"])))
     if tab != "intake" and data.get("sent"):
         processes = processes.filter(handoffs__isnull=False).distinct()
-    pending_processes = processes.filter(Q(has_pending=True) | Q(stage="PENDING"))
-    if tab == "pending" and data.get("stage"):
+    pending_processes = processes.filter(has_pending=True) if data.get("with_open_pending") else processes.filter(stage="PENDING")
+    if tab == "pending" and data.get("with_open_pending") and data.get("stage"):
         pending_processes = pending_processes.filter(stage=data["stage"])
     grouped = {row["stage"]: row["n"] for row in processes.values("stage").annotate(n=Count("pk", distinct=True))}
     documents_pending = active_pending.filter(kind__in=("BILL", "DOCUMENT", "RELEASE", "AGREEMENT"))
     metrics = {
         "intake": current_intakes(intakes).filter(status="WAITING", process__isnull=True, _has_official=False).count(), "order": grouped.get("ORDER", 0),
         "request": grouped.get("REQUEST", 0), "completed": grouped.get("COMPLETED", 0),
-        "pending": pending_processes.count(),
+        "pending": grouped.get("PENDING", 0),
+        "open_pending": processes.filter(has_pending=True).count(),
         "documents": processes.exclude(stage="COMPLETED").filter(
             Q(Exists(documents_pending)) | Q(Exists(waiting_document))
         ).count(),
@@ -92,13 +95,15 @@ def query_module(user, params):
         queryset = pending_processes
     else:
         queryset = processes.filter(stage={"order": "ORDER", "request": "REQUEST", "completed": "COMPLETED"}[tab])
+        if data.get("with_open_pending"):
+            queryset = queryset.filter(has_pending=True)
     advanced = ["isp", "project", "start", "end"]
-    advanced += ["situation", "presence"] if tab == "intake" else ["pending_kind", "sent"]
+    advanced += ["situation", "presence"] if tab == "intake" else ["with_open_pending", "pending_kind", "sent"]
     if tab == "pending":
         advanced.append("stage")
     if data.get("client"):
         advanced.append("client")  # Preserve existing bookmarked client-only recortes.
-    advanced_count = sum(bool(data.get(name)) for name in advanced)
+    advanced_count = sum(bool(data.get(name)) for name in advanced if name != "stage" or data.get("with_open_pending"))
     return {"form": form, "queryset": queryset, "tab": tab, "metrics": metrics,
             "advanced_fields": [form[name] for name in advanced], "advanced_count": advanced_count,
             "owner_filter": data.get("owner") or ""}

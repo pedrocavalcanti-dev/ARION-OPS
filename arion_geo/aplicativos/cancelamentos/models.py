@@ -12,6 +12,7 @@ PERMISSIONS = (
     ("triage_cancellations", "Aprovar e rejeitar entradas OTRS"),
     ("assign_cancellations", "Assumir e atribuir responsáveis"),
     ("change_cancellation_stage", "Registrar tratativa e alterar etapas"),
+    ("reopen_cancellations", "Reabrir cancelamentos concluídos com justificativa"),
     ("manage_cancellation_pending", "Registrar pendências e equipamentos"),
     ("complete_cancellations", "Concluir operacionalmente"),
     ("override_cancellation_completion", "Concluir com exceção justificada"),
@@ -80,8 +81,13 @@ class CancellationProcess(models.Model):
     class Stage(models.TextChoices):
         ORDER = "ORDER", "Pedido"
         REQUEST = "REQUEST", "Solicitação"
-        PENDING = "PENDING", "Pendências (origem histórica)"
+        PENDING = "PENDING", "Pendências"
         COMPLETED = "COMPLETED", "Concluído"
+
+    class OperationalStatus(models.TextChoices):
+        ANALYSIS = "ANALYSIS", "Em análise"
+        WAITING = "WAITING", "Aguardando retorno"
+        BLOCKED = "BLOCKED", "Pendência identificada"
 
     intake = models.OneToOneField(CancellationIntake, null=True, blank=True, on_delete=models.PROTECT, related_name="process")
     origin = models.CharField(max_length=20, default="ARION_OPS", choices=(("ARION_OPS", "ARION OPS"), ("ARIONBROKER", "Importado do ArionBroker")))
@@ -90,6 +96,7 @@ class CancellationProcess(models.Model):
     ticket_number = models.CharField(max_length=80, null=True, blank=True, unique=True)
     ticket_opened_on = models.DateField(null=True, blank=True)
     stage = models.CharField(max_length=12, choices=Stage.choices, default=Stage.ORDER, db_index=True)
+    operational_status = models.CharField(max_length=12, choices=OperationalStatus.choices, blank=True, default="")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
                               on_delete=models.SET_NULL, related_name="cancellation_processes")
     link = models.ForeignKey("integracoes.CMDBLinkMirror", null=True, blank=True,

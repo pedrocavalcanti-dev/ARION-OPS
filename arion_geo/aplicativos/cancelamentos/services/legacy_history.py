@@ -32,6 +32,7 @@ def legacy_context(process, user):
     if user.has_perm("cancelamentos.view_cancellation_finance"):
         groups.append({"title": "Informações e observações históricas restritas", "fields": [(label, data.get(key)) for key, label in FINANCIAL_FIELDS]})
     return {"id": reference.legacy_pk, "groups": groups, "batch": reference.batch,
+            "responsible_id": data.get("responsavel_id"),
             "opening_needs_review": reference.reconciliation.get("opening_date_needs_review"),
             "completion_needs_review": reference.reconciliation.get("historical_completion_needs_review"),
             "otrs_matched": reference.reconciliation.get("otrs_matched"),

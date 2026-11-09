@@ -344,9 +344,11 @@ class CancellationTests(TestCase):
         self.assertEqual(metrics["intake"], 1)
         self.assertEqual(metrics["order"], 1)
         self.assertEqual(metrics["request"], 1)
-        self.assertEqual(metrics["pending"], 1)
+        self.assertEqual(metrics["pending"], 0)
+        self.assertEqual(metrics["open_pending"], 1)
         self.assertEqual(metrics["documents"], 1)
-        self.assertEqual(query_module(self.admin, {"tab": "pending"})["queryset"].count(), 1)
+        self.assertEqual(query_module(self.admin, {"tab": "pending"})["queryset"].count(), 0)
+        self.assertEqual(query_module(self.admin, {"tab": "pending", "with_open_pending": "on"})["queryset"].count(), 1)
 
     def test_export_uses_scope_filters_and_csv_formula_protection(self):
         process = self.approve()
@@ -602,3 +604,107 @@ class CancellationTests(TestCase):
         data = query_module(self.admin, {"tab": "pending", "stage": "ORDER"})
         self.assertEqual(data["queryset"].count(), 0)
         self.assertEqual(data["metrics"]["request"], 1)
+
+    def test_exclusive_pending_queue_and_expanded_filter_preserve_children(self):
+        from django.http import QueryDict
+        from .views import _metric_url
+        pending = self.approve(self.entry(123))
+        done = self.approve(self.entry(124))
+        other = self.approve(self.entry(125))
+        CancellationProcess.objects.filter(pk=pending.pk).update(stage="PENDING")
+        CancellationProcess.objects.filter(pk=done.pk).update(stage="COMPLETED")
+        for process in (pending, done):
+            CancellationPending.objects.create(process=process, kind="DOCUMENT", description="Preservar")
+        data = query_module(self.admin, {"tab": "pending"})
+        self.assertEqual(list(data["queryset"].values_list("pk", flat=True)), [pending.pk])
+        self.assertEqual(data["metrics"]["pending"], 1)
+        self.assertEqual(data["metrics"]["open_pending"], 2)
+        expanded = query_module(self.admin, {"tab": "pending", "with_open_pending": "on", "stage": "COMPLETED"})
+        self.assertEqual(expanded["queryset"].get().pk, done.pk)
+        self.assertEqual(expanded["metrics"]["pending"], 1)
+        self.assertFalse(query_module(self.admin, {"tab": "order", "with_open_pending": "on"})["queryset"].exists())
+        self.assertNotIn("with_open_pending", _metric_url(QueryDict("tab=pending&with_open_pending=on&stage=COMPLETED"), "pending"))
+        self.assertEqual(CancellationPending.objects.count(), 2)
+        done.refresh_from_db()
+        self.assertEqual(done.stage, "COMPLETED")
+
+    def test_status_moves_and_reopen_are_explicit_scoped_and_audited(self):
+        process = self.approve()
+        self.act(process, "status", status="WAITING", reason="Aguardar contato")
+        process.refresh_from_db()
+        self.assertEqual((process.operational_status, process.stage), ("WAITING", "ORDER"))
+        with self.assertRaises(ValidationError):
+            self.act(process, "move", stage="REQUEST", reason=" ")
+        self.act(process, "move", stage="PENDING", reason="Tratativa pendente")
+        self.act(process, "move", stage="ORDER", reason="Retorno para conferência")
+        with self.assertRaises(ValidationError):
+            self.act(process, "move", stage="COMPLETED", reason="Não pode contornar conclusão")
+        CancellationProcess.objects.filter(pk=process.pk).update(stage="COMPLETED", completed_at=timezone.now(), completed_by=self.admin)
+        with self.assertRaises(ValidationError):
+            self.act(process, "status", status="ANALYSIS", reason="Reabertura implícita bloqueada")
+        user = self.restricted(("view_cancellations", "change_cancellation_stage"))
+        process.refresh_from_db()
+        response = Client()
+        response.force_login(user)
+        denied = response.post(reverse("cancelamentos:process_action", args=(process.pk, "reopen")),
+                               {"revision": process.revision, "stage": "REQUEST", "reason": "Sem permissão"})
+        self.assertEqual(denied.status_code, 403)
+        self.act(process, "reopen", stage="REQUEST", reason="Retomar conferência autorizada")
+        process.refresh_from_db()
+        self.assertEqual(process.stage, "REQUEST")
+        self.assertIsNone(process.completed_at)
+        event = process.events.get(action="reopen")
+        self.assertIsNotNone(event.details["previous_completion"]["completed_at"])
+        self.assertIsNotNone(event.audit_event_id)
+        self.assertIn("Retomar conferência", event.description)
+        stale = response.post(reverse("cancelamentos:process_action", args=(process.pk, "status")),
+            {"revision": process.revision - 1, "status": "BLOCKED", "reason": "Concorrência"}, HTTP_ACCEPT="application/json")
+        self.assertEqual(stale.status_code, 409)
+        outsider = self.restricted(("view_cancellations", "change_cancellation_stage"), project="Projeto B", client="Cliente B")
+        response.force_login(outsider)
+        self.assertEqual(response.post(reverse("cancelamentos:process_action", args=(process.pk, "move")),
+            {"revision": process.revision, "stage": "PENDING", "reason": "Fora do escopo"}).status_code, 404)
+
+    def test_compact_money_columns_do_not_sum_legacy_and_pending_charges(self):
+        from .services.presentation import prepare_rows
+        from .templatetags.cancellation_display import brl
+        process = self.approve()
+        CancellationProcess.objects.filter(pk=process.pk).update(stage="PENDING")
+        FinancialObligation.objects.create(process=process, kind="CONTRACT", description="Multa", estimated_amount=Decimal("1234.50"),
+            legacy_field="valor_multa_rescisao", reconciliation_state="POSSIBLE_DUPLICATE")
+        FinancialObligation.objects.create(process=process, kind="EQUIPMENT", description="Equipamento", estimated_amount=Decimal("0"))
+        CancellationPending.objects.create(process=process, kind="CONTRACT_FINE", description="Descrição longa privada " * 100, amount=Decimal("1234.50"))
+        row = prepare_rows(query_module(self.admin, {"tab": "pending"})["queryset"], self.admin)[0]
+        self.assertEqual(row.finance["fine"], Decimal("1234.50"))
+        self.assertEqual(row.finance["equipment"], Decimal("0"))
+        self.assertIsNone(row.finance["other"])
+        self.assertIsNone(row.finance["total"])
+        self.assertEqual(brl(Decimal("1234.50")), "R$ 1.234,50")
+        self.assertEqual(brl(Decimal("0")), "R$ 0,00")
+        self.assertEqual(brl(None), "—")
+        result = self.client.get(reverse("cancelamentos:index"), {"tab": "pending"})
+        self.assertContains(result, "A conferir")
+        self.assertContains(result, "Visualizar")
+        self.assertContains(result, "Alterar status")
+        self.assertContains(result, "1 pendência")
+        self.assertNotContains(result, "Descrição longa privada")
+        user = self.restricted()
+        self.client.force_login(user)
+        result = self.client.get(reverse("cancelamentos:index"), {"tab": "pending"})
+        self.assertNotContains(result, "Multa (R$)")
+        self.assertNotContains(result, "1.234,50")
+        self.assertNotContains(result, "Alterar status")
+        self.assertContains(result, "0 pendências")
+
+    def test_action_deep_links_only_open_authorized_dialogs_and_completion_stays_guarded(self):
+        process = self.approve()
+        response = self.client.get(reverse("cancelamentos:detail", args=(process.pk,)), {"action": "move"})
+        self.assertEqual(response.context["auto_dialog"], "action-move")
+        self.act(process, "move", stage="REQUEST", reason="Contato com ISP")
+        with self.assertRaises(ValidationError):
+            self.act(process, "complete")
+        user = self.restricted()
+        self.client.force_login(user)
+        response = self.client.get(reverse("cancelamentos:detail", args=(process.pk,)), {"action": "move"})
+        self.assertEqual(response.context["auto_dialog"], "")
+        self.assertNotContains(response, 'id="action-move"')
