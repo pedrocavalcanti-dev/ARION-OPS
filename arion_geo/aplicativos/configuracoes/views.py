@@ -34,7 +34,7 @@ from .documentation import DocumentationService
 from .documentation_explorer import DocumentationExplorer
 from config.releases import release_catalog
 from aplicativos.autenticacao.models import AccessToken, UserSecurityProfile
-from aplicativos.autenticacao.security import current_password_policy, issue_access_token, password_access_status
+from aplicativos.autenticacao.security import current_password_policy, get_security_profile, issue_access_token, password_access_status
 from aplicativos.autenticacao.forms import SecurePasswordChangeForm
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def security(request):
         form = SecurePasswordChangeForm(user=request.user, data=request.POST)
         if form.is_valid():
             user = form.save()
-            profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+            profile = get_security_profile(user)
             profile.password_changed_at = timezone.now()
             profile.must_change_password = False
             profile.change_reason = ""
@@ -138,7 +138,7 @@ def user_list(request):
     can_view_access_status = request.user.has_perm("configuracoes.view_access_status")
     access_policy = current_password_policy() if can_view_access_status else None
     for item in page_obj:
-        memberships = list(item.groups.order_by("name"))
+        memberships = sorted(item.groups.all(), key=lambda group: group.name)
         item.primary_group = memberships[0] if len(memberships) == 1 else None
         item.multiple_profiles = len(memberships) > 1
         try:
@@ -147,6 +147,7 @@ def user_list(request):
             item.group_data_scope = None
         if can_view_access_status:
             item.access_status_code, item.access_status_label = password_access_status(item, policy=access_policy)
+            item.can_receive_invitation = item.is_active and not item.has_usable_password() and item.access_status_code in {"pending", "invitation_expired"}
     filters = {"q": query, "group": group_id, "status": status, "scope": scope_type}
     return render(request, "configuracoes/admin/users.html", _admin_context(request, "users", page_obj=page_obj, groups=Group.objects.order_by("name"), filters=filters))
 
@@ -162,7 +163,7 @@ def user_create(request):
         AuditService.record(request=request, category="ADMINISTRATION", action="USER_CREATED", description="Usuário criado", obj=user, metadata={
             "user_id": user.pk, "username": user.username, "group": user.groups.first().name,
         })
-        messages.success(request, "Usuário criado. Gere o convite somente depois de revisar o perfil e o escopo.")
+        messages.success(request, "Usuário criado com sucesso. Revise o perfil e o escopo abaixo e gere o convite de primeiro acesso.")
         return redirect("configuracoes:user-detail", pk=user.pk)
     return render(request, "configuracoes/admin/user_form.html", _admin_context(request, "users", form=form, page_title="Novo usuário", user_object=None))
 
@@ -176,8 +177,8 @@ def user_detail(request, pk):
     ), pk=pk)
     memberships = list(user.groups.order_by("name"))
     group = memberships[0] if len(memberships) == 1 else None
-    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
     policy = current_password_policy()
+    profile = get_security_profile(user, policy=policy)
     status_code, status_label = password_access_status(user, policy=policy)
     max_age_days = policy.max_age_days if policy else 90
     expires_at = profile.password_expires_at(max_age_days=max_age_days) if profile.password_changed_at else None
@@ -206,6 +207,7 @@ def _access_link_issued_response(request, *, user, token, url, purpose):
         "access_url": url,
         "expires_at_label": timezone.localtime(token.expires_at).strftime("%d/%m/%Y %H:%M"),
         "return_url": reverse("configuracoes:user-detail", args=(user.pk,)),
+        "users_url": reverse("configuracoes:users"),
     })
     response["Referrer-Policy"] = "no-referrer"
     response["Cache-Control"] = "private, no-store"
@@ -222,7 +224,7 @@ def _access_link_issued_response(request, *, user, token, url, purpose):
 @require_POST
 def user_issue_invitation(request, pk):
     user = get_object_or_404(get_user_model(), pk=pk)
-    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    profile = get_security_profile(user)
     if not user.is_active or profile.first_activation_completed_at:
         messages.error(request, "Não é possível emitir convite para esta conta.")
         return redirect("configuracoes:user-detail", pk=user.pk)
@@ -262,7 +264,7 @@ def user_revoke_invitation(request, pk):
 @require_POST
 def user_issue_password_reset(request, pk):
     user = get_object_or_404(get_user_model(), pk=pk)
-    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    profile = get_security_profile(user)
     if not user.is_active or not profile.first_activation_completed_at:
         messages.error(request, "A conta precisa estar ativa e ter concluído o primeiro acesso para receber um link de redefinição.")
         return redirect("configuracoes:user-detail", pk=user.pk)
@@ -283,7 +285,7 @@ def user_issue_password_reset(request, pk):
 @require_POST
 def user_require_password_change(request, pk):
     user = get_object_or_404(get_user_model(), pk=pk)
-    profile, _ = UserSecurityProfile.objects.get_or_create(user=user)
+    profile = get_security_profile(user)
     if profile.is_service_account:
         messages.error(request, "Contas de serviço não podem receber troca obrigatória interativa.")
         return redirect("configuracoes:user-detail", pk=user.pk)

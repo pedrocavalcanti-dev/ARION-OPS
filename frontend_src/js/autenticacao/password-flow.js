@@ -1,14 +1,30 @@
 (() => {
-  const init = () => {
+  const init = async () => {
     const linkForm = document.querySelector('[data-link-form]');
     const tokenInput = linkForm?.querySelector('[data-link-token]');
     const warning = document.querySelector('[data-link-warning]');
     if (linkForm && tokenInput) {
-      const token = window.location.hash.slice(1);
-      if (token && /^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+      const token = window.location.hash.slice(1) || tokenInput.value;
+      if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
+      if (/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
         tokenInput.value = token;
-        window.history.replaceState(null, '', window.location.pathname);
-      } else if (!/^[A-Za-z0-9_-]{32,128}$/.test(tokenInput.value)) {
+        linkForm.hidden = true;
+        try {
+          const response = await fetch(window.location.pathname, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'X-CSRFToken': linkForm.querySelector('[name="csrfmiddlewaretoken"]').value },
+            body: new URLSearchParams({ action: 'inspect_token', token }),
+          });
+          if (!response.ok) throw new Error('Link unavailable');
+          const recipient = await response.json();
+          const title = document.querySelector('[data-flow-title]');
+          if (title && linkForm.dataset.linkForm === 'activation') title.textContent = `Bem-vindo, ${recipient.display_name}`;
+          linkForm.hidden = false;
+        } catch {
+          if (warning) warning.hidden = false;
+        }
+      } else {
         linkForm.hidden = true;
         if (warning) warning.hidden = false;
       }
@@ -42,4 +58,7 @@
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
+  window.addEventListener('hashchange', () => {
+    if (window.location.hash && document.querySelector('[data-link-form]')) window.location.reload();
+  });
 })();

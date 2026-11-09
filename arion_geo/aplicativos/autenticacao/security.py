@@ -91,18 +91,28 @@ def current_password_policy():
     return PasswordPolicy.objects.filter(pk=1).first()
 
 
+def get_security_profile(user, *, policy=_POLICY_UNSET):
+    """Keep existing password accounts distinct from new invitation accounts."""
+    if policy is _POLICY_UNSET:
+        policy = current_password_policy()
+    legacy_account = user.has_usable_password()
+    profile, _ = UserSecurityProfile.objects.get_or_create(
+        user=user,
+        defaults={
+            "first_activation_completed_at": user.date_joined if legacy_account else None,
+            "must_change_password": bool(legacy_account and policy and policy.active),
+            "change_reason": UserSecurityProfile.ChangeReason.INITIAL if legacy_account else UserSecurityProfile.ChangeReason.INVITATION,
+        },
+    )
+    return profile
+
+
 def password_change_required(user, *, now=None):
     if not user.is_authenticated:
         return False
     policy = current_password_policy()
     now = now or timezone.now()
-    profile, _ = UserSecurityProfile.objects.get_or_create(
-        user=user,
-        defaults={
-            "must_change_password": bool(policy and policy.active),
-            "change_reason": UserSecurityProfile.ChangeReason.INITIAL,
-        },
-    )
+    profile = get_security_profile(user, policy=policy)
     if profile.is_service_account:
         return False
     if profile.must_change_password and profile.change_reason == UserSecurityProfile.ChangeReason.ADMIN:
@@ -136,17 +146,19 @@ def password_access_status(user, *, now=None, policy=_POLICY_UNSET):
         profile = None
     if profile and profile.is_service_account:
         return "active", "Ativo"
+    if policy is _POLICY_UNSET:
+        policy = current_password_policy()
     if profile and profile.first_activation_completed_at is None:
-        invitation = user.access_tokens.filter(purpose=AccessToken.Purpose.ACTIVATION).first()
+        invitation = next((token for token in user.access_tokens.all() if token.purpose == AccessToken.Purpose.ACTIVATION), None)
         if invitation and invitation.revoked_at:
             return "pending", "Aguardando ativação"
         if invitation and invitation.expires_at <= (now or timezone.now()):
             return "invitation_expired", "Convite expirado"
         return "pending", "Aguardando ativação"
     if not profile:
-        return "pending", "Troca obrigatória"
-    if policy is _POLICY_UNSET:
-        policy = current_password_policy()
+        if not user.has_usable_password():
+            return "pending", "Aguardando ativação"
+        return ("required", "Troca obrigatória") if policy and policy.active else ("active", "Ativo")
     if profile.must_change_password:
         if profile.change_reason == UserSecurityProfile.ChangeReason.INITIAL and not (policy and policy.active):
             return "active", "Ativo"

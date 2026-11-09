@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -11,6 +12,7 @@ from .models import AccessToken, UserSecurityProfile
 from .security import (
     apply_access_token_password,
     apply_verified_password_change,
+    get_security_profile,
     mask_email,
     password_change_required,
     send_password_verification_code,
@@ -54,7 +56,7 @@ def _complete_link_password(request, purpose):
         if is_activation else "Defina uma nova senha pessoal para recuperar o acesso ao ARION OPS."
     )
     if request.method == "GET":
-        form = None
+        form = PasswordSetForm(user=None)
         context = {"flow": flow, "title": title, "description": description, "form": form, "invalid_link": False}
         response = render(request, "autenticacao/password_flow.html", context)
         _set_sensitive_flow_headers(response)
@@ -64,6 +66,12 @@ def _complete_link_password(request, purpose):
     token = valid_access_token(raw_token, purpose)
     if token is None:
         return _invalid_link(request, purpose=purpose)
+    profile = get_security_profile(token.user)
+    if (is_activation and profile.first_activation_completed_at) or (not is_activation and not profile.first_activation_completed_at):
+        return _invalid_link(request, purpose=purpose)
+    if request.POST.get("action") == "inspect_token":
+        response = JsonResponse({"display_name": token.user.get_short_name() or token.user.username})
+        return _set_sensitive_flow_headers(response)
     form = PasswordSetForm(token.user, request.POST)
     if form.is_valid():
         changed_user = apply_access_token_password(
@@ -93,7 +101,7 @@ def _complete_link_password(request, purpose):
         return response
     response = render(request, "autenticacao/password_flow.html", {
         "flow": flow, "title": title, "description": description,
-        "form": form, "invalid_link": False,
+        "form": form, "invalid_link": False, "display_name": token.user.get_short_name() or token.user.username,
     }, status=400)
     _set_sensitive_flow_headers(response)
     return response
@@ -163,10 +171,10 @@ def required_password(request):
 
 
 def _set_sensitive_flow_headers(response):
-    response["Referrer-Policy"] = "no-referrer"
+    response["Referrer-Policy"] = "same-origin"
     response["Cache-Control"] = "private, no-store"
     response["Content-Security-Policy"] = (
-        "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
+        "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
     response["X-Content-Type-Options"] = "nosniff"

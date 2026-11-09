@@ -38,7 +38,11 @@ São auditados criação da conta, emissão/revogação/consumo de convite, ativ
 
 ## Configuração do domínio público
 
-Defina `ARION_PUBLIC_BASE_URL` como a origem HTTPS pública exata, por exemplo `https://arion.example.com`, e inclua o mesmo host em `DJANGO_ALLOWED_HOSTS`. Em desenvolvimento, o padrão é `http://localhost:8000`. A configuração de produção rejeita ausência, esquema HTTP, wildcard, caminho, query ou host não permitido.
+Defina `ARION_PUBLIC_BASE_URL` como a origem HTTPS pública exata, por exemplo `https://arion.example.com`, e inclua o mesmo host em `DJANGO_ALLOWED_HOSTS`. Em desenvolvimento, configure `ARION_WEB_PORT=8100` e `ARION_PUBLIC_BASE_URL=http://127.0.0.1:8100` no ambiente local. Sem origem explícita em DEV, o endereço usa `127.0.0.1` e a porta de `ARION_WEB_PORT`. Produção exige a origem HTTPS configurada; o cabeçalho Host da requisição nunca escolhe o domínio dos convites.
+
+A página de ativação recebe o fragmento pelo JavaScript, remove-o do endereço e envia o token em POST com CSRF para validação no backend. Somente um token válido permite personalizar a saudação com o nome do destinatário. As páginas com formulário usam `Referrer-Policy: same-origin`: preservam a origem no POST local e não enviam Referer para outros domínios. Não se permite `Origin: null` nem se desabilita CSRF. A página administrativa que apenas mostra o link continua com `no-referrer`.
+
+A migration `autenticacao.0002_reconcile_legacy_security_profiles` corrige perfis técnicos legados com senha utilizável e login registrado que foram classificados como convite pendente. Ela preserva a senha, a obrigação de troca, grupos, escopos e a data de alteração de senha desconhecida. Novas contas por convite continuam pendentes até a ativação real.
 
 ## Ativação controlada no Windows Server
 

@@ -1,8 +1,8 @@
-<section class="settings-section"><form method="post" class="settings-form admin-form" data-user-access-form>
+<section class="settings-section user-form-section"><form method="post" class="settings-form admin-form" data-user-access-form>
   {% csrf_token %}{% if form.non_field_errors %}<div class="form-errors">{{ form.non_field_errors }}</div>{% endif %}
   <h2>Dados pessoais</h2>
   {% for field in form %}{% if field.name == "username" or field.name == "first_name" or field.name == "last_name" or field.name == "email" %}<div class="settings-field"><label for="{{ field.id_for_label }}">{{ field.label }}</label><div class="settings-field-control">{{ field }}{% if field.errors %}<div class="field-errors">{{ field.errors }}</div>{% endif %}{% if field.help_text %}<div class="field-help">{{ field.help_text|safe }}</div>{% endif %}</div></div>{% endif %}{% endfor %}
-  <section class="user-form-block"><h2>Acesso</h2>
+  <section class="user-form-block"><h2>Acesso e permissões</h2>
     {% if form.is_active %}<label class="account-switch-row" for="{{ form.is_active.id_for_label }}"><span><strong>Conta ativa</strong><small>Usuários inativos não conseguem acessar o sistema, mas seu histórico é preservado.</small></span>{{ form.is_active }}</label>{% endif %}
     <div class="settings-field"><label for="{{ form.group.id_for_label }}">{{ form.group.label }}</label><div class="settings-field-control">{{ form.group }}{% if form.group.errors %}<div class="field-errors">{{ form.group.errors }}</div>{% endif %}<p class="field-help">O perfil define as permissões e o escopo de dados herdado por esta conta.</p></div></div>
   </section>
@@ -14,5 +14,5 @@
     </dl><p class="scope-help">{% if multiple_profiles %}Esta conta possui mais de um perfil legado. Selecione um perfil principal para corrigir a associação.{% else %}Este escopo é definido pelo grupo {% if primary_group %}{{ primary_group.name }}{% else %}selecionado{% endif %}.{% endif %}</p>
     {% if primary_group and perms.configuracoes.manage_data_scopes %}<a class="settings-text-link" href="{% url 'configuracoes:scope-edit' primary_group.pk %}">Editar grupo</a>{% endif %}
   </section>{% endif %}
-  <div class="settings-form-actions"><a class="settings-button settings-button--secondary" href="{% if user_object %}{% url 'configuracoes:user-detail' user_object.pk %}{% else %}{% url 'configuracoes:users' %}{% endif %}">Cancelar</a><button class="settings-button" type="submit">Salvar usuário</button></div>
+  <div class="settings-form-actions"><a class="settings-button settings-button--secondary" href="{% if user_object %}{% url 'configuracoes:user-detail' user_object.pk %}{% else %}{% url 'configuracoes:users' %}{% endif %}">{% if user_object %}Voltar ao cadastro{% else %}Voltar aos usuários{% endif %}</a><button class="settings-button" type="submit">{% if user_object %}Salvar alterações{% else %}Criar usuário{% endif %}</button></div>
 </form></section>

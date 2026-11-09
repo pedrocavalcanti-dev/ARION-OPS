@@ -1,5 +1,5 @@
 {% load static %}<!doctype html>
-<html lang="pt-br" data-theme="light">
+<html lang="pt-br" data-theme="{{ user_theme|default:'dark' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,11 +8,12 @@
   <title>{{ title }} · ARION OPS</title>
   <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicon/favicon-32x32.png' %}">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">
+  <link rel="stylesheet" href="{% static 'css/autenticacao/login.css' %}">
   <link rel="stylesheet" href="{% static 'css/autenticacao/password-flow.css' %}">
 </head>
-<body class="password-flow-page">
+<body class="login-page password-flow-page">
   <main class="password-flow-shell">
-    <section class="password-flow-panel" aria-labelledby="flow-title">
+    <section class="password-flow-panel password-flow-panel--issued" aria-labelledby="flow-title">
       <a class="password-flow-brand" href="{{ return_url }}" aria-label="ARION OPS">
         <img src="{% static 'branding/arion/arion-logo-primary.png' %}" width="190" height="64" alt="ARION OPS">
       </a>
@@ -21,14 +22,18 @@
       <p class="password-flow-description">{{ description }}</p>
       <div class="password-flow-field">
         <label for="issued-access-link">Link individual</label>
-        <div class="password-flow-input-wrap access-issued-copy">
+        <div class="access-issued-copy">
           <input id="issued-access-link" type="text" readonly value="{{ access_url }}" data-copy-source autocomplete="off">
-          <button class="password-flow-toggle" type="button" data-copy-link>Copiar</button>
+          <button class="password-flow-button access-issued-copy-button" type="button" data-copy-link>Copiar link</button>
         </div>
       </div>
-      <p class="password-flow-footnote">Validade: 48 horas, até {{ expires_at_label }}. O link aparece somente nesta emissão. Copie e encaminhe ao destinatário pelo canal corporativo seguro.</p>
+      <div class="access-issued-validity"><strong>Válido por 48 horas</strong><span>Expira em {{ expires_at_label }}</span></div>
+      <p class="password-flow-footnote">O link aparece somente nesta emissão. Copie e encaminhe ao destinatário pelo canal corporativo seguro.</p>
       <p class="password-flow-message" data-copy-feedback aria-live="polite"></p>
-      <a class="password-flow-button password-flow-button--secondary access-issued-back" href="{{ return_url }}">Voltar ao cadastro</a>
+      <nav class="access-issued-navigation" aria-label="Navegação de usuários">
+        <a class="password-flow-button password-flow-button--secondary" href="{{ return_url }}">Voltar ao cadastro</a>
+        <a class="password-flow-text-button" href="{{ users_url }}">Voltar aos usuários</a>
+      </nav>
       <footer class="password-flow-footer">ARION OPS <span>·</span> NOC ATACADO</footer>
     </section>
   </main>

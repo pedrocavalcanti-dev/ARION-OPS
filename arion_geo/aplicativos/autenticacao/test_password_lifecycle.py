@@ -150,7 +150,9 @@ class PasswordLifecycleTests(TestCase):
         raw = link.split("#", 1)[1]
         page = self.client.get(reverse("autenticacao:activate"))
         self.assertEqual(page.status_code, 200)
-        self.assertEqual(page["Referrer-Policy"], "no-referrer")
+        self.assertEqual(page["Referrer-Policy"], "same-origin")
+        self.assertContains(page, 'name="new_password1"')
+        self.assertContains(page, 'name="new_password2"')
         self.assertNotContains(page, raw)
         response = self.client.post(reverse("autenticacao:activate"), {
             "token": raw, "new_password1": GOOD_PASSWORD, "new_password2": GOOD_PASSWORD,

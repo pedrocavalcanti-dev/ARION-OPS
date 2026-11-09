@@ -100,10 +100,10 @@ class ProductionSecurityHeadersMiddleware:
         elif is_authenticated or not is_static:
             response["Cache-Control"] = "private, no-store"
         if request.path_info.startswith(SENSITIVE_AUTH_PATHS):
-            response["Referrer-Policy"] = "no-referrer"
+            response["Referrer-Policy"] = "same-origin"
             response.setdefault(
                 "Content-Security-Policy",
-                "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
+                "default-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
                 "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             )
         return response

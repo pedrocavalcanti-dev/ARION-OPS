@@ -163,7 +163,7 @@ if ARION_PRODUCTION and (
 
 ARION_PUBLIC_BASE_URL = os.getenv(
     "ARION_PUBLIC_BASE_URL",
-    "http://localhost:8000" if not ARION_PRODUCTION else "",
+    f"http://127.0.0.1:{ARION_WEB_PORT}" if not ARION_PRODUCTION else "",
 ).strip().rstrip("/")
 _public_origin = urlsplit(ARION_PUBLIC_BASE_URL)
 if (

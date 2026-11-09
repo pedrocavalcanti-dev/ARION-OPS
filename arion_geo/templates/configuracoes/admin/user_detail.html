@@ -3,7 +3,7 @@
 {% block settings_title %}{{ user_object.get_full_name|default:user_object.username }}{% endblock %}
 {% block settings_description %}Dados da conta, perfil, escopo herdado e situação de segurança.{% endblock %}
 {% block settings_content %}
-<section class="settings-section">
+<section class="settings-section user-detail-section">
   <div class="admin-detail-actions"><a class="settings-button settings-button--secondary" href="{% url 'configuracoes:users' %}">Voltar à lista</a><a class="settings-button" href="{% url 'configuracoes:user-edit' user_object.pk %}">Editar usuário</a></div>
   <h2 class="admin-detail-heading">Dados</h2>
   <dl class="settings-details admin-user-details"><div><dt>Nome</dt><dd>{{ user_object.get_full_name|default:"—" }}</dd></div><div><dt>Usuário</dt><dd>{{ user_object.username }}</dd></div><div><dt>E-mail corporativo</dt><dd>{{ user_object.email|default:"—" }}</dd></div><div><dt>Criada em</dt><dd>{{ user_object.date_joined|date:"d/m/Y" }}</dd></div><div><dt>Último acesso</dt><dd>{% if user_object.last_login %}{{ user_object.last_login|date:"d/m/Y H:i" }}{% else %}—{% endif %}</dd></div><div><dt>Situação administrativa</dt><dd>{% if user_object.is_active %}Ativa{% else %}Inativa{% endif %}</dd></div></dl>
