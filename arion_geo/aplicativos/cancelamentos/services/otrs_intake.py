@@ -5,10 +5,11 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from aplicativos.integracoes.models import Integration, IntegrationRun, IntegrationSyncState, OTRSTicket
+from aplicativos.integracoes.models import Integration, IntegrationRun, IntegrationSyncState, IntegrationLease, OTRSTicket
 from aplicativos.integracoes.otrs_queues import CANCELLATION_REQUEST_QUEUE_NAME, COCKPIT_QUEUE_NAMES, queue_signature
 from aplicativos.integracoes.services.semantics import link_designation
 from aplicativos.integracoes.services.sync_lock import Lease
+from aplicativos.integracoes.services.cancellation import cancellation_stage_expression, classify_cancellation_stage
 
 from ..models import CancellationIntake, IntakeSettings
 
@@ -39,7 +40,41 @@ def source_status():
 
 
 def ticket_is_eligible(ticket):
-    return bool(ticket and ticket.is_present_in_queue and ticket.queue_name == CANCELLATION_REQUEST_QUEUE_NAME)
+    # The KPI's queue/state definition already backs the Cockpit. No saved-profile ID is a QueueID.
+    return bool(ticket and ticket.is_present_in_queue and classify_cancellation_stage(ticket) == "REQUEST"
+                and ticket.business_status in {"OPEN", "PENDING", "SCHEDULED"})
+
+
+def eligible_tickets():
+    return OTRSTicket.objects.filter(is_present_in_queue=True, business_status__in=("OPEN", "PENDING", "SCHEDULED")).annotate(
+        _intake_stage=cancellation_stage_expression(),
+    ).filter(_intake_stage="REQUEST")
+
+
+def current_intakes(queryset):
+    """Consult the live mirror as well as the projection, including while the worker lags."""
+    return queryset.filter(eligible=True, ticket__in=eligible_tickets())
+
+
+def synchronization_indicator():
+    ok, notice, source = source_status()
+    projection = IntegrationSyncState.objects.filter(key=KEY).first()
+    now = timezone.now()
+    running = IntegrationLease.objects.filter(key__in=("otrs", KEY), expires_at__gt=now).exclude(owner_token="").exists()
+    failed = any(s and s.last_error_at and (not s.last_success_at or s.last_error_at > s.last_success_at) for s in (source, projection))
+    if running:
+        code, label = "running", "Sincronizando"
+    elif failed:
+        code, label = "failed", "Falha de sincronização"
+    elif not ok or not projection or not projection.last_success_at or projection.last_success_at < now - timedelta(minutes=intake_settings().max_age_minutes):
+        code, label = "stale", "OTRS desatualizado"
+    else:
+        code, label = "fresh", "OTRS atualizado"
+    return {"code": code, "label": label, "source_at": source.last_success_at if source else None,
+            "projection_at": projection.last_success_at if projection else None,
+            "notice": "O worker repetirá a atualização. Consulte a integração se a falha persistir." if failed else
+                      "Aguardando atualização válida do espelho e da triagem." if code == "stale" else
+                      "A atualização da origem não altera decisões ou etapas locais."}
 
 
 def project_intakes(*, force=False):

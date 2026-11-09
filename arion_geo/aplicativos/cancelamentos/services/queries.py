@@ -3,6 +3,7 @@ from django.db.models import Count, Exists, OuterRef, Q
 from ..forms import QueryForm
 from ..models import CancellationPending, FinancialObligation
 from .data_scope import CancellationScope
+from .otrs_intake import current_intakes
 
 
 TABS = (("intake", "Entrada OTRS"), ("order", "Pedido"), ("request", "Solicitação"),
@@ -23,9 +24,21 @@ def query_module(user, params):
         data = form.cleaned_data
         q = data.get("q")
         if q:
-            intakes = intakes.filter(Q(ticket_number__icontains=q) | Q(designation_snapshot__icontains=q)
-                                    | Q(ticket__config_items__cmdb_link__designation__icontains=q)).distinct()
-            processes = processes.filter(Q(intake__ticket_number__icontains=q) | Q(designation__icontains=q))
+            entry_search = (Q(ticket_number__icontains=q) | Q(designation_snapshot__icontains=q)
+                            | Q(ticket__config_items__cmdb_link__designation__icontains=q)
+                            | Q(client_snapshot__icontains=q) | Q(link__operator__name__icontains=q))
+            process_search = (Q(intake__ticket_number__icontains=q) | Q(designation__icontains=q)
+                              | Q(contracting_client__icontains=q) | Q(isp__icontains=q))
+            numeric = q.upper().removeprefix("CANC-")
+            if numeric.isdecimal() and len(numeric) <= 18:
+                entry_search |= Q(ticket_external_id=int(numeric))
+                process_search |= Q(pk=int(numeric)) | Q(intake__ticket_external_id=int(numeric))
+            intakes = intakes.filter(entry_search).distinct()
+            processes = processes.filter(process_search)
+        if data.get("context"):
+            context = data["context"]
+            intakes = intakes.filter(Q(client_snapshot__icontains=context) | Q(project_snapshot__icontains=context))
+            processes = processes.filter(Q(contracting_client__icontains=context) | Q(project__icontains=context))
         for param, entry_field, process_field in (("client", "client_snapshot", "contracting_client"),
                                                  ("project", "project_snapshot", "project"), ("isp", "link__operator__name", "isp")):
             if data.get(param):
@@ -43,29 +56,45 @@ def query_module(user, params):
     active_pending = CancellationPending.objects.filter(process_id=OuterRef("pk"), status="OPEN")
     waiting_document = FinancialObligation.objects.filter(process_id=OuterRef("pk"), document_status="WAITING")
     processes = processes.annotate(has_pending=Exists(active_pending))
-    if data.get("pending_kind"):
+    tab = data.get("tab") or "intake"
+    if tab != "intake" and data.get("pending_kind"):
         processes = processes.filter(Exists(active_pending.filter(kind=data["pending_kind"])))
-        intakes = intakes.none()
-    if data.get("sent"):
+    if tab != "intake" and data.get("sent"):
         processes = processes.filter(handoffs__isnull=False).distinct()
-        intakes = intakes.none()
+    pending_processes = processes.exclude(stage="COMPLETED").filter(has_pending=True)
+    if tab == "pending" and data.get("stage"):
+        pending_processes = pending_processes.filter(stage=data["stage"])
     grouped = {row["stage"]: row["n"] for row in processes.values("stage").annotate(n=Count("pk", distinct=True))}
     documents_pending = active_pending.filter(kind__in=("BILL", "DOCUMENT", "RELEASE", "AGREEMENT"))
     metrics = {
-        "intake": intakes.filter(status="WAITING").count(), "order": grouped.get("ORDER", 0),
+        "intake": current_intakes(intakes).filter(status="WAITING").count(), "order": grouped.get("ORDER", 0),
         "request": grouped.get("REQUEST", 0), "completed": grouped.get("COMPLETED", 0),
-        "pending": processes.exclude(stage="COMPLETED").filter(has_pending=True).count(),
+        "pending": pending_processes.count(),
         "documents": processes.exclude(stage="COMPLETED").filter(
             Q(Exists(documents_pending)) | Q(Exists(waiting_document))
         ).count(),
         "sent": processes.filter(handoffs__isnull=False).distinct().count(),
     }
-    tab = data.get("tab") or "intake"
     if tab == "intake":
+        presence = data.get("presence")
+        current_ids = current_intakes(intakes).values("pk")
+        if presence == "history":
+            intakes = intakes.exclude(pk__in=current_ids)
+        elif presence != "all":
+            intakes = intakes.filter(pk__in=current_ids)
         situation = data.get("situation") or "WAITING"
         queryset = intakes if situation == "all" else intakes.filter(status=situation)
     elif tab == "pending":
-        queryset = processes.exclude(stage="COMPLETED").filter(has_pending=True)
+        queryset = pending_processes
     else:
         queryset = processes.filter(stage={"order": "ORDER", "request": "REQUEST", "completed": "COMPLETED"}[tab])
-    return {"form": form, "queryset": queryset, "tab": tab, "metrics": metrics}
+    advanced = ["isp", "project", "start", "end"]
+    advanced += ["situation", "presence"] if tab == "intake" else ["pending_kind", "sent"]
+    if tab == "pending":
+        advanced.append("stage")
+    if data.get("client"):
+        advanced.append("client")  # Preserve existing bookmarked client-only recortes.
+    advanced_count = sum(bool(data.get(name)) for name in advanced)
+    return {"form": form, "queryset": queryset, "tab": tab, "metrics": metrics,
+            "advanced_fields": [form[name] for name in advanced], "advanced_count": advanced_count,
+            "owner_filter": data.get("owner") or ""}

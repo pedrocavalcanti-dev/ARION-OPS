@@ -53,22 +53,38 @@ def check_revision(obj, revision):
 @transaction.atomic
 def decide_intake(*, request, pk, action, data):
     require(request.user, "view_cancellations")
-    require(request.user, "assign_cancellations" if action == "assume" else "triage_cancellations")
+    require(request.user, "assign_cancellations" if action in ("assume", "assign") else "triage_cancellations")
     entry = get_object_or_404(CancellationScope.intakes(request.user).select_for_update(), pk=pk)
-    form = forms.TriageForm(data, user=request.user, intake=entry)
+    form = forms.AssignmentForm(data) if action == "assign" else forms.TriageForm(data, user=request.user, intake=entry)
     values = valid(form)
     check_revision(entry, values["revision"])
     if entry.status != CancellationIntake.Status.WAITING:
         raise Conflict("A entrada já possui decisão. Ela permanece disponível no histórico.")
-    if action not in ("approve", "reject", "wait", "assume"):
+    if action not in ("approve", "reject", "wait", "assume", "assign"):
         raise ValidationError("Ação de triagem inválida.")
+    if action in ("assign", "assume") and (not entry.eligible or not ticket_is_eligible(entry.ticket)):
+        raise ValidationError("A entrada saiu do KPI atual. Consulte seu histórico.")
+    old_owner = entry.assigned_to_id
+    if not CancellationIntake.objects.filter(pk=entry.pk, revision=values["revision"]).update(revision=F("revision") + 1):
+        raise Conflict("Outro analista alterou esta entrada. Recarregue a página.")
     if action == "assume":
         if entry.assigned_to_id and entry.assigned_to_id != request.user.pk:
             raise Conflict("Outro analista já assumiu esta entrada.")
         if entry.assigned_to_id == request.user.pk:
+            CancellationIntake.objects.filter(pk=entry.pk).update(revision=entry.revision)
             return entry
         entry.assigned_to = request.user
         description = "Entrada assumida para análise."
+    elif action == "assign":
+        owner = values["owner"]
+        if owner and (not owner.has_perm("cancelamentos.view_cancellations") or not CancellationScope.intakes(owner).filter(pk=entry.pk).exists()):
+            raise ValidationError("O responsável selecionado não possui acesso a esta entrada.")
+        if entry.assigned_to_id == (owner.pk if owner else None):
+            # No duplicate event for an unchanged assignment; revert the CAS increment too.
+            CancellationIntake.objects.filter(pk=entry.pk).update(revision=entry.revision)
+            return entry
+        entry.assigned_to = owner
+        description = f"Responsável pela triagem: {(owner.get_full_name() or owner.get_username()) if owner else 'não atribuído'}."
     elif action == "reject":
         if not values["reason"].strip():
             raise ValidationError("Informe a justificativa da rejeição.")
@@ -86,7 +102,7 @@ def decide_intake(*, request, pk, action, data):
         if not ok:
             raise ValidationError(notice)
         if not entry.eligible or not ticket_is_eligible(ticket):
-            raise ValidationError("O ticket não está mais na fila de entrada. Atualize a análise.")
+            raise ValidationError("O ticket não pertence mais ao KPI 1 de entrada. Atualize a análise.")
         if (not ticket.source_synced_at or ticket.source_synced_at < timezone.now() - timedelta(minutes=intake_settings().max_age_minutes)
                 or entry.source_changed_at != ticket.source_changed_at or entry.source_synced_at != ticket.source_synced_at):
             raise Conflict("O espelho mudou ou está desatualizado. Aguarde a projeção e revise a entrada.")
@@ -122,7 +138,8 @@ def decide_intake(*, request, pk, action, data):
     entry.save()
     event(request=request, intake=entry, action=f"triage_{action}", description=description,
           process=process if action == "approve" else None,
-          metadata={"queue_external_id": entry.queue_external_id, "revision": entry.revision},
+          metadata={"queue_external_id": entry.queue_external_id, "revision": entry.revision,
+                    **({"previous_owner_id": old_owner, "owner_id": entry.assigned_to_id} if action in ("assign", "assume") else {})},
           details={"queue_name": entry.queue_name, "queue_external_id": entry.queue_external_id,
                    "source_changed_at": entry.source_changed_at.isoformat() if entry.source_changed_at else None,
                    "config_item_id": process.config_item_id if action == "approve" else ""})
@@ -227,6 +244,10 @@ def act_on_process(*, request, pk, action, data):
         if action == "assume" and process.owner_id and process.owner_id != request.user.pk:
             raise Conflict("Outro analista já é responsável por este processo.")
         owner = request.user if action == "assume" else valid(forms.AssignmentForm(data))["owner"]
+        if process.owner_id == (owner.pk if owner else None):
+            CancellationProcess.objects.filter(pk=process.pk).update(revision=revision)
+            return process
+        metadata.update(previous_owner_id=process.owner_id, owner_id=owner.pk if owner else None)
         _assign(process, owner)
         description = f"Responsável: {owner.get_full_name() or owner.get_username() if owner else 'não atribuído'}."
     elif action == "update":

@@ -5,18 +5,18 @@ from django.contrib.auth.decorators import login_required, permission_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, OperationalError, transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.chamados.services import otrs_ticket_url
-from aplicativos.integracoes.models import IntegrationSyncState
 
 from . import forms
 from .services.data_scope import CancellationScope
-from .services.otrs_intake import intake_settings, source_status
+from .services.otrs_intake import intake_settings, source_status, synchronization_indicator, current_intakes
+from .models import CancellationIntake, CancellationPending
 from .services.queries import query_module, TABS
 from .services.workflow import (Conflict, require, decide_intake, act_on_process,
                                 financial_summary, completion_blockers)
@@ -34,15 +34,65 @@ def _url_params(params, **changes):
     return "?" + query.urlencode()
 
 
+def _tab_url(params, tab):
+    query = params.copy()
+    for key in (("pending_kind", "sent", "stage") if tab == "intake" else ("situation", "presence")):
+        query.pop(key, None)
+    if tab != "pending":
+        query.pop("stage", None)
+    return _url_params(query, tab=tab)
+
+
+def _metric_url(params, tab):
+    query = params.copy()
+    if tab == "intake":
+        query.pop("presence", None)
+        query.pop("situation", None)
+    return _tab_url(query, tab)
+
+
+def _return_url(request, default):
+    if "return_query" not in request.POST:
+        return default
+    query = QueryDict(request.POST.get("return_query", ""))
+    safe = QueryDict(mutable=True)
+    for key in (*forms.QueryForm.base_fields, "page"):
+        if key in query:
+            safe[key] = query[key]
+    return reverse("cancelamentos:index") + "?" + safe.urlencode()
+
+
 @module_access
 def index(request):
     data = query_module(request.user, request.GET)
     page = Paginator(data.pop("queryset"), 40).get_page(request.GET.get("page"))
-    ok, notice, state = source_status()
+    current_ids = set(current_intakes(CancellationIntake.objects.filter(pk__in=[row.pk for row in page])).values_list("pk", flat=True)) if data["tab"] == "intake" else set()
+    for row in page:
+        intake = data["tab"] == "intake"
+        row.responsible = row.assigned_to if intake else row.owner
+        row.current_entry = row.pk in current_ids if intake else False
+        row.can_assign = request.user.has_perm("cancelamentos.assign_cancellations") and (
+            (row.status == "WAITING" and row.current_entry) if intake else row.stage != "COMPLETED")
+        row.assign_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assign"))
+        row.assume_url = reverse("cancelamentos:intake_action" if intake else "cancelamentos:process_action", args=(row.pk, "assume"))
+    if data["tab"] == "pending":
+        visible = CancellationPending.objects.filter(process_id__in=[row.pk for row in page], status="OPEN").order_by("expected_date", "pk")
+        if not request.user.has_perm("cancelamentos.view_cancellation_finance"):
+            visible = visible.exclude(kind__in=forms.FINANCIAL_PENDING_KINDS).filter(amount__isnull=True)
+        by_process = {}
+        for pending in visible:
+            by_process.setdefault(pending.process_id, []).append(pending)
+        for row in page:
+            row.table_pendings = by_process.get(row.pk, [])
+    assignment_form = forms.AssignmentForm()
+    assignment_form.fields.pop("revision")
+    assignment_form.auto_id = "id_list_%s"
     return render(request, "cancelamentos/index.html", {
-        **data, "page": page, "source_ok": ok, "source_notice": notice, "source_state": state,
-        "projection_state": IntegrationSyncState.objects.filter(key="cancellation_intake").first(),
-        "tabs": [{"key": key, "label": label, "url": _url_params(request.GET, tab=key)} for key, label in TABS],
+        **data, "page": page,
+        "tabs": [{"key": key, "label": label, "url": _tab_url(request.GET, key), "metric_url": _metric_url(request.GET, key), "count": data["metrics"][key]} for key, label in TABS],
+        "quick_filters": [{"label": label, "value": value, "url": _url_params(request.GET, owner=value)} for value, label in (("", "Todos"), ("me", "Meus" if data["tab"] == "intake" else "Meus cancelamentos"), ("none", "Sem responsável"))],
+        "sync_indicator": synchronization_indicator(), "assignment_form": assignment_form,
+        "list_query": request.GET.urlencode(),
         "export_query": request.GET.urlencode(),
         "previous_url": _url_params(request.GET, page=page.previous_page_number()) if page.has_previous() else "",
         "next_url": _url_params(request.GET, page=page.next_page_number()) if page.has_next() else "",
@@ -62,6 +112,7 @@ def intake_detail(request, pk):
     source_ok, source_notice, _ = source_status()
     return render(request, "cancelamentos/intake_detail.html", {
         "entry": entry, "triage_form": form, "candidates": candidates, "process": process,
+        "is_current_entry": current_intakes(CancellationIntake.objects.filter(pk=entry.pk)).exists(),
         "history": history.select_related("actor"), "otrs_url": otrs_ticket_url(entry.ticket_external_id),
         "source_notice": source_notice, "source_ok": source_ok,
     })
@@ -91,6 +142,10 @@ def intake_action(request, pk, action):
         return _action_response(request, url, error, 409)
     except ValidationError as exc:
         return _action_response(request, url, exc.messages, 400)
+    if action in ("assign", "assume"):
+        url = _return_url(request, url)
+        if "return_query" in request.POST:
+            messages.success(request, "Responsável atualizado. O recorte da lista foi preservado.")
     return _action_response(request, url)
 
 
@@ -174,6 +229,10 @@ def process_action(request, pk, action):
         return _action_response(request, url, error, 409)
     except ValidationError as exc:
         return _action_response(request, url, exc.messages, 400)
+    if action in ("assign", "assume"):
+        url = _return_url(request, url)
+        if "return_query" in request.POST:
+            messages.success(request, "Responsável atualizado. O recorte da lista foi preservado.")
     return _action_response(request, url)
 
 

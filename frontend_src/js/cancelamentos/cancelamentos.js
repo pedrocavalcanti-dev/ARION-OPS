@@ -3,6 +3,28 @@
 (() => {
   let opener = null;
   document.addEventListener("click", async (event) => {
+    const more = event.target.closest("[data-more-filters]");
+    if (more) {
+      const panel = document.getElementById(more.getAttribute("aria-controls"));
+      if (panel) {
+        panel.hidden = !panel.hidden;
+        more.setAttribute("aria-expanded", String(!panel.hidden));
+      }
+    }
+    const assign = event.target.closest("[data-assign-entry]");
+    if (assign) {
+      const dialog = document.getElementById("list-assignment");
+      const form = dialog?.querySelector("[data-assignment-form]");
+      if (form) {
+        form.action = assign.dataset.actionUrl;
+        form.elements.revision.value = assign.dataset.revision;
+        form.elements.owner.value = assign.dataset.owner;
+        form.querySelector("[data-assignment-record]").textContent = assign.dataset.record;
+        form.querySelector("[data-form-feedback]").textContent = "";
+        opener = assign;
+        dialog.showModal();
+      }
+    }
     const open = event.target.closest("[data-open-dialog]");
     if (open) {
       const dialog = document.getElementById(open.dataset.openDialog);
@@ -57,6 +79,7 @@
       }
       const data = await response.json();
       if (response.ok && data.ok) {
+        if (feedback) feedback.textContent = "Salvo. Atualizando o recorte…";
         window.location.assign(data.url);
         return;
       }

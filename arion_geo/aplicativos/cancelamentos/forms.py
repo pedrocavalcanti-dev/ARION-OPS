@@ -170,13 +170,16 @@ class SettingsForm(forms.ModelForm):
 class QueryForm(forms.Form):
     tab = forms.ChoiceField(required=False, choices=(("intake", "Entrada OTRS"), ("order", "Pedido"),
                                                    ("request", "Solicitação"), ("pending", "Pendências"), ("completed", "Concluídos")))
-    q = forms.CharField(required=False, max_length=200, label="Ticket ou designação")
+    q = forms.CharField(required=False, max_length=200, label="Buscar", widget=forms.TextInput(attrs={"placeholder": "Ticket, pedido ou circuito…", "type": "search"}))
+    context = forms.CharField(required=False, max_length=300, label="Cliente / Projeto", widget=forms.TextInput(attrs={"placeholder": "Cliente ou projeto"}))
     client = forms.CharField(required=False, max_length=300, label="Cliente")
     project = forms.CharField(required=False, max_length=300, label="Projeto")
     isp = forms.CharField(required=False, max_length=300, label="ISP")
     owner = forms.ChoiceField(required=False, label="Responsável")
     situation = forms.ChoiceField(required=False, label="Situação da entrada", choices=(("", "Aguardando triagem"), ("all", "Todas as decisões"),
                              ("WAITING", "Aguardando triagem"), ("APPROVED", "Aprovados"), ("REJECTED", "Rejeitados")))
+    presence = forms.ChoiceField(required=False, label="Presença no KPI 1", choices=(("", "Entradas atuais"), ("history", "Histórico — fora do KPI 1"), ("all", "Atuais e históricas")))
+    stage = forms.ChoiceField(required=False, label="Etapa principal", choices=(("", "Todas"), *CancellationProcess.Stage.choices))
     pending_kind = forms.ChoiceField(required=False, label="Tipo de pendência", choices=(("", "Qualquer pendência"), *CancellationPending.Kind.choices))
     sent = forms.BooleanField(required=False, label="Encaminhados ao Financeiro")
     start = forms.DateField(required=False, label="Desde", widget=forms.DateInput(attrs={"type": "date"}))

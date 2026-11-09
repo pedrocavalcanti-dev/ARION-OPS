@@ -469,3 +469,136 @@ class CancellationTests(TestCase):
         self.assertEqual(details["Valor cobrado registrado"], "20.00")
         self.assertEqual(details["Valor previsto registrado"], "Não informado")
         self.assertNotIn("20.00", str(AuditEvent.objects.filter(action="obligation_update").get().metadata))
+
+    def test_kpi1_current_backlog_excludes_terminal_and_treatment_and_keeps_history(self):
+        entries = [self.entry(200 + n) for n in range(6)]
+        original_dates = dict(CancellationIntake.objects.values_list("pk", "first_seen_at"))
+        states = (("closed successful", "RESOLVED"), ("resolvido", "RESOLVED"), ("cancelado", "CANCELED"),
+                  ("pendente operadora", "PENDING"), ("UNKNOWN", "UNKNOWN"))
+        for entry, (state, business) in zip(entries[1:], states):
+            OTRSTicket.objects.filter(pk=entry.ticket_id).update(external_state_name=state, business_status=business)
+        # The request query must already be restrictive before the next worker projection.
+        self.assertEqual(query_module(self.admin, {})["queryset"].count(), 1)
+        project_intakes(force=True)
+        self.assertEqual(CancellationIntake.objects.count(), 6)
+        self.assertEqual(CancellationIntake.objects.filter(eligible=False).count(), 5)
+        self.assertEqual(query_module(self.admin, {})["metrics"]["intake"], 1)
+        self.assertEqual(query_module(self.admin, {"presence": "history"})["queryset"].count(), 5)
+        self.assertEqual(query_module(self.admin, {"presence": "all"})["queryset"].count(), 6)
+        self.assertEqual(dict(CancellationIntake.objects.values_list("pk", "first_seen_at")), original_dates)
+        self.assertFalse(CancellationProcess.objects.exists())
+
+    def test_state_change_within_same_queue_does_not_approve_or_create_another_entry(self):
+        entry = self.entry()
+        OTRSTicket.objects.filter(pk=entry.ticket_id).update(external_state_id=21, external_state_name="pendente operadora", business_status="PENDING")
+        project_intakes(force=True)
+        entry.refresh_from_db()
+        self.assertFalse(entry.eligible)
+        self.assertEqual(entry.status, "WAITING")
+        with self.assertRaises(ValidationError):
+            decide_intake(request=self.request(), pk=entry.pk, action="approve", data={"revision": entry.revision, "link": self.link.pk})
+        OTRSTicket.objects.filter(pk=entry.ticket_id).update(external_state_id=10, external_state_name="em atendimento", business_status="OPEN")
+        project_intakes(force=True)
+        self.assertEqual(CancellationIntake.objects.count(), 1)
+        self.assertEqual(query_module(self.admin, {})["queryset"].count(), 1)
+        self.assertFalse(CancellationProcess.objects.exists())
+
+    def test_approved_and_rejected_decisions_survive_kpi_reclassification(self):
+        process = self.approve()
+        rejected = self.entry(124)
+        rejected = decide_intake(request=self.request(), pk=rejected.pk, action="reject", data={"revision": rejected.revision, "reason": "Inválido"})
+        decided = rejected.decided_at
+        OTRSTicket.objects.filter(pk__in=(process.intake.ticket_id, rejected.ticket_id)).update(external_state_name="resolvido", business_status="RESOLVED")
+        project_intakes(force=True)
+        project_intakes(force=True)
+        rejected.refresh_from_db()
+        self.assertEqual(rejected.decided_at, decided)
+        self.assertEqual(rejected.status, "REJECTED")
+        self.assertEqual(CancellationIntake.objects.count(), 2)
+        self.assertEqual(CancellationProcess.objects.count(), 1)
+        self.assertEqual(query_module(self.admin, {"tab": "order"})["queryset"].count(), 1)
+
+    def test_intake_assignment_permissions_scope_revision_and_audit(self):
+        entry = self.entry()
+        user = self.restricted(("view_cancellations", "assign_cancellations"))
+        assigned = decide_intake(request=self.request(user), pk=entry.pk, action="assign", data={"revision": entry.revision, "owner": user.pk})
+        self.assertEqual(assigned.assigned_to, user)
+        audit = AuditEvent.objects.get(action="triage_assign")
+        self.assertEqual(audit.user, user)
+        self.assertEqual(audit.metadata["owner_id"], user.pk)
+        with self.assertRaises(Conflict):
+            decide_intake(request=self.request(), pk=entry.pk, action="assign", data={"revision": entry.revision, "owner": self.admin.pk})
+        count = CancellationEvent.objects.count()
+        same = decide_intake(request=self.request(user), pk=entry.pk, action="assume", data={"revision": assigned.revision})
+        same.refresh_from_db()
+        self.assertEqual(same.revision, assigned.revision)
+        self.assertEqual(CancellationEvent.objects.count(), count)
+        forbidden = self.restricted(project="Projeto B", client="Cliente B")
+        with self.assertRaises(ValidationError):
+            decide_intake(request=self.request(), pk=entry.pk, action="assign", data={"revision": same.revision, "owner": forbidden.pk})
+        with self.assertRaises(PermissionDenied):
+            decide_intake(request=self.request(self.restricted()), pk=entry.pk, action="assign", data={"revision": same.revision, "owner": self.admin.pk})
+
+    def test_quick_owner_filters_work_for_triage_and_official_processes(self):
+        mine = self.entry()
+        decide_intake(request=self.request(), pk=mine.pk, action="assume", data={"revision": mine.revision})
+        self.entry(124)
+        self.assertEqual(query_module(self.admin, {"owner": "me"})["queryset"].count(), 1)
+        self.assertEqual(query_module(self.admin, {"owner": "none"})["queryset"].count(), 1)
+        mine.refresh_from_db()
+        process = self.approve(mine)
+        self.assertEqual(query_module(self.admin, {"tab": "order", "owner": "me"})["queryset"].count(), 1)
+        self.act(process, "assign", owner="")
+        self.assertEqual(query_module(self.admin, {"tab": "order", "owner": "none"})["queryset"].count(), 1)
+        self.assertEqual(query_module(self.admin, {"tab": "order", "owner": "me"})["queryset"].count(), 0)
+
+    def test_extended_search_context_and_contextual_advanced_filters(self):
+        process = self.approve()
+        for q in (process.code.lower(), "123", "Cliente A", "ISP A", "DES-A"):
+            self.assertEqual(query_module(self.admin, {"tab": "order", "q": q})["queryset"].count(), 1, q)
+        self.assertEqual(query_module(self.admin, {"tab": "order", "context": "Projeto A"})["queryset"].count(), 1)
+        self.entry(124)
+        # A financial filter left in a URL must not empty a different population.
+        data = query_module(self.admin, {"sent": "on", "pending_kind": "BILL"})
+        self.assertEqual(data["queryset"].count(), 1)
+        self.assertNotIn("sent", [f.name for f in data["advanced_fields"]])
+        self.assertIn("presence", [f.name for f in data["advanced_fields"]])
+
+    def test_list_assignment_returns_to_safe_filtered_list_and_more_filters_default_closed(self):
+        entry = self.entry()
+        response = self.client.get(reverse("cancelamentos:index"), {"tab": "intake", "isp": "ISP A", "owner": "none"})
+        self.assertContains(response, 'id="canc-advanced" hidden')
+        self.assertContains(response, "Mais filtros")
+        self.assertContains(response, "Confirmar atribuição")
+        result = self.client.post(reverse("cancelamentos:intake_action", args=(entry.pk, "assign")),
+            {"revision": entry.revision, "owner": self.admin.pk, "return_query": "tab=intake&owner=none&page=2&redirect=https://invalid.test"}, HTTP_ACCEPT="application/json")
+        self.assertEqual(result.status_code, 200)
+        self.assertIn("owner=none", result.json()["url"])
+        self.assertNotIn("invalid.test", result.json()["url"])
+
+    def test_sync_indicator_uses_real_freshness_failure_and_active_lease(self):
+        from .services.otrs_intake import synchronization_indicator
+        from aplicativos.integracoes.models import IntegrationLease
+        self.entry()
+        self.assertEqual(synchronization_indicator()["code"], "fresh")
+        IntegrationSyncState.objects.filter(key="otrs").update(last_error_at=timezone.now())
+        self.assertEqual(synchronization_indicator()["code"], "failed")
+        IntegrationLease.objects.create(key="otrs", owner_token="test-owner", expires_at=timezone.now()+timedelta(minutes=1))
+        self.assertEqual(synchronization_indicator()["code"], "running")
+        IntegrationLease.objects.all().delete()
+        IntegrationSyncState.objects.filter(key="otrs").update(last_error_at=None, last_success_at=timezone.now()-timedelta(hours=3))
+        self.assertEqual(synchronization_indicator()["code"], "stale")
+
+    def test_metric_links_return_to_current_kpi_and_pending_stage_stays_contextual(self):
+        from .views import _metric_url
+        from django.http import QueryDict
+        url = _metric_url(QueryDict("presence=history&situation=all&owner=me"), "intake")
+        self.assertNotIn("presence=history", url)
+        self.assertNotIn("situation=all", url)
+        self.assertIn("owner=me", url)
+        process = self.approve()
+        self.act(process, "start")
+        self.act(process, "pending_add", kind="DOCUMENT", description="Termo")
+        data = query_module(self.admin, {"tab": "pending", "stage": "ORDER"})
+        self.assertEqual(data["queryset"].count(), 0)
+        self.assertEqual(data["metrics"]["request"], 1)

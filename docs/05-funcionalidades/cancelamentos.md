@@ -1,6 +1,6 @@
 # Cancelamentos — operação NOC
 
-Estado: primeira entrega funcional em DEV. O módulo acompanha cancelamentos de circuitos com triagem humana, tratativa ISP, equipamentos, pendências simultâneas, obrigações documentais e encaminhamento manual ao Financeiro. Não houve deploy nem carga histórica. Não representa a versão 1.4.0.
+Estado: segunda entrega operacional em DEV (correção da elegibilidade OTRS e refinamento da lista). O módulo acompanha cancelamentos de circuitos com triagem humana, tratativa ISP, equipamentos, pendências simultâneas, obrigações documentais e encaminhamento manual ao Financeiro. Não houve deploy nem carga histórica. Não representa a versão 1.4.0.
 
 ## Acesso e telas
 
@@ -16,9 +16,11 @@ Os caminhos usam IDs locais; TicketID OTRS e Ticket# são preservados separadame
 
 A fonte é o espelho `OTRSTicket`, com relações `OTRSTicketConfigItem`. O módulo não abre conexão externa durante requests. Usa a fila exata **NOC - CANCELAMENTOS NGO**, definida em `integracoes/otrs_queues.py`; o QueueID observado vem do espelho e não é inferido por URL/perfil de busca.
 
-O contrato inicial considera os tickets presentes nessa fila, sem inventar novos critérios por estado/título. Aprovar é uma decisão humana explícita; estado do OTRS não admite nem conclui processo. A classificação analítica existente do Cockpit permanece independente.
+A entrada atual reproduz o **KPI 1**, combinando fila exata, presença atual e estado **em atendimento**. Reutiliza `cancellation_stage_expression`/`classify_cancellation_stage` e `CANCELLATION_REQUEST_STATES`, já utilizados pela integração analítica; os IDs vêm das dimensões resolvidas pelo sincronizador, não de URLs ou títulos. Estados terminais ou mapeamento UNKNOWN não são admitidos automaticamente. Não se inventa exclusão por procedência: o KPI verificado não filtra responsabilidade. Aprovar continua sendo decisão humana explícita.
 
-Na consulta ao espelho DEV em 09/11/2026 foram observados os QueueIDs 164 (Cancelamentos NGO), 165 (retirada) e 168 (pendente pagamento), além de 107 (NOC Atacado). São evidência do snapshot, não constantes novas no módulo. O KPI “NOC CANC. EM TRATATIVA” já é classificado no serviço analítico por estados da fila de Cancelamentos; não foi criada uma quinta fila com esse rótulo. Esta entrega não consultou nem alterou a origem remota para confirmar renomeações posteriores.
+O backlog verifica também o mirror atual, para não manter como nova entrada um ticket que saiu do KPI entre duas projeções. O worker reconcilia `eligible`, preservando decisões, históricos e timestamps anteriores. Em **Mais filtros → Presença no KPI 1**, pode-se consultar entradas atuais, histórico fora do KPI ou ambos. A situação da triagem é independente da presença atual.
+
+Na consulta ao espelho DEV em 09/11/2026 foram observados os QueueIDs 164 (Cancelamentos NGO), 165 (retirada) e 168 (pendente pagamento), além de 107 (NOC Atacado). São evidência do snapshot, não constantes novas no módulo. O KPI “NOC CANC. EM TRATATIVA” já é classificado no serviço analítico por estados da fila de Cancelamentos; não foi criada uma quinta fila com esse rótulo. Na segunda entrega, os perfis foram conferidos na origem pelo client existente em consultas MySQL somente leitura, sem alteração remota.
 
 O worker existente chama a projeção local depois de avaliar as sincronizações. A projeção exige integração habilitada, registro de FULL aplicado com a cobertura atual do Cockpit e espelho recente. Cadência de projeção: 2 minutos; falhas usam backoff progressivo até 30 minutos. A validade padrão da observação é 60 minutos e pode ser configurada entre 2 e 1440 minutos. A configuração não muda credenciais, filas ou cobertura global.
 
@@ -34,7 +36,43 @@ Há lease e estado próprios (`cancellation_intake`) nos mecanismos centrais. Ca
 
 Tickets sem origem configurada resultam em estado vazio explicativo. Saída da fila, perda de mirror e novas sincronizações preservam aprovações/rejeições e seus históricos. Polling não garante captura de passagem pela fila entre duas observações; leitura adicional de eventos é uma evolução futura, não uma capacidade desta entrega.
 
+## Diagnóstico da divergência 120 × 15
+
+Referências em **09/11/2026, America/Sao_Paulo**: diagnóstico local às **11:19:18**, comparação somente leitura com a origem às **11:20:09** e conferência após reconciliação às **11:34:48**. São fotografias datadas, não contagens fixas do produto.
+
+| População | Antes | Após reconciliação |
+|---|---:|---:|
+| Total de tickets do espelho OTRS | 12.800 | 12.800 |
+| Tickets presentes na fila 164 | 120 | 120 |
+| Tickets elegíveis pelo estado do KPI 1 | 15 | 15 |
+| Entradas persistidas | 120 | 120 |
+| Backlog apresentado como triagem atual | 120 | 15 |
+| Históricas fora do KPI 1 | Sem separação | 105 |
+| Entradas que saíram da fila física | 0 | 0 |
+| Decisões aprovadas / rejeitadas | 0 / 0 | 0 / 0 |
+| Entradas WAITING persistidas (inclui histórico) | 120 | 120 |
+| Processos oficiais | 0 | 0 |
+
+Causa comprovada: a primeira projeção exigia somente nome da fila e `is_present_in_queue`, enquanto a listagem contava todos os WAITING sem recortar elegibilidade. Os 120 continuavam fisicamente na fila: **86 closed successful + 2 resolvido + 8 cancelado + 9 em tratativa + 15 em atendimento**. A diferença era o filtro de estado do KPI, não outra fila, Data Scope ou diferença entre os TicketIDs comparados. Os 105 registros fora do KPI foram mantidos com `eligible=False`, sem exclusão ou pedido automático.
+
+Definições verificadas em `kpi.search`:
+
+| KPI / perfil observado | Fila | Estados da pesquisa | Tickets |
+|---|---|---|---:|
+| 1 · Cancelamentos NGO (681) | QueueID 164 | StateID 10 — em atendimento | 15 |
+| 2 · Em tratativa (725) | QueueID 164 | 13, 17, 18, 19, 11, 21, 22 | 9 |
+| 3 · Retira equipamento (680) | QueueID 165 | Conjunto já catalogado em `CANCELLATION_PROFILE_ACTIVE_STATES` | 1 |
+| 4 · Pendente pagamento (697) | QueueID 168 | Mesmo conjunto ativo catalogado | 0 |
+
+Os TicketIDs do KPI 1 na origem e no espelho foram iguais: **15 em comum, zero faltantes e zero extras**. Os números 681/725/680/697 identificam perfis e nunca são tratados como QueueID. KPI 1 → KPI 2 pode ocorrer por mudança de estado na mesma fila, sem mudança de responsável ou QueueID. As outras filas oferecem contexto e não promovem etapas locais ou admissão automática.
+
+A reconciliação é retomável por TicketID. Houve disputa transitória de escrita no SQLite com o worker DEV ainda carregado com código anterior. Após verificar sua identidade, somente esse processo DEV foi reiniciado, com backup e liberação das leases do processo encerrado. A reexecução preservou os lotes já aplicados e as 120 entradas. Nenhum serviço de produção foi alterado.
+
 ## Triagem e circuito principal
+
+A lista oferece **Todos / Meus / Sem responsável**, sobre `assigned_to` na triagem e `owner` nos processos, com Data Scope aplicado antes dos filtros. A barra principal reúne busca por Ticket#, TicketID, código do pedido, circuito, cliente ou ISP, Cliente/Projeto e Responsável. Não há consulta a cada tecla. **Mais filtros** começa fechado, indica filtros ativos e contém apenas opções adequadas à aba; valores ficam na URL e na paginação. Limpar mantém a aba.
+
+Atribuir/Reatribuir reutiliza o catálogo existente e valida o acesso do destino no backend. Autor, data, responsáveis anterior/novo e revisão são auditados. Conflitos são rejeitados e atribuições sem alteração não duplicam eventos. Após confirmar, o recorte e a página são preservados; a linha pode sair naturalmente do filtro Sem responsável. Assumir não toma registro de outro analista e não altera proprietário OTRS.
 
 O analista pode assumir, manter pendente com observação, rejeitar com justificativa ou aprovar. Rejeição permanece documentada e não reaparece como nova entrada em sync posterior. Reconsideração/reabertura de decisão não foi disponibilizada nesta entrega.
 
@@ -122,6 +160,10 @@ Escopo é aplicado antes de filtros, indicadores, paginação, detalhe, POST e e
 
 ## Indicadores e exportação
 
+A página principal mantém cinco indicadores compactos clicáveis, cada um levando à sua aba. **Concluídos** perdeu o sufixo NOC apenas na navegação da lista; a conclusão continua operacional e independente do pagamento. A coexistência de Pendências com Pedido/Solicitação é explicada discretamente no indicador. A tabela de Pendências mostra tipos, quantidade visível, previsões e valores informados quando autorizados.
+
+A sincronização usa um indicador compacto na linha das abas: atualizado, sincronizando, desatualizado ou falha. Seu detalhe apresenta os horários reais de sucesso do espelho/projeção e acesso à Central de Integrações quando permitido. Considera leases ativas e erros posteriores ao sucesso; recarregar a página não renova freshness.
+
 Todos os indicadores usam registros reais do recorte autorizado. Aguardando triagem conta entradas WAITING, sem confundi-las com pedidos oficiais. Pedido, Solicitação e Concluídos são contagens de processos com etapas mutuamente exclusivas. Com pendências conta processos não concluídos com pelo menos uma pendência OPEN; não soma o número de pendências. Documentos/boletos conta processos em andamento com pendência documental aberta ou obrigação aguardando documento. Encaminhados conta processos distintos com algum envio registrado, não quantidade de e-mails nem pagamentos.
 
 Os indicadores de pendências/documentos/envios podem se sobrepor às etapas principais e são identificados assim na tela. Pesquisa, responsável, cliente, projeto, ISP e período da abertura do ticket são aplicados ao mesmo universo. CSV reutiliza a consulta e protege células contra fórmulas; financeiro não é incluído na exportação inicial.
@@ -132,6 +174,12 @@ App: `arion_geo/aplicativos/cancelamentos/`. Models: `IntakeSettings`, `Cancella
 
 Migrations aditivas: `0001_initial`, `0002_cancellationevent_details`. Aplicar pelo Python da `.venv` no banco DEV confirmado. O ambiente desta entrega está configurado para SQLite, sem bootstrap/candidato MySQL; isso não é validação MySQL e não altera a configuração operacional de outros ambientes. Build frontend inclui `frontend_src/js/cancelamentos/cancelamentos.js` pelo mecanismo existente.
 
+## Nota original OTRS — dependência
+
+A leitura genérica do client bloqueia artigos/corpos/anexos. `fetch_quality_articles` é uma leitura específica e transitória para correlação QID da Qualidade, sem o contrato de autor e data da primeira nota. Ela não constitui autorização para exibir comunicações em Cancelamentos.
+
+Nesta entrega nenhum corpo de artigo foi consultado, persistido ou enviado ao frontend/auditoria. A evolução exige contrato autorizado por TicketID, autor/horário, seleção do primeiro artigo válido, Data Scope, armazenamento privado e apresentação segura do conteúdo. A origem será identificada como **OTRS**, separada das observações locais **ARION OPS**. Essa dependência não bloqueia o fluxo atual.
+
 ## Migração histórica futura e limites
 
 `LegacyCancellationReference` reserva origem, entidade, PK, lote, versão de mapeamento, checksum, destino e data com unicidade de origem/entidade/PK. Histórico tem datas próprias e modelos separados para observações/valores. O importador ainda não existe; o banco real do legado não foi disponibilizado. `ArionBroken1`/RECs e os 162 registros de uma captura não são fonte de Cancelamentos e não foram carregados.
@@ -140,12 +188,14 @@ Procedimento futuro: identificar esquema real → extrair snapshot autorizado �
 
 Permanecem futuros: migração histórica, reconciliação CMDB, múltiplos processos por ticket, reconsideração/reabertura, upload privado de anexos, envio automático, painel Financeiro, confirmação de pagamento e gráficos financeiros. Não há automação remota, dados fabricados ou deploy nesta entrega.
 
-## Validação da primeira entrega
+## Validação
 
 `check` passou e `makemigrations --check --dry-run` não detectou alterações pendentes. As duas migrations foram confirmadas como aplicadas no DEV configurado, com backup local antes da alteração de schema.
 
-Passaram 61 testes focados de Cancelamentos, worker e contratos documentais, além da validação da administração de acessos; os 35 testes do módulo foram repetidos após a revisão final do serviço de conclusão. Os cenários incluem replay e falha parcial da projeção, admissão única, decisões preservadas, vínculo CMDB, pendências simultâneas, equipamentos, cobranças e documentos, encaminhamento, exceções, escopo, CSRF, auditoria e exportação. Smoke tests cobriram as principais páginas autenticadas depois da inclusão da navegação.
+Na primeira entrega passaram 61 testes focados de Cancelamentos, worker e contratos documentais, além da validação da administração de acessos; os 35 testes do módulo foram repetidos após a revisão final do serviço de conclusão. Os cenários incluem replay e falha parcial da projeção, admissão única, decisões preservadas, vínculo CMDB, pendências simultâneas, equipamentos, cobranças e documentos, encaminhamento, exceções, escopo, CSRF, auditoria e exportação. Smoke tests cobriram as principais páginas autenticadas depois da inclusão da navegação.
 
 O navegador validou lista e detalhe em claro/escuro nas larguras 1920, 1440, 1366, 1024 e 390 px, sem overflow global ou erros JavaScript, incluindo observação, aprovação e rejeição por modal/POST. O build de produção gerou os 33 bundles pelo script existente, usando Node 24 disponível no ambiente. Fixtures de interface foram restritas ao banco de teste isolado.
 
 Esses testes foram executados sobre SQLite porque é o backend ativo deste checkout, sem candidato MySQL configurado. Não constituem homologação MySQL, teste de concorrência real no servidor MySQL ou validação da origem remota; nenhuma configuração foi trocada para simular esse resultado.
+
+Na segunda entrega, a elegibilidade e a reconciliação foram verificadas com a população real e TicketIDs equivalentes ao KPI 1. Passaram os **44 testes do módulo**, incluindo estados históricos, mudança de estado na mesma fila, replay, decisões preservadas, responsáveis locais, conflitos, filtros por aba, contagens, permissões e Data Scope. `check`, verificação de migrations e `git diff --check` também passaram. A lista foi revisada em claro/escuro nas larguras 1920, 1440, 1366, 1024 e 390 px, com filtros avançados, atribuição e retorno ao recorte, sem overflow global. O build frontend passou pelo script existente. Não houve alteração de models ou nova migration; o MySQL consultado foi a fonte OTRS somente leitura, enquanto os testes de aplicação permanecem no SQLite DEV configurado.
