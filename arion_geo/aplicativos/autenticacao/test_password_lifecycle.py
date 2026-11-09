@@ -247,16 +247,23 @@ class PasswordLifecycleTests(TestCase):
             raw_token=link.split("#", 1)[1], purpose=AccessToken.Purpose.PASSWORD_RESET, new_password=GOOD_PASSWORD,
         ))
 
-    def test_password_policy_requires_12_characters_common_password_check_and_no_immediate_reuse(self):
-        short = PasswordSetForm(self.user, {"new_password1": "short", "new_password2": "short"})
+    def test_password_policy_requires_8_characters_common_password_check_and_no_immediate_reuse(self):
+        short = PasswordSetForm(self.user, {"new_password1": "1234567", "new_password2": "1234567"})
         self.assertFalse(short.is_valid())
-        common = PasswordSetForm(self.user, {"new_password1": "q1w2e3r4t5y6", "new_password2": "q1w2e3r4t5y6"})
+        self.assertIn("pelo menos 8 caracteres", str(short.errors))
+        numeric = PasswordSetForm(self.user, {"new_password1": "12345678", "new_password2": "12345678"})
+        self.assertFalse(numeric.is_valid())
+        self.assertIn("inteiramente numérica", str(numeric.errors))
+        common = PasswordSetForm(self.user, {"new_password1": "password", "new_password2": "password"})
         self.assertFalse(common.is_valid())
+        self.assertIn("muito comum", str(common.errors))
         reused = PasswordSetForm(self.user, {
             "new_password1": "Legacy-Operator-Password-2024!",
             "new_password2": "Legacy-Operator-Password-2024!",
         })
         self.assertFalse(reused.is_valid())
+        eight_char = PasswordSetForm(self.user, {"new_password1": "Xk9#mP2$", "new_password2": "Xk9#mP2$"})
+        self.assertTrue(eight_char.is_valid(), eight_char.errors)
         valid = PasswordSetForm(self.user, {"new_password1": GOOD_PASSWORD, "new_password2": GOOD_PASSWORD})
         self.assertTrue(valid.is_valid(), valid.errors)
 
@@ -299,6 +306,7 @@ class PasswordLifecycleTests(TestCase):
         self.assertContains(response, "SEGURANÇA DA CONTA")
         self.assertContains(response, "Por segurança, você precisa definir uma nova senha pessoal para continuar utilizando o ARION OPS.")
         self.assertContains(response, "Atualizar senha e continuar")
+        self.assertContains(response, "Mínimo de 8 caracteres")
         self.assertNotContains(response, "Código de verificação")
         self.assertNotContains(response, "Enviar código por e-mail")
         self.assertNotContains(response, "E-mail corporativo cadastrado")
@@ -468,6 +476,7 @@ class PasswordLifecycleTests(TestCase):
         self.assertContains(login_res, "Atualize sua senha")
         self.assertContains(login_res, "SEGURANÇA DA CONTA")
         self.assertContains(login_res, "Atualizar senha e continuar")
+        self.assertContains(login_res, "Mínimo de 8 caracteres")
         self.assertNotContains(login_res, "Código de verificação")
         self.assertNotContains(login_res, "Enviar código por e-mail")
         self.assertNotContains(login_res, "E-mail corporativo cadastrado")

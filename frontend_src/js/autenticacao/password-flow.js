@@ -48,7 +48,7 @@
       const match = form.querySelector('[data-requirement-match]');
       if (!first || !second) return;
       const update = () => {
-        length?.classList.toggle('is-valid', first.value.length >= 12);
+        length?.classList.toggle('is-valid', first.value.length >= 8);
         match?.classList.toggle('is-valid', second.value.length > 0 && first.value === second.value);
       };
       first.addEventListener('input', update);
