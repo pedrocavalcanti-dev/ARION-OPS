@@ -137,7 +137,8 @@ class RefinementTests(TestCase):
         process = prepare_rows(query_module(self.admin, {"tab": "order"})["queryset"], self.admin)[0]
         self.assertEqual(process.table_effective, date(2026, 10, 2))
         self.assertEqual(process.finance["total"], Decimal("0"))
-        self.assertFalse(process.finance["review"])
+        self.assertTrue(process.finance["partial"])
+        self.assertTrue(process.finance["review"])
         process.treatment.refresh_from_db()
         self.assertIsNone(process.treatment.effective_date)
         self.assertFalse(process.treatment.service_confirmed)

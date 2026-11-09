@@ -1,13 +1,13 @@
 from django import template
 
+from ..services.financial_totals import format_brl
+
 register = template.Library()
 
 
 @register.filter
 def brl(value):
-    if value is None:
-        return "—"
-    return "R$ " + format(value, ",.2f").translate(str.maketrans({",": ".", ".": ","}))
+    return format_brl(value)
 
 
 @register.filter

@@ -6,8 +6,8 @@
 <th>Cliente final{% if tab == 'intake' %} / projeto{% endif %}</th>{% if tab == 'order' %}<th>Localidade</th>{% endif %}<th>ISP</th>
 {% if tab == 'pending' %}<th title="Pendências abertas">Pendências</th>{% endif %}
 {% if tab == 'completed' %}<th>Cancelamento</th>{% endif %}
-{% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}<th class="canc-money">Multa (R$)</th><th class="canc-money" title="Equipamentos (R$)">Equip. (R$)</th><th class="canc-money">Outros (R$)</th><th class="canc-money">Total (R$)</th>{% endif %}{% endif %}
-<th>{% if tab == 'completed' %}Conclusão{% elif tab == 'pending' %}Próxima ação{% else %}Abertura{% endif %}</th>{% if tab != 'completed' %}<th>Status</th>{% endif %}<th>Responsável</th><th>Ações</th></tr></thead><tbody>
+{% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}<th class="canc-money">Multa (R$)</th><th class="canc-money" title="Equipamentos (R$)">Equip. (R$)</th><th class="canc-money">Outros (R$)</th><th class="canc-money" title="Total informado: Multa + Equipamento + Outros; não comprova pagamento. Valores ausentes tornam o subtotal parcial.">Total (R$)</th>{% endif %}{% endif %}
+<th title="{% if tab == 'completed' %}Conclusão operacional{% elif tab == 'pending' %}Próxima ação{% else %}Abertura do ticket{% endif %}">{% if tab == 'completed' %}Conclusão{% elif tab == 'pending' %}Próx. ação{% else %}Abertura{% endif %}</th>{% if tab != 'completed' %}<th>Status</th>{% endif %}<th>Responsável</th><th>Ações</th></tr></thead><tbody>
 {% for obj in page %}<tr>{% if tab == 'intake' %}
 <td><a class="canc-record" href="{% url 'cancelamentos:intake_detail' obj.pk %}">{{ obj.ticket_number }}</a></td>
 <td><span class="canc-truncate" title="{{ obj.designation_snapshot }}">{{ obj.designation_snapshot|default:"Vínculo a revisar" }}</span></td>
@@ -24,7 +24,7 @@
 {% if tab == 'pending' %}<td><a class="canc-link" href="{% url 'cancelamentos:detail' obj.pk %}#pendencias">{{ obj.open_pending_count }} pendência{{ obj.open_pending_count|pluralize:"s" }}</a></td>{% endif %}
 {% if tab == 'completed' %}<td>{% if obj.table_effective %}{{ obj.table_effective|date:"d/m/Y" }}{% elif obj.effective_review %}Data a revisar{% else %}Não informada{% endif %}</td>{% endif %}
 {% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}
-<td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.fine|brl }}</td><td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.equipment|brl }}</td><td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.other|brl }}</td><td class="canc-money">{% if obj.finance.review %}<span title="Valores informados; conciliar cobranças principais e pendências. Não confirma pagamento.">A conferir</span>{% else %}{{ obj.finance.total|brl }}{% endif %}</td>
+<td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.fine|brl }}</td><td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.equipment|brl }}</td><td class="canc-money" title="Valor informado; não confirma pagamento">{{ obj.finance.other|brl }}</td><td class="canc-money">{% include 'cancelamentos/_financial_total.html' with finance=obj.finance %}</td>
 {% endif %}{% endif %}
 <td>{% if tab == 'pending' %}{{ obj.next_action_at|date:"d/m/Y"|default:"Não definida" }}{% elif tab == 'completed' %}{{ obj.table_completed|date:"d/m/Y"|default:"Data a revisar" }}{% elif obj.opening_review %}<span class="canc-muted">Data a revisar</span>{% else %}{{ obj.table_opened|date:"d/m/Y"|default:"—" }}{% endif %}</td>
 {% if tab != 'completed' %}<td><span class="canc-status" title="Etapa: {{ obj.get_stage_display }}">{{ obj.table_status }}</span></td>{% endif %}{% endif %}

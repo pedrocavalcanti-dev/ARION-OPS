@@ -1,0 +1,1 @@
+{% load cancellation_display %}<span title="Total informado: Multa + Equipamento + Outros. Não comprova pagamento.{% if finance.review %} Conciliação financeira a conferir.{% endif %}">{{ finance.total|brl }}{% if finance.partial %}<small class="canc-muted canc-financial-note">{% if finance.has_values %}Parcial{% else %}Não informado{% endif %}</small>{% endif %}</span>

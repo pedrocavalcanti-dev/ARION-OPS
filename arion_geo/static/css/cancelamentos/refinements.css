@@ -9,6 +9,8 @@
 .canc-compact-table th:first-child { width:12%; }
 .canc-compact-table th:last-child,.canc-compact-table td:last-child { width:196px; min-width:0; overflow:visible; }
 .canc-compact-table tbody tr { height:50px; }
+.canc-compact-table td small.canc-financial-note { font-size:10px; line-height:12px; margin-top:0; }
+.canc-detail-finance .canc-financial-note { display:block; font-size:11px; line-height:1.4; margin-top:4px; }
 .canc-compact-table .canc-truncate,.canc-compact-table .canc-status { max-width:100%; box-sizing:border-box; }
 .canc-compact-table .canc-record { display:block; overflow:hidden; text-overflow:ellipsis; }
 .canc-row-actions { gap:7px; justify-content:flex-end; }

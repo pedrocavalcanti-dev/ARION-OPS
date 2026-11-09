@@ -1,9 +1,9 @@
 """Scoped, batched list presentation; never changes historical facts."""
-from decimal import Decimal
 from datetime import date
 
 from django.db.models import Count, Prefetch
 
+from .financial_totals import money_columns
 from ..forms import FINANCIAL_PENDING_KINDS
 from ..models import CancellationPending, FinancialObligation, LegacyCancellationReference
 
@@ -18,34 +18,6 @@ def historical_date(value):
         return parsed if valid_date(parsed) else None
     except (TypeError, ValueError):
         return None
-
-
-def money_columns(obligations, pending_amounts):
-    """Use the obligation ledger once. Child amounts remain evidence, not additions."""
-    amounts = {"CONTRACT": [], "EQUIPMENT": [], "OTHER": []}
-    reliable = bool(obligations)
-    for item in obligations:
-        amount = item.charged_amount if item.charged_amount is not None else item.estimated_amount
-        amounts[item.kind if item.kind in amounts else "OTHER"].append(amount)
-        if amount is None or item.reconciliation_state != "NOT_REQUIRED":
-            reliable = False
-    # Without a reconciliation link, child charges cannot prove a consolidated total.
-    if pending_amounts:
-        reliable = False
-    # A child-only category can be shown as an unconfirmed amount; never add it
-    # to a category already represented in the obligation ledger (including zero).
-    fallback = {"CONTRACT": [], "EQUIPMENT": [], "OTHER": []}
-    for pending in pending_amounts:
-        key = {"CONTRACT_FINE": "CONTRACT", "EQUIPMENT_FINE": "EQUIPMENT"}.get(pending["kind"], "OTHER")
-        fallback[key].append(pending["amount"])
-    for key in amounts:
-        if not amounts[key]:
-            amounts[key] = fallback[key]
-    totals = {key: sum((v for v in values if v is not None), Decimal("0"))
-              if values and all(v is not None for v in values) else None for key, values in amounts.items()}
-    return {"fine": totals["CONTRACT"], "equipment": totals["EQUIPMENT"], "other": totals["OTHER"],
-            "total": sum((v for v in totals.values() if v is not None), Decimal("0")) if reliable else None,
-            "review": not reliable}
 
 
 def prepare_rows(rows, user):

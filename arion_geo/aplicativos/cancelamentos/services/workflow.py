@@ -18,6 +18,7 @@ from ..models import (CancellationIntake, CancellationProcess, CancellationEvent
 from .data_scope import CancellationScope
 from .otrs_intake import source_status, intake_settings, ticket_is_eligible
 from .identity import normalize_ticket_number
+from .financial_totals import money_columns, format_brl
 
 
 class Conflict(ValidationError):
@@ -178,21 +179,28 @@ def pending_is_financial(pending):
 
 def financial_summary(process):
     treatment = process.treatment
+    obligations = list(process.obligations.order_by("pk"))
+    totals = money_columns(obligations, list(process.pendings.filter(status="OPEN", amount__isnull=False).values("amount")))
     lines = [f"Assunto: Cancelamento {process.display_ticket_number} | {process.code} | {process.isp} | {process.designation}",
              "", f"Cliente: {process.contracting_client}", f"Cliente final: {process.final_client or 'Não informado'}",
              f"Projeto: {process.project}", f"Circuito: {process.designation}", f"Localidade: {process.city} / {process.state}",
              f"Data efetiva: {treatment.effective_date or 'Não confirmada'}",
              f"Encerramento de faturamento: {'Confirmado' if treatment.billing_closed else 'Não confirmado'}",
-             f"Evidência ISP: {treatment.evidence_reference or 'Não informada'}", "", "Obrigações registradas:"]
-    for obligation in process.obligations.order_by("pk"):
+             f"Evidência ISP: {treatment.evidence_reference or 'Não informada'}", "", "Valores principais informados:",
+             f"Multa contratual: {format_brl(totals['fine'])}", f"Equipamento: {format_brl(totals['equipment'])}",
+             f"Outros: {format_brl(totals['other'])}",
+             f"Total informado: {format_brl(totals['total'])}" + (" (parcial; há valores ausentes)" if totals["partial"] else ""),
+             "Conciliação financeira: " + ("A conferir" if totals["review"] else "Sem divergência indicada"),
+             "Valores informados não comprovam pagamento. Pendências não são somadas novamente.", "", "Obrigações registradas:"]
+    for obligation in obligations:
         lines.append(f"- #{obligation.pk} {obligation.get_kind_display()}: {obligation.description}; "
-                     f"previsto R$ {obligation.estimated_amount if obligation.estimated_amount is not None else 'não informado'}; "
-                     f"cobrado R$ {obligation.charged_amount if obligation.charged_amount is not None else 'não informado'}; "
+                     f"previsto {format_brl(obligation.estimated_amount)}; "
+                     f"cobrado {format_brl(obligation.charged_amount)}; "
                      f"vencimento {obligation.due_date or 'não informado'}; {obligation.get_document_status_display()}; "
                      f"documento {obligation.document_reference or 'não disponível'}; referência {obligation.reference_number or 'não informada'}.")
         if obligation.legacy_field:
             lines.append(f"  Origem histórica: {obligation.legacy_field}; {obligation.get_reconciliation_state_display()}. Não somar com pendências sem conciliação.")
-    if not process.obligations.exists():
+    if not obligations:
         lines.append("- Nenhuma obrigação registrada.")
     lines += ["", "Documentos e evidências:"]
     lines += [f"- {e.label}: {e.reference}" for e in process.evidence.order_by("pk")]

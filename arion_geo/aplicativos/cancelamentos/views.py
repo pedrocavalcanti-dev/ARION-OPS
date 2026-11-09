@@ -1,4 +1,5 @@
 import csv
+from itertools import batched
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, permission_required
@@ -26,6 +27,7 @@ from .services.queries import query_module, TABS
 from .services.legacy_history import legacy_context, present_events
 from .services.legacy_people import names_for
 from .services.presentation import prepare_rows
+from .services.financial_totals import format_brl
 from .services.workflow import (Conflict, require, decide_intake, act_on_process,
                                 financial_summary, completion_blockers, pending_is_financial)
 
@@ -366,16 +368,24 @@ def export(request):
     response["Cache-Control"] = "no-store"
     response.write("\ufeff")
     writer = csv.writer(response, delimiter=";")
-    writer.writerow(("Origem", "TicketID", "Ticket#", "Pedido", "Situação", "Cliente", "Projeto", "Designação", "ISP", "Responsável", "Conclusão operacional"))
-    for obj in rows.iterator(chunk_size=200):
-        if data["tab"] == "intake":
-            values = ("Espelho OTRS / triagem", obj.ticket_external_id, obj.ticket_number, "", obj.get_status_display(),
-                      obj.client_snapshot, obj.project_snapshot, obj.designation_snapshot,
-                      obj.link.operator.name if obj.link_id and obj.link.operator else "", obj.assigned_to or "", "")
-        else:
-            values = (obj.get_origin_display(), obj.external_ticket_id, obj.display_ticket_number, obj.code,
-                      obj.get_stage_display(), obj.contracting_client, obj.project, obj.designation, obj.isp, obj.owner or "", obj.completed_at)
-        writer.writerow([_csv_value(value) for value in values])
+    financial = data["tab"] != "intake" and request.user.has_perm("cancelamentos.view_cancellation_finance")
+    header = ["Origem", "TicketID", "Ticket#", "Pedido", "Situação", "Cliente", "Projeto", "Designação", "ISP", "Responsável", "Conclusão operacional"]
+    if financial:
+        header += ["Multa (R$)", "Equipamento (R$)", "Outros (R$)", "Total informado (R$)", "Total parcial", "Conciliação financeira"]
+    writer.writerow(header)
+    for batch in batched(rows.iterator(chunk_size=200), 200):
+        for obj in prepare_rows(batch, request.user) if financial else batch:
+            if data["tab"] == "intake":
+                values = ("Espelho OTRS / triagem", obj.ticket_external_id, obj.ticket_number, "", obj.get_status_display(),
+                          obj.client_snapshot, obj.project_snapshot, obj.designation_snapshot,
+                          obj.link.operator.name if obj.link_id and obj.link.operator else "", obj.assigned_to or "", "")
+            else:
+                values = (obj.get_origin_display(), obj.external_ticket_id, obj.display_ticket_number, obj.code,
+                          obj.get_stage_display(), obj.contracting_client, obj.project, obj.designation, obj.isp, obj.owner or "", obj.completed_at)
+            if financial:
+                values += tuple(format_brl(obj.finance[key]) for key in ("fine", "equipment", "other", "total")) + (
+                    "Sim" if obj.finance["partial"] else "Não", "A conferir" if obj.finance["review"] else "Sem divergência indicada")
+            writer.writerow([_csv_value(value) for value in values])
     AuditService.record(request=request, category="cancellation", module="cancelamentos", action="export",
                         description="Exportação operacional de Cancelamentos.", metadata={"count": count, "tab": data["tab"]})
     return response
