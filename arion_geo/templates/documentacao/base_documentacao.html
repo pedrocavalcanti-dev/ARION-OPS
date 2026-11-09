@@ -67,11 +67,11 @@
       <a class="docs-home-link" href="{% url 'configuracoes:documentation-releases' %}"{% if active_section == 'releases' %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span>Atualiza&ccedil;&otilde;es e vers&otilde;es</span></a>
 {% endif %}
 {% if not release_only %}      <div class="docs-sidebar-caption">NAVEGAÇÃO</div>
-      <div class="docs-explorer-nav" aria-label="Explorador visual de estruturas">
-        <a href="{% url 'configuracoes:documentation-explorer' %}?source=otrs"><span class="docs-nav-dot" aria-hidden="true"></span><span>Explorador OTRS</span></a>
-        <a href="{% url 'configuracoes:documentation-explorer' %}?source=cmdb"><span class="docs-nav-dot" aria-hidden="true"></span><span>Explorador CMDB ServiceUp</span></a>
-        <a href="{% url 'configuracoes:documentation-explorer' %}?source=cross"><span class="docs-nav-dot" aria-hidden="true"></span><span>Correlação OTRS + CMDB</span></a>
-      </div>
+      <nav class="docs-explorer-nav" aria-label="Explorador visual de estruturas">
+        <a href="{% url 'configuracoes:documentation-explorer' %}?source=otrs"{% if request.resolver_match.url_name == 'documentation-explorer' and source == 'otrs' %} class="is-active" aria-current="page"{% endif %}><span class="docs-nav-dot" aria-hidden="true"></span><span class="docs-nav-label">Explorador OTRS</span></a>
+        <a href="{% url 'configuracoes:documentation-explorer' %}?source=cmdb"{% if request.resolver_match.url_name == 'documentation-explorer' and source == 'cmdb' %} class="is-active" aria-current="page"{% endif %}><span class="docs-nav-dot" aria-hidden="true"></span><span class="docs-nav-label">Explorador CMDB ServiceUp</span></a>
+        <a href="{% url 'configuracoes:documentation-explorer' %}?source=cross"{% if request.resolver_match.url_name == 'documentation-explorer' and source == 'cross' %} class="is-active" aria-current="page"{% endif %}><span class="docs-nav-dot" aria-hidden="true"></span><span class="docs-nav-label">Correlação OTRS + CMDB</span></a>
+      </nav>
       {% for category in categories %}{% if category.documents %}
       <details class="docs-nav-group" data-docs-category{% if category.name == active_category %} open{% endif %}>
         <summary aria-controls="docs-nav-{{ category.name|slugify }}"><span>{{ category.name }}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></summary>
