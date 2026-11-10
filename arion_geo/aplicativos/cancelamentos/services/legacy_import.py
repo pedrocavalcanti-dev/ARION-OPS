@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections import Counter, defaultdict
+from contextlib import nullcontext
 from datetime import date, datetime, timezone as utc_timezone
 from decimal import Decimal
 from pathlib import Path
@@ -26,6 +27,8 @@ from ..models import (CancellationEvent, CancellationIntake, CancellationPending
                       FinancialObligation, ISPTreatment, LegacyCancellationReference, LegacyImportRun)
 from .legacy_dump import DumpError, MAIN, PREFIX, TABLE_COLUMNS, read_dump, validate_schema
 from .identity import normalize_ticket_number
+from .legacy_import_policy import (PRODUCTION_DATABASE, production_environment, production_source,
+                                  production_restore_evidence, external_private_file)
 
 
 SOURCE = "arionbroker"
@@ -120,7 +123,8 @@ def load_source(directory, dump_name, source_timezone):
     users = sorted({row[field] for rows in tables.values() for row in rows for field in row
                     if field.endswith("_por_id") or field in ("responsavel_id", "atendente_id") if row[field] is not None})
     return {"tables": tables, "snapshot_checksum": checksum, "schema_checksum": schema_checksum,
-            "source_timezone": source_timezone, "errors": errors, "warnings": warnings, "legacy_user_ids": users}
+            "source_timezone": source_timezone, "errors": errors, "warnings": warnings, "legacy_user_ids": users,
+            "source_paths": {"dump": str(dump_path), "schema": str(directory / "cancelamentos-schema.sql")}}
 
 
 def source_summary(source):
@@ -140,11 +144,13 @@ def source_summary(source):
             "legacy_user_ids_without_names": source["legacy_user_ids"], "warnings": source["warnings"], "errors": source["errors"]}
 
 
-def destination_status(allow_sqlite_dev=False):
+def destination_status(allow_sqlite_dev=False, *, production=False):
     config = connection.settings_dict
     issues = []
-    if settings.ARION_PRODUCTION or settings.ARION_ENV != "development":
-        raise ValidationError("Este importador é exclusivo do DEV; produção bloqueada.")
+    production_environment(production, allow_sqlite_dev)
+    expected_database = PRODUCTION_DATABASE if production else "arion_geo_dev"
+    if production and connection.vendor != "mysql":
+        raise ValidationError("Importação produtiva aceita somente MySQL 8 local no schema arion_geo.")
     db_name = str(config["NAME"])
     if connection.vendor == "sqlite":
         db_name = str(config["NAME"])
@@ -168,9 +174,9 @@ def destination_status(allow_sqlite_dev=False):
                 issues.append("sqlite_integrity_check_failed")
     elif connection.vendor != "mysql":
         issues.append("destination_requires_mysql8_dev")
-    elif (config["NAME"] != "arion_geo_dev" or config.get("HOST", "").lower() not in ("127.0.0.1", "localhost", "::1")
+    elif (config["NAME"] != expected_database or config.get("HOST", "").lower() not in ("127.0.0.1", "localhost", "::1")
           or not config.get("USER") or config["USER"].casefold() == "root"):
-        raise ValidationError("Destino recusado: exige schema arion_geo_dev, loopback e usuário exclusivo sem root.")
+        raise ValidationError(f"Destino recusado: exige schema {expected_database}, loopback e usuário exclusivo sem root.")
     if connection.vendor == "mysql":
         with connection.cursor() as cursor:
             cursor.execute("SELECT DATABASE(), VERSION(), @@read_only, @@character_set_database, @@sql_mode")
@@ -181,7 +187,7 @@ def destination_status(allow_sqlite_dev=False):
             placeholders = ",".join(["%s"] * len(expected_tables))
             cursor.execute(f"SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME IN ({placeholders})", [name, *expected_tables])
             engines = dict(cursor.fetchall())
-        if name != "arion_geo_dev" or not str(version).startswith("8.") or read_only:
+        if name != expected_database or not str(version).startswith("8.") or read_only:
             issues.append("mysql8_dev_identity_or_write_mode_invalid")
         if charset != "utf8mb4" or not {"STRICT_TRANS_TABLES", "STRICT_ALL_TABLES"}.intersection(str(sql_mode).split(",")):
             issues.append("mysql_utf8mb4_or_strict_mode_required")
@@ -195,9 +201,10 @@ def destination_status(allow_sqlite_dev=False):
             "pending_migrations": [f"{migration.app_label}.{migration.name}" for migration, _ in pending]}
 
 
-def build_plan(source, allow_sqlite_dev=False):
+def build_plan(source, allow_sqlite_dev=False, *, production=False, snapshot_checksum=None):
     """Read-only reconciliation. Works against the pre-migration DEV schema too."""
-    destination = destination_status(allow_sqlite_dev=allow_sqlite_dev)
+    destination = destination_status(allow_sqlite_dev=allow_sqlite_dev, production=production)
+    source_identity = production_source(source, snapshot_checksum) if production else None
     mirrors = defaultdict(list)
     for row in OTRSTicket.objects.values("pk", "external_id", "ticket_number"):
         mirrors[normalize_ticket_number(row["ticket_number"])].append(row)
@@ -288,6 +295,14 @@ def build_plan(source, allow_sqlite_dev=False):
     financial_counts = Counter(outcomes[row["id"]] for row in source["tables"][MAIN] for field in MONEY_FIELDS if row[field] is not None)
     result["derived_financial_values"] = {"expected": sum(financial_counts.values()),
         **{key: financial_counts[key] for key in ("new", "existing", "conflict", "invalid")}}
+    if production:
+        result.update(production_import=True, source_identity=source_identity,
+            intakes_matched=sum(bool(r["intake_id"]) for r in decisions),
+            ambiguous_links=sum(r["link_method"].startswith("ambiguous") for r in decisions),
+            blocking_conflicts=[{"id": r["id"], "reason": r["reason"]} for r in decisions if r["result"] in {"invalid", "conflict"}],
+            financial_totals={field: str(sum((Decimal(str(r[field])) for r in source["tables"][MAIN]
+                                           if r[field] is not None), Decimal("0.00"))) for field in MONEY_FIELDS},
+            financial_unknown_counts={field: sum(r[field] is None for r in source["tables"][MAIN]) for field in MONEY_FIELDS})
     result["ready_for_apply"] = not source["errors"] and not destination["issues"] and not any(r["result"] == "conflict" for r in decisions)
     result["plan_fingerprint"] = digest(result)
     return result
@@ -311,6 +326,8 @@ def _apply_record(source, item, run):
     if LegacyCancellationReference.objects.filter(source=SOURCE, entity="cancelamento", legacy_pk=str(row["id"])).exists():
         raise ValidationError("A identidade legada mudou durante o Apply; refaça o dry-run.")
     entry = CancellationIntake.objects.select_for_update().filter(pk=item["intake_id"]).first() if item["intake_id"] else None
+    if item["intake_id"] and not entry:
+        raise ValidationError("Entrada removida após o dry-run; refaça a reconciliação.")
     if entry and (entry.revision != item["intake_revision"] or entry.status != "WAITING" or CancellationProcess.objects.filter(intake=entry).exists()):
         raise ValidationError("Entrada alterada após o dry-run; nenhuma decisão será sobrescrita.")
     ticket = OTRSTicket.objects.select_for_update().filter(pk=item["ticket_pk"]).first() if item["ticket_pk"] else None
@@ -378,9 +395,18 @@ def _apply_record(source, item, run):
     return parent.process_id
 
 
-def apply_plan(source, actor, approved_report, backup_path, backup_checksum, restore_verified, allow_sqlite_dev=False):
+def apply_plan(source, actor, approved_report, backup_path, backup_checksum, restore_verified, allow_sqlite_dev=False,
+               *, production=False, snapshot_checksum=None, confirm_production_apply=False, restore_evidence=None):
     authorize_import(actor)
-    status = destination_status(allow_sqlite_dev=allow_sqlite_dev)
+    status = destination_status(allow_sqlite_dev=allow_sqlite_dev, production=production)
+    evidence_checksum = None
+    if production:
+        production_source(source, snapshot_checksum)
+        if not confirm_production_apply:
+            raise ValidationError("Apply produtivo exige confirmação explícita específica.")
+        if not restore_evidence:
+            raise ValidationError("Apply produtivo exige arquivo privado de evidência do restore testado.")
+        evidence_checksum = production_restore_evidence(restore_evidence, backup_checksum)
     if status["issues"]:
         if "destination_requires_mysql8_dev" in status["issues"]:
             raise ValidationError("Apply bloqueado: exige MySQL 8 DEV validado ou autorização expressa SQLite DEV e migrations aplicadas.")
@@ -388,6 +414,8 @@ def apply_plan(source, actor, approved_report, backup_path, backup_checksum, res
     if not restore_verified:
         raise ValidationError("Valide a restauração do backup antes do Apply.")
     backup = Path(backup_path).expanduser().resolve(strict=True)
+    if production:
+        external_private_file(backup)
     hasher = hashlib.sha256()
     with backup.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -397,8 +425,9 @@ def apply_plan(source, actor, approved_report, backup_path, backup_checksum, res
     if connection.vendor == "mysql":
         with backup.open("r", encoding="utf-8-sig") as stream:
             header = stream.read(8192)
-        if not re.search(r"Database:\s+arion_geo_dev(?:\s|$)", header) or "MySQL dump" not in header:
-            raise ValidationError("O backup precisa identificar o schema MySQL DEV arion_geo_dev.")
+        expected_database = PRODUCTION_DATABASE if production else "arion_geo_dev"
+        if not re.search(r"Database:\s+" + re.escape(expected_database) + r"(?:\s|$)", header) or "MySQL dump" not in header:
+            raise ValidationError(f"O backup precisa identificar o schema MySQL {expected_database}.")
     elif connection.vendor == "sqlite":
         with backup.open("rb") as stream:
             header = stream.read(16)
@@ -422,36 +451,50 @@ def apply_plan(source, actor, approved_report, backup_path, backup_checksum, res
         raise ValidationError("Vendor de banco não suportado para importação.")
     if not approved_report.get("ready_for_apply"):
         raise ValidationError("O dry-run aprovado não está apto ao Apply.")
+    if production and (approved_report.get("mode") != "dry-run" or not approved_report.get("production_import")):
+        raise ValidationError("Apply produtivo exige relatório Dry-run emitido no mesmo modo produtivo.")
     lease = Lease("cancellation_legacy_import")
     if not lease.acquire():
         raise ValidationError("Outra importação histórica está em execução.")
     run = None
     try:
-        plan = build_plan(source, allow_sqlite_dev=allow_sqlite_dev)
+        plan = build_plan(source, allow_sqlite_dev=allow_sqlite_dev, production=production, snapshot_checksum=snapshot_checksum)
         if plan["plan_fingerprint"] != approved_report.get("plan_fingerprint") or not plan["ready_for_apply"]:
             raise ValidationError("A origem ou o destino mudaram; gere um novo dry-run.")
         run = LegacyImportRun.objects.create(batch=uuid4().hex, snapshot_checksum=source["snapshot_checksum"],
             schema_checksum=source["schema_checksum"], mapping_version=MAPPING_VERSION, actor=actor,
             counts={"source_timezone": source["source_timezone"]})
-        imported = 0
-        for item in plan["records"]:
-            if not lease.heartbeat():
-                raise ValidationError("Lease perdida; reexecute preview e dry-run para retomar.")
-            if item["result"] == "new":
-                _apply_record(source, item, run)
-                imported += 1
-        final = build_plan(source, allow_sqlite_dev=allow_sqlite_dev)
-        if final["reconciliation"].get("existing", 0) != len(source["tables"][MAIN]):
-            raise ValidationError("Reconciliação final incompleta; examine o relatório privado.")
-        run.status, run.finished_at = "SUCCESS", timezone.now()
-        run.counts = {"imported_processes": imported, "source_counts": final["counts"], "existing": final["reconciliation"]["existing"],
-                     "source_timezone": source["source_timezone"], "backup_sha256": backup_checksum}
-        run.save()
+        with transaction.atomic() if production else nullcontext():
+            authorize_import(actor)
+            # Recheck the approved universe within the production transaction.
+            current = build_plan(source, allow_sqlite_dev=allow_sqlite_dev, production=production, snapshot_checksum=snapshot_checksum)
+            if current["plan_fingerprint"] != plan["plan_fingerprint"]:
+                raise ValidationError("Destino alterado ao iniciar transação; refaça o Dry-run.")
+            imported = 0
+            for item in plan["records"]:
+                if not lease.heartbeat():
+                    raise ValidationError("Lease perdida; reexecute preview e dry-run para retomar.")
+                if item["result"] == "new":
+                    _apply_record(source, item, run)
+                    imported += 1
+            final = build_plan(source, allow_sqlite_dev=allow_sqlite_dev, production=production, snapshot_checksum=snapshot_checksum)
+            if final["reconciliation"].get("existing", 0) != len(source["tables"][MAIN]):
+                raise ValidationError("Reconciliação final incompleta; examine o relatório privado.")
+            run.status, run.finished_at = "SUCCESS", timezone.now()
+            run.counts = {"imported_processes": imported, "source_counts": final["counts"], "existing": final["reconciliation"]["existing"],
+                         "source_timezone": source["source_timezone"], "backup_sha256": backup_checksum,
+                         **({"production_import": True, "restore_evidence_sha256": evidence_checksum,
+                             "source_identity": final["source_identity"]} if production else {})}
+            run.save()
         return {**final, "batch": run.batch, "applied": imported}
     except Exception:
         if run:
             run.status, run.finished_at = "FAILED", timezone.now()
             run.save(update_fields=("status", "finished_at"))
+            if production:
+                AuditService.record(user=actor, category="cancellation", module="cancelamentos", action="legacy_import_failed",
+                    result="FAILED", obj=run, description="Importação produtiva revertida integralmente.",
+                    metadata={"batch": run.batch, "snapshot_sha256": source["snapshot_checksum"]})
         raise
     finally:
         lease.release()

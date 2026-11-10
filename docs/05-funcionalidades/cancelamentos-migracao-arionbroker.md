@@ -1,6 +1,6 @@
 # Cancelamentos — importação histórica ArionBroker
 
-Estado em 10/11/2026: **162 processos históricos no SQLite DEV, com reconciliação posterior por Excel**. A carga original de 09/11 preserva suas 2.147 referências imutáveis. O relatório posterior é aplicado separadamente, sem reimportar processos, substituir responsáveis atuais ou modificar OTRS/CMDB. O importador original mantém as modalidades SQLite DEV explicitamente autorizado e MySQL 8 DEV; isso não equivale a um ensaio MySQL já executado.
+Estado em 10/11/2026: **162 processos históricos no SQLite DEV, com reconciliação posterior por Excel**. A carga original de 09/11 preserva suas 2.147 referências imutáveis. O relatório posterior é aplicado separadamente, sem reimportar processos, substituir responsáveis atuais ou modificar OTRS/CMDB. O importador mantém as modalidades SQLite DEV explicitamente autorizado e MySQL 8 DEV. O modo adicional `--production-import` permite exclusivamente MySQL 8 local `arion_geo`, com guardas próprias, confirmação, dry-run aprovado, hash do snapshot e backup/restore comprovado; siga os [comandos e critérios produtivos](../06-integracoes-e-dados/arionbroker/carga-producao.md). A reconciliação Excel continua DEV. Nenhuma carga produtiva foi executada por esta atualização.
 
 ## Atualizações posteriores por relatório
 
