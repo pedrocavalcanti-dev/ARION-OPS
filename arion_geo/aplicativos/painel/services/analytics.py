@@ -2115,8 +2115,9 @@ class DashboardAnalyticsService:
         period_tickets = tickets.filter(source_created_at__gte=start_at, source_created_at__lt=end_at)
         current_tickets = tickets.filter(is_present_in_queue=True)
         business_open = TicketQueryService.business_open(queryset=current_tickets)
-        backlog_tickets = current_tickets.filter(business_status__in=BACKLOG_STATUSES)
-        aging = DashboardAnalyticsService._aging_snapshot(backlog_tickets, now)
+        # Match Chamados' active queue, including scheduled tickets. This aging
+        # is independent from the stricter OPEN/PENDING historical backlog.
+        aging = DashboardAnalyticsService._aging_snapshot(business_open, now)
 
         client_distribution = DashboardAnalyticsService._client_distribution(links)
         total_links = sum(item["value"] for item in client_distribution)

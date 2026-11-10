@@ -251,7 +251,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertNotContains(response, "ALGAR")
         self.assertContains(response, "Top 10 Estados com mais Links")
         self.assertContains(response, "Provedores com mais Links")
-        self.assertContains(response, "Aging do backlog operacional")
+        self.assertContains(response, "Aging da fila operacional")
         self.assertIsNotNone(response.context["quality_pulse"])
         self.assertContains(response, "Chamados por projeto")
         self.assertContains(response, "Principais motivos dos chamados")
@@ -395,6 +395,24 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(october["aging"]["over_72"], 1)
         self.assertEqual(october["aging"]["over_72_percent_label"], "20,0%")
         self.assertEqual(october["aging"]["oldest_label"], "3d")
+
+    def test_dashboard_aging_matches_active_queue_including_oldest_scheduled_ticket(self):
+        from aplicativos.chamados.services import TicketQueueService
+        fixed_now = datetime(2026, 11, 10, 13, tzinfo=datetime_timezone.utc)
+        ages = (("SCHEDULED", 5 * 24 + 17), ("PENDING", 4 * 24 + 21), ("OPEN", 1),
+                ("RESOLVED", 200), ("CANCELED", 300), ("UNKNOWN", 400))
+        for index, (status, hours) in enumerate(ages):
+            ticket = self._ticket(1490 + index, status, status in {"OPEN", "PENDING", "SCHEDULED"}, 5)
+            ticket.source_created_at = fixed_now - timedelta(hours=hours)
+            ticket.save(update_fields=["source_created_at"])
+        with patch("aplicativos.painel.services.analytics.timezone.now", return_value=fixed_now):
+            dashboard = DashboardAnalyticsService.build(user=self.user, start=date(2026, 11, 1), end=date(2026, 11, 10))
+            queue = TicketQueueService.build(self.user, {})
+        self.assertEqual(dashboard["aging"]["open_count"], queue["active_count"])
+        self.assertEqual(dashboard["aging"]["open_count"], 3)
+        self.assertEqual(dashboard["aging"]["oldest_label"], "5d 17h")
+        self.assertEqual(dashboard["aging"]["over_72"], 2)
+        self.assertEqual([b["value"] for b in dashboard["aging"]["bands"]], [1, 0, 0, 2])
 
     def test_dashboard_quality_pulse_uses_current_scoped_quality_service(self):
         fixed_now = datetime(2026, 11, 2, 12, tzinfo=datetime_timezone.utc)
@@ -556,8 +574,8 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(october["monthly"][0]["calls"], 6)
         self.assertEqual(october["monthly"][0]["repeat"], 1)
         self.assertEqual(october["business_open"], 3)
-        self.assertEqual(october["aging"]["open_count"], 2)
-        self.assertEqual(sum(item["value"] for item in october["aging"]["bands"]), 2)
+        self.assertEqual(october["aging"]["open_count"], 3)
+        self.assertEqual(sum(item["value"] for item in october["aging"]["bands"]), 3)
         self.assertEqual(october["open_count"], 1)
         self.assertEqual(october["pending_count"], 1)
         self.assertEqual(october["scheduled_count"], 1)
@@ -2304,7 +2322,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn('const originMode = general && queryState.chart_origin === "origin"', operational_render)
         self.assertIn('const entryDefs = originMode ? entryOriginDefs : [["entries", "Novos no período", "entries"]]', operational_render)
         self.assertIn('const closedDefs = originMode ? closedOriginDefs : [["closed", "Resolvidos no período", "closed"]]', operational_render)
-        self.assertIn("mode === \"backlog\" && points.filter(Boolean).length <= 8", operational_render)
+        self.assertIn('grain === "month" && window.innerWidth >= 760', operational_render)
         self.assertIn("mode === \"backlog\" && lastBacklogIndex >= 0 ? [lastBacklogIndex]", operational_render)
         self.assertIn("if (reconstructed) previousKnown = false", operational_render)
         self.assertIn("Hist\\u00f3rico insuficiente para exibir evolu\\u00e7\\u00e3o do backlog.", operational_render)
@@ -2317,6 +2335,9 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn("const visualHeight = grain === \"hour\" ? 260 : 268", operational_render)
         self.assertIn('button.hidden = false', operational_render)
         self.assertIn("history.message", operational_render)
+        self.assertNotIn("Backlog histórico reconstruído", operational_render)
+        self.assertNotIn("Origem:", operational_render)
+        self.assertNotIn("Origem: eventos", operational_render)
         self.assertNotIn("history.flow_message", operational_render)
         self.assertNotIn("Saldo dos eventos visíveis", script)
         self.assertNotIn("snapshots de backlog no horário observado", template)

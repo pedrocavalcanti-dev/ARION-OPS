@@ -45,11 +45,11 @@
   <div class="dashboard-grid">
     <article class="dash-panel dash-card trend-panel"><header><div><span class="panel-kicker">EVOLUÇÃO MENSAL · NOC - ATACADO</span><h2>Chamados no período</h2></div></header><div class="chart-legend" aria-label="Legenda do gráfico"><span class="legend-calls"><i></i>Tickets criados</span><span class="legend-repeat"><i></i>Links com 2+ tickets no mês</span></div><div class="trend-chart" data-monthly-chart role="img" aria-label="Tickets criados por mês e quantidade de Links com dois ou mais tickets distintos no mês"></div>{{ monthly|json_script:"monthly-chart-data" }}</article>
     <article class="dash-panel dash-card aging-panel">
-      <header><div><span class="panel-kicker">BACKLOG ATUAL</span><h2>Aging do backlog operacional</h2></div><small class="demo-note">OPEN e PENDING · snapshot atual</small></header>
+      <header><div><span class="panel-kicker">FILA ATUAL</span><h2>Aging da fila operacional</h2></div><small class="demo-note">Chamados ativos</small></header>
       <div class="dashboard-aging-metrics" aria-label="Resumo do aging atual">
-        <div><strong>{{ aging.open_count|intcomma }}</strong><span>Tickets no backlog</span></div>
+        <div><strong>{{ aging.open_count|intcomma }}</strong><span>Chamados na fila</span></div>
         <div data-tone="rose"><strong>{{ aging.over_72|intcomma }}</strong><span>Acima de 72h</span></div>
-        <div data-tone="orange"><strong>{{ aging.over_72_percent_label }}</strong><span>do backlog acima de 72h</span></div>
+        <div data-tone="orange"><strong>{{ aging.over_72_percent_label }}</strong><span>da fila acima de 72h</span></div>
         <div><strong>{{ aging.oldest_label }}</strong><span>Chamado mais antigo</span></div>
       </div>
       <ol class="dashboard-aging-columns" aria-label="Distribuição atual dos chamados por idade">

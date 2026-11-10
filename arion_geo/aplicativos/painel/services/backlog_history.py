@@ -67,11 +67,7 @@ def reconstructed_backlog(*, user, links, filters, buckets, period_end, apply_fi
                        "at": (instant - timedelta(microseconds=1)).isoformat(), "position": position}
     known_points = [p for p in points.values() if p["value"] is not None]
     missing = len(buckets) - len(known_points)
-    message = "Backlog reconstruído pelos eventos de estado, fila e procedência do OTRS; OPEN e PENDING."
-    if dimension_filters or not is_global:
-        message += " Recorte por vínculos/dimensões atualmente autorizados; não comprova sua atribuição histórica."
-    if missing:
-        message += f" {missing} intervalo(s) sem cobertura suficiente, indicados como indisponíveis."
+    message = f"Histórico indisponível em {missing} período(s)." if missing else ""
     return {"loaded": True, "available": bool(known_points), "kind": "reconstructed", "points": points,
             "point_count": len(known_points), "missing_intervals": missing,
             "through": coverage.through.isoformat(), "message": message,

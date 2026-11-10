@@ -115,6 +115,7 @@ class HistoricalQueryTests(TestCase):
         result = self.query(date(2026, 1, 1), date(2026, 3, 31))
         self.assertEqual([p["value"] for p in result["points"].values()], [2, 1, 1])
         self.assertEqual(result["point_count"], 3)
+        self.assertEqual(result["message"], "")
 
     def test_daily_history_does_not_use_the_current_ticket_status(self):
         OTRSTicket.objects.create(external_id=1, ticket_number="synthetic-1", queue_external_id=107,

@@ -321,6 +321,7 @@
   }
   function renderOperationalChart(data) {
     const operational = data.operational || {};
+    const grain = operational.granularity || operational.grain || "day";
     let mode = queryState.chart_view || "all";
     const reconstructed = data.scope === "support" && operational.backlog_history?.loaded === true;
     const rows = (operational.series || []).map(row => reconstructed ? {
@@ -346,7 +347,7 @@
       all: "Tickets novos e resolvidos no período.",
       created: general && originMode ? "Entradas por intervalo, divididas por origem." : "Tickets criados em cada intervalo do per\u00edodo.",
       closed: general && originMode ? "Resolu\u00e7\u00f5es por intervalo, divididas por origem." : "Tickets resolvidos em cada intervalo do per\u00edodo.",
-      backlog: reconstructed ? "Backlog histórico reconstruído pelos eventos OTRS." : "Backlog observado nas datas e hor\u00e1rios dispon\u00edveis.",
+      backlog: grain === "month" ? "Chamados em aberto ao final de cada mês." : "Chamados em aberto ao final de cada intervalo.",
     }[mode];
     page.querySelector("[data-operational-subtitle]").textContent = subtitle;
     page.querySelectorAll("[data-chart-view]").forEach(button => {
@@ -403,12 +404,11 @@
       previousKnown = true;
       return `${command}${point.x.toFixed(2)},${point.y.toFixed(2)}`;
     }).join(" ");
-    const grain = operational.granularity || operational.grain || "day";
     const lineVisible = backlogAvailable && mode === "backlog";
     const lastBacklogIndex = points.reduce((last, point, index) => point ? index : last, -1);
     const backlogLabelIndexes = new Set(
       grain === "hour" && mode === "all" && lastBacklogIndex >= 0 ? [lastBacklogIndex]
-        : mode === "backlog" && points.filter(Boolean).length <= 8
+        : mode === "backlog" && (points.filter(Boolean).length <= 8 || (grain === "month" && window.innerWidth >= 760))
         ? points.map((point, index) => point ? index : -1).filter(index => index >= 0)
         : mode === "backlog" && lastBacklogIndex >= 0 ? [lastBacklogIndex] : [],
     );
@@ -446,8 +446,8 @@
       const entryOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_entries)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_entries)}</small>` : "";
       const closedOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_closed)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_closed)}</small>` : "";
       const backlogTooltip = row.backlog !== null && row.backlog !== undefined
-        ? `<small>${reconstructed ? "Backlog histórico reconstruído" : "Backlog observado (FULL)"}: ${rowBacklog}</small><small>Em: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small><small>${reconstructed ? "Origem: eventos de estado, fila e procedência OTRS" : "Origem: captura FULL"}</small>`
-        : `<small>Backlog indisponível neste intervalo; cobertura histórica insuficiente.</small>`;
+        ? `<small>Backlog: ${rowBacklog}</small><small>Até: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small>`
+        : `<small>Backlog indisponível neste período.</small>`;
       const tooltipLines = mode === "all"
         ? `<small class="entries">Novos no período: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos no período: ${number.format(row.closed)}</small>${closedOriginDetail}`
         : mode === "created" ? `<small class="entries">Novos no período: ${number.format(row.entries)}</small>${entryOriginDetail}`
@@ -459,8 +459,8 @@
             : mode === "closed" ? ` Suporte: ${number.format(row.support_closed)} resolvidos no período. Cancelamentos: ${number.format(row.cancellation_closed)} resolvidos no período.` : ""
         : "";
       const accessibleBacklog = row.backlog !== null && row.backlog !== undefined
-        ? ` ${reconstructed ? "Backlog histórico reconstruído" : "Backlog observado (FULL)"}: ${rowBacklog} em ${row.backlog_observed_label || "data indisponível"}.`
-        : " Backlog indisponível; cobertura histórica insuficiente.";
+        ? ` Backlog: ${rowBacklog} em ${row.backlog_observed_label || "data indisponível"}.`
+        : " Backlog indisponível neste período.";
       const accessible = mode === "all"
         ? `${row.label}. Novos no período: ${number.format(row.entries)}. Resolvidos no período: ${number.format(row.closed)}.${originAccessible}`
         : mode === "created" ? `${row.label}. Novos no período: ${number.format(row.entries)}.${originAccessible}`
@@ -470,7 +470,7 @@
       return `<button type="button" class="cockpit-ops-point" data-chart-point aria-label="${escapeHTML(accessible)}"><span class="cockpit-ops-bars">${bars}</span><span class="cockpit-ops-x-label">${escapeHTML(label ? shortLabel(label) : "")}</span><span class="cockpit-point-tooltip" role="tooltip"><strong>${escapeHTML(row.label)}</strong>${tooltipLines}</span></button>`;
     }).join("");
     const legendItems = definitions.map(([, label, cls]) => `<span><i class="${cls}"></i>${escapeHTML(label)}</span>`);
-    if (lineVisible) legendItems.push(`<span><i class="backlog-line-key"></i>${reconstructed ? "Backlog histórico reconstruído" : "Backlog observado (FULL)"}</span>`);
+    if (lineVisible) legendItems.push(`<span><i class="backlog-line-key"></i>Backlog</span>`);
     const singleObservation = rows.find(row => row.backlog !== null && row.backlog !== undefined);
     const singleBacklogObservation = !reconstructed && mode === "backlog"
       && backlogAvailable && Number(history.observation_count) === 1 && Boolean(singleObservation);
@@ -478,7 +478,7 @@
       ? `Hist\u00f3rico insuficiente para exibir evolu\u00e7\u00e3o do backlog. Valor observado: ${number.format(singleObservation.backlog)} em ${singleObservation.backlog_observed_label || history.last_observed_at || "hor\u00e1rio indispon\u00edvel"}.`
       : "";
     const sourceNote = mode === "backlog" && reconstructed ? history.message
-      : mode === "backlog" && !backlogAvailable ? "Sem histórico de eventos ou captura FULL neste período." : "";
+      : mode === "backlog" && !backlogAvailable ? "Histórico indisponível neste período." : "";
     const note = sourceNote || backlogHistoryNote || (!hasFlow && mode !== "backlog"
       ? `Nenhum movimento de ${mode === "created" ? "entrada" : mode === "closed" ? "resolu\u00e7\u00e3o" : "novos ou resolvidos"} neste per\u00edodo.` : "");
     return `<article class="cockpit-ops-chart" data-mode="${mode}" data-grain="${escapeHTML(grain)}" style="--ops-plot-height:${visualHeight}px"><div class="cockpit-ops-legend" aria-label="S\u00e9ries do gr\u00e1fico">${legendItems.join("")}</div>${chartNote(note)}<div class="cockpit-ops-chart-frame"><div class="cockpit-ops-axis cockpit-ops-axis-left" aria-hidden="true">${makeAxis(flowTicks)}</div><div class="cockpit-ops-plot-area"><div class="cockpit-ops-grid-lines" aria-hidden="true"></div>${svg}<div class="cockpit-ops-point-grid" style="--series-count:${rows.length}" role="group" aria-label="Pontos do per\u00edodo">${pointsHTML}</div></div><div class="cockpit-ops-axis cockpit-ops-axis-right" aria-hidden="true">${makeAxis(backlogTicks)}</div></div></article>`;
