@@ -8,7 +8,7 @@ O app `autenticacao` usa autenticação nativa do Django para reconhecer usuári
 
 `LoginView` usa `LoginForm` em `/login/`, com os campos de identificação configurados pelo formulário e senha Django. A autenticação padrão rejeita credenciais inválidas e contas inativas. Após login, `LOGIN_REDIRECT_URL` aponta para `painel:index`; usuário autenticado que abre login é redirecionado. Rotas protegidas sem sessão usam `LOGIN_URL` e retornam ao login com destino de retorno.
 
-O projeto usa sessions e middleware do Django. Não define duração customizada de sessão nas configurações consultadas; expiração segue a configuração padrão do Django/deployment. Logout é `LogoutView` em `/logout/` e encerra a sessão, redirecionando para `LOGOUT_REDIRECT_URL` (`autenticacao:login`).
+O projeto usa sessions e middleware do Django. Não define duração customizada de sessão nas configurações consultadas; não há contrato de sessão de oito horas. Logout é `LogoutView` em `/logout/` por POST com CSRF e encerra a sessão, redirecionando para `LOGOUT_REDIRECT_URL` (`autenticacao:login`). O formulário autentica por **usuário**, não por e-mail nem Microsoft 365/Entra ID.
 
 ```mermaid
 flowchart TD
@@ -33,6 +33,10 @@ Falhas de login geram `LOGIN_FAILED` sem registrar senha; login e logout bem-suc
 | `/senha/obrigatoria/` (`autenticacao:required-password`) | GET, POST | Conclui a troca de senha obrigatória (inicial ou expirada) diretamente com validação da nova senha, sem exigência de OTP por e-mail. |
 
 `LoginForm` adapta o formulario Django; `LoginView` e `LogoutView` implementam os fluxos. Signals de `aplicativos.auditoria` registram eventos de autenticacao. O primeiro acesso usa convites de uso único de 48h, a redefinição administrativa usa links dedicados e a renovação obrigatória valida a nova senha diretamente no backend quando o usuário já autenticou com sua senha atual. O middleware protege views, APIs e sessoes antigas. Consulte [Gestao de acessos e ciclo de senhas](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md). Erros de sessao/CSRF seguem [tratamento global de erros](tratamento-global-de-erros.md).
+
+## Convites e prazos
+
+Contas novas usam convite individual compartilhado manualmente pela administração, sem envio automático. As 48 horas contam desde a emissão; consumo, revogação e reemissão invalidam o link anterior conforme a finalidade. Contas ainda não ativadas precisam de convite, não troca de uma senha inexistente. A política padrão de 90 dias conta desde a última definição de senha. Troca obrigatória encerra a sessão; troca voluntária em Segurança mantém a sessão atual. Veja os procedimentos de [administração diária](../03-seguranca-e-qualidade/administracao-operacional.md).
 
 ## Identidade do login e avisos de versão
 

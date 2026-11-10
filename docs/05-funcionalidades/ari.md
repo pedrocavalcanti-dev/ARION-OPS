@@ -6,7 +6,7 @@ ARI está no estado **Preview**. O app persiste conversas, mensagens, anexos e a
 
 ## Fluxo e URLs
 
-`/ari/` abre a experiência e `/ari/c/<uuid>/` uma conversa. APIs sob `/ari/api/conversations/` criam/alteram conversas e mensagens; há endpoints de rename/delete, download de attachment e acesso a artifacts definidos em `ari/urls.py` e `ari/views.py`. A autorização isola recursos por ownership/usuário.
+`/ari/` abre a experiência e `/ari/c/<uuid>/` uma conversa. Exige `configuracoes.view_ari`, além de login; APIs sob `/ari/api/conversations/` criam/alteram conversas e mensagens. Há endpoints de rename/delete, download de attachment e artifacts em `ari/urls.py` e `ari/views.py`. A autorização isola recursos por ownership/usuário, não por um escopo CMDB fictício.
 
 O conteúdo de Preview deve estar identificado como demonstrativo e não alimenta Dashboard, Chamados ou analytics. ARI não consulta CMDB/OTRS nem modifica registros oficiais.
 

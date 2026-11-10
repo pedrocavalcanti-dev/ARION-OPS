@@ -83,6 +83,9 @@ Este índice é a referência para localizar campos pelo nome, model, tipo, orig
 | Integrações | `Integration`, `IntegrationRun`, `IntegrationSyncState`, `IntegrationLease` | [Worker](worker-e-sincronizacao.md) |
 | Chamados | `TicketTracking`, `TicketTrackingNote`, `TicketTrackingEvent`, `TicketQueueView` | [Chamados](..\05-funcionalidades\chamados.md) |
 | Segurança | `GroupDataScope`, `LegacyUserDataScope`, `UserPreference` | [Usuários e Escopos](..\05-funcionalidades\usuarios-grupos-e-escopos.md) |
+| Ciclo de acesso | `UserSecurityProfile`, `AccessToken`, `VerificationChallenge`, `PasswordPolicy` | [Convites e senhas](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md) |
+| Cancelamentos | `CancellationProcess`, `CancellationIntake`, filhos, `LegacyPerson`, `LegacyCancellationReference` | [Fluxo e financeiro](../05-funcionalidades/cancelamentos.md) |
+| Histórico OTRS | `OTRSOperationalSnapshot` e filhos; `OTRSBacklogHistory`, `OTRSBacklogInterval` | [Cockpit](../05-funcionalidades/cockpit.md) |
 | Auditoria e analytics | `AuditEvent`, `SavedAnalyticsView` | [Auditoria](..\05-funcionalidades\auditoria.md), [Cockpit](..\05-funcionalidades\cockpit.md) |
 
 As relações, os tipos de coluna e as constraints completas estão em [Banco de Dados e Modelos](banco-de-dados.md). Verifique também migrations antes de alterar schema.
@@ -90,8 +93,9 @@ As relações, os tipos de coluna e as constraints completas estão em [Banco de
 ## Glossário operacional de contagens
 
 - **Tickets**: quantidade de IDs de chamados distintos no universo, estados, período e filtros definidos pela métrica em questão.
-- **Tickets ativos agora**: tickets presentes no snapshot e com `business_status` em `OPEN`, `PENDING` ou `SCHEDULED`, dentro da fila e do contexto da análise. **Backlog e aging** contam somente `OPEN` e `PENDING`. Dashboard, Chamados e Ranking usam a operação `NOC - ATACADO`; Cockpit também permite Cancelamentos e Geral. Em Cancelamentos/Geral, tickets ativos sem etapa reconhecida são mostrados separadamente como `UNKNOWN`.
-- **Backlog histórico no Cockpit**: série reconstruída por `backlog anterior + novos - encerrados`, disponível apenas quando os timestamps do mirror permitem reconstrução e reconciliação; não substitui o snapshot atual nem representa ciclos completos de reabertura.
+- **Tickets ativos agora**: tickets presentes em `OPEN`, `PENDING` ou `SCHEDULED`, conforme fila/contexto. Aging da fila do Dashboard e Chamados incluem agendados; backlog e aging do Cockpit usam somente `OPEN`/`PENDING`, excluindo improcedentes. Dashboard, Chamados e Rankings usam `NOC - ATACADO`; Cockpit permite Cancelamentos/Geral, com classificação de etapa própria.
+- **Backlog histórico no Cockpit Suporte**: intervalos de estado/fila/procedência reconstruídos dos eventos OTRS autorizados, incluindo saídas e reaberturas. Não deriva de saldo simples do mirror atual nem presume baseline zero. Capturas FULL são observações separadas; lacunas não ganham valores inventados.
+- **Total informado de Cancelamentos**: soma Decimal do ledger principal (multa, equipamento e outros), sem repetir pendências; NULL continua ausente, zero explícito continua zero e subtotal incompleto é parcial. Não representa pagamento.
 - **Links afetados**: quantidade distinta de Links CMDB locais presentes que têm ao menos uma relação Ticket–ConfigItem válida no conjunto de Tickets contado. Ticket sem CI ou CI sem Link local continua podendo contar como Ticket, mas não produz Link afetado.
 - **Links reincidentes**: quantidade distinta de Links que satisfazem a regra de reincidência do recorte, normalmente pelo menos dois Tickets distintos; não é sinônimo de Links afetados.
 

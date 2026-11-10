@@ -1,7 +1,7 @@
 # Arquitetura de Segurança — ARION OPS
 
 **Produto:** ARION OPS — NOC ATACADO
-**Versão de referência:** `1.3.0` (`docs/08-releases/releases.json` / `arion_geo/config/releases.py`)
+**Versão de referência do código:** `1.4.0` (`docs/08-releases/releases.json` / `arion_geo/config/releases.py`). A auditoria de segurança 1.3.0 permanece como baseline histórica, sem certificação automática das alterações posteriores.
 **Empresa:** ARION Serviços de Telecomunicações
 **Concepção e desenvolvimento:** Pedro Cavalcanti
 **Declaração institucional:** Segurança validada no escopo e na versão avaliados.
@@ -16,7 +16,7 @@ O **ARION OPS** adota uma arquitetura de defesa em profundidade (*defense-in-dep
 
 ## 2. Modelo de confiança
 
-- **Fonte oficial de verdade:** O OTRS e a CMDB permanecem como sistemas de registro oficiais. O banco local do ARION OPS (`arion_ops` no MySQL 8) atua como espelho sincronizado, cache operacional e camada analítica.
+- **Fonte oficial de verdade:** OTRS/CMDB são registros técnicos oficiais. O MySQL local de produção mantém espelhos, análise e registros próprios de acesso, Qualidade, Cancelamentos, relatórios e auditoria; o nome real do schema não é presumido nesta documentação.
 - **Integrações estritamente somente leitura:** O ARION OPS nunca executa escritas (`INSERT`, `UPDATE`, `DELETE`, `ALTER`, `DROP`) no banco remoto do OTRS nem mutações na API da CMDB.
 - **Fronteira de rede:** Nenhum processo Python/Django nem o banco MySQL devem ser expostos diretamente à internet pública. Todo acesso externo atravessa a borda HTTPS do Cloudflare e o agente local `cloudflared`.
 
@@ -71,7 +71,7 @@ Django (SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https"))
 - **Flags dos cookies:**
   - `SESSION_COOKIE_HTTPONLY = True`
   - `SESSION_COOKIE_SAMESITE = "Lax"`
-  - `SESSION_COOKIE_AGE = 28800` (8 horas)
+  - Não há `SESSION_COOKIE_AGE` customizado no checkout; vale o default Django, sujeito à configuração efetiva. Não existe contrato local de oito horas.
   - `SESSION_COOKIE_SECURE = True` e `CSRF_COOKIE_SECURE = True` (ativados automaticamente quando `ARION_ENV=production`).
 
 ---
@@ -100,6 +100,7 @@ Django (SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https"))
 
 - O controle funcional é implementado com **Django Groups** e **Permissions** gerenciados em `arion_geo/aplicativos/configuracoes/access_control.py` e aplicados no backend por `@login_required` e `@access_required("<permissão>")`.
 - Perfis operacionais padrão:
+  - **Gestão** (ver ressalvas de Relatórios na matriz funcional)
   - **Administrador do Sistema**
   - **Gestor**
   - **Analista NOC**
@@ -114,15 +115,15 @@ Django (SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https"))
 - O **Data Scope** (`GroupDataScope` e `DataScopeService` em `arion_geo/aplicativos/configuracoes/data_scope.py`) define quais dados operacionais cada grupo pode visualizar:
   - Modo `ALL`: visão global da operação.
   - Modo `CUSTOM`: interseção restrita às **Operadoras permitidas** (`allowed_operators`) e **Projetos permitidos** (`allowed_projects`).
-- **Aplicação obrigatória no backend:** O escopo é aplicado ao `QuerySet` antes de buscas, filtros de query string, cálculo de KPIs, agregações geográficas do Mapa, listagens paginadas, detalhes de itens e exportações CSV/XLSX/PDF.
+- **Aplicação no backend:** As consultas operacionais de espelhos, Qualidade e Cancelamentos aplicam escopo antes dos agregados e detalhes. **Relatórios tem limitação real:** competências, Original e Tratativa armazenados não passam pelo mesmo filtro de grupo; `view_reports` também autoriza criação/upload/importação. Conferir a [matriz por módulo](../05-funcionalidades/usuarios-grupos-e-escopos.md) antes de conceder acesso restrito.
 - **Proteção contra IDOR:** Tentativas de acesso direto por ID/CI a links ou recursos fora do escopo do usuário (ou a conversas do ARI pertencentes a outro usuário) retornam `404 Not Found`.
 
 ---
 
 ## 11. Banco MySQL
 
-- Em produção e desenvolvimento local com espelhos reais, o ARION OPS utiliza **MySQL 8.x** conectado em loopback (`127.0.0.1:3306`).
-- **Princípio de menor privilégio:** A aplicação utiliza a conta dedicada `arion@localhost` (bloqueando uso de `root` em `ARION_ENV=production`), com privilégios restritos exclusivamente ao schema `arion_ops.*` e sem `SUPER`, `FILE` ou `GRANT OPTION`.
+- Produção exige MySQL em loopback; o checkout DEV atual usa SQLite, que não homologa compatibilidade/concorrência MySQL. Não substituir o banco do servidor pelo DEV.
+- **Princípio de menor privilégio:** Configuração exige conta não-root e host local em produção. Usuário/schema/grants efetivos devem ser conferidos no host; o código não comprova sozinho a ausência de `SUPER`, `FILE` ou `GRANT OPTION`. O exemplo de hardening não é evidência de grants já aplicados.
 - **Parametrização SQL:** O projeto utiliza o ORM do Django e queries parametrizadas (`%s`), sem uso de `.raw()`, `.extra()` ou `RawSQL`.
 - **Hardening de rede local:** Recomenda-se manter `bind-address=127.0.0.1` e `mysqlx-bind-address=127.0.0.1` no `my.ini`, verificável de forma somente leitura pelo script `deploy/windows/hardening-mysql.ps1`.
 
@@ -135,7 +136,7 @@ Django (SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https"))
   2. Permite apenas instruções iniciadas por `SELECT` (ou `SHOW`/`DESCRIBE` internos), rejeitando `;` e qualquer palavra-chave de escrita ou efeito colateral (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `GRANT`, `INTO OUTFILE`, `SLEEP`, `GET_LOCK`);
   3. Valida nomes de tabelas e colunas contra o catálogo descoberto em `information_schema` e regex estrita `^[A-Za-z0-9_$]+$`;
   4. Bloqueia e mascara colunas/tabelas sensíveis (`pw`, `password`, `token`, `secret`, `session`, `customer_user`, `article`, `a_body`, `internal_note`).
-- **Proteção preventiva de TLS (*fail-closed*):** Para conexões em loopback (`127.0.0.1`, `localhost`, `::1`), o modo local é permitido. Para qualquer host remoto, `OTRSReadOnlyClient` e `OTRSConfigurationForm` exigem `use_tls=True` com validação de certificado (`ssl.CERT_REQUIRED`, TLS 1.2+), recusando conexões remotas em texto claro (`OTRSTLSRequiredError`).
+- **TLS fail-closed:** Remoto exige TLS validado por padrão; loopback permite acesso local. Existe exceção temporária restrita ao host exato em `ARION_OTRS_LEGACY_NO_TLS_HOST`, somente com `use_tls=False` **e** `allow_insecure_remote=True`. Não se aplica a CMDB/Brevo/banco principal. Tráfego nessa exceção não é cifrado e sua retirada depende da correção da infraestrutura. Leitura específica transitória de artigos para QID não libera corpos/anexos pelo cliente genérico.
 
 ---
 
@@ -210,6 +211,8 @@ Para executar a suíte de segurança e a verificação de configuração local:
 ---
 
 ## 20. Processo de release
+
+Para implantação 1.4.0, usar o [guia Windows/MySQL](../02-arquitetura/implantacao-e-producao.md). A política de [convites e senhas](politica-de-senhas-e-acessos.md) é aplicada por middleware inclusive para superuser humano; contas de serviço são exceção explícita. Não reativar a política global já informada como ativa no servidor. Brevo envia mensagens externas sob autorização, portanto “somente leitura” descreve OTRS/CMDB, não todas as integrações.
 
 Antes de cada fechamento de versão e publicação em produção, devem ser executados:
 

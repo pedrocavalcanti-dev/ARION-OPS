@@ -19,7 +19,7 @@ D --> C[Chamados e Analytics]
 D --> U[Auditoria e ARI]
 ```
 
-O inventário abaixo é baseado em models instalados e mantidos no código; as quantidades não consultam banco em request.
+O catálogo físico detalhado abaixo cobre os domínios originais e é complementado pelo inventário 1.4.0 nesta seção; não se apresenta como enumeração integral de todas as tabelas atuais. As quantidades vêm dos models instalados no código, não de consulta ao servidor.
 
 | Domínio | Models do projeto | Relações principais |
 |---|---:|---|
@@ -33,6 +33,19 @@ O inventário abaixo é baseado em models instalados e mantidos no código; as q
 | Analytics salvo | 1 | SavedAnalyticsView → User |
 | ARI | 4 | Conversation 1:N Message/Attachment/Artifact |
 | Base legada e dimensões | 6 | Import–Link–Change e dimensões Operadora/Projeto |
+
+### Domínios incorporados ou ampliados até 1.4.0
+
+| Domínio | Models atuais | Integridade e migrations |
+|---|---|---|
+| Ciclo de acesso | `UserSecurityProfile`, `AccessToken`, `VerificationChallenge`, `PasswordPolicy` | Perfil 1:1 User; token tem hash único, finalidade, expiração/consumo/revogação; `autenticacao.0001–0002` |
+| Cancelamentos (14 models) | `IntakeSettings`, `CancellationIntake`, `CancellationProcess`, `ISPTreatment`, `CancellationPending`, `CancellationEquipment`, `FinancialObligation`, `CancellationEvidence`, `FinancialHandoff`, `HandoffObligation`, `CancellationEvent`, `LegacyImportRun`, `LegacyPerson`, `LegacyCancellationReference` | TicketID da entrada único, vínculo entrada/processo 1:1, filhos FKs, referências de origem e nomes sem contas; `cancelamentos.0001–0006` |
+| Qualidade (11 models) | `QualityOrder`, `QualityOccurrence`, `QualityTicket`, `QualityTreatment`, `QualityTreatmentSequence`, `QualityTreatmentIdentity`, `QualityCorrelationCheckpoint`, `QualityMonitoringCycle`, `QualityContact`, `QualityAction`, `QualityAuditEvent` | Identidade QID, sequências, checkpoints por fila, TQs/ciclos e auditoria; ver migrations do app e [Qualidade](../05-funcionalidades/qualidade.md) |
+| Observações OTRS | `OTRSOperationalSnapshot`, `OTRSOperationalTicketSnapshot`, `OTRSOperationalConfigItemSnapshot` | Captura FULL por dia/cobertura; `integracoes.0015` |
+| Backlog histórico | `OTRSBacklogHistory`, `OTRSBacklogInterval` | Cache de intervalos estado/fila/procedência separado do mirror atual; `integracoes.0016` |
+| APIs externas | `ExternalAPIIntegration`, `ExternalAPIHealthCheck` | Brevo/Mapbox, configuração protegida e resultado sanitizado, distintos de `IntegrationRun` |
+
+O namespace físico padrão usa app/model Django; nomes completos, tipos e constraints definitivos são os de `models.py` e migrations versionadas. Para validar o schema instalado no MySQL, conferir `showmigrations --plan` e o catálogo local autorizado; este inventário não comprova migrations produtivas aplicadas. Dashboard de Cancelamentos agrega models existentes e não cria tabela materializada. Contratos: [migração histórica](../05-funcionalidades/cancelamentos-migracao-arionbroker.md), [carga produtiva bloqueada](../06-integracoes-e-dados/arionbroker/carga-producao.md) e [política de acesso](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md).
 
 > **Fonte da verdade:** OTRS continua sendo o registro oficial de tickets; CMDB continua sendo o registro oficial de ConfigItems e Providers. Os models `OTRSTicket`, `OTRSTicketConfigItem`, `CMDBLinkMirror` e `CMDBOperatorMirror` são cópias locais de leitura para a operação.
 

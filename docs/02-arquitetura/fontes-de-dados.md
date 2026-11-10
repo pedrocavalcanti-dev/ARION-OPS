@@ -24,7 +24,7 @@ O OTRS é a fonte oficial de:
 - **Estado** oficial do chamado (`business_status` e estado bruto);
 - **Responsável** e proprietário no OTRS;
 - **Motivos de fechamento** (`CodigoFechamento` / `closing_code_raw` e campos dinâmicos de falha massiva);
-- **Datas** de abertura (`source_created_at`), atualização (`source_Updated_at`), resolução operacional (`resolved_at`) e encerramento (`terminal_state_at`);
+- **Datas** de abertura (`source_created_at`), atualização (`source_changed_at`), resolução operacional (`resolved_at`) e encerramento (`terminal_state_at`);
 - **Tratativas** e vínculos Ticket–ConfigItem (`link_relation`).
 
 ### ARION OPS — Fonte dos registros operacionais locais
@@ -33,6 +33,8 @@ O banco local do ARION OPS é a fonte de:
 
 - **Preferências locais** do usuário (`UserPreference`, tema claro/escuro, `SavedAnalyticsView`, `TicketQueueView`);
 - **RBAC e Data Scope** (`GroupDataScope`, vínculo com grupos e permissões Django);
+- **Ciclo de acesso** (`UserSecurityProfile`, `AccessToken`, `PasswordPolicy`), sem importar credenciais do ArionBroker;
+- **Cancelamentos oficiais e triagem** (`CancellationIntake`, `CancellationProcess` e filhos), incluindo evidência de origem histórica separada da operação atual;
 - **Acompanhamento interno da fila** (`TicketTracking`, notas e eventos locais em Chamados);
 - **Auditoria** administrativa e operacional (`AuditEvent`, `QualityAuditEvent`);
 - **Ordens de Qualidade (OQs)**, classificações manuais da Qualidade (`QualityOccurrence`, níveis R1–R5), checklist (`QualityAction`), **monitoramento RREIP** (`QualityMonitoringCycle`) e diretório de contatos (`QualityContact`);
@@ -48,6 +50,7 @@ O banco local do ARION OPS é a fonte de:
 | Provider / ISP | CMDB classe `Operadoras` | `CMDBOperatorMirror` | Nome operacional do provedor e catálogo de operadoras. |
 | Cliente / Projeto | Nome CMDB + regras ARION OPS | Campos raw e derivados em `CMDBLinkMirror` | Semântica de negócio com origem e nível de confiança explícitos. |
 | Acompanhamento NOC | ARION OPS | `TicketTracking`, notes/events | Status interno, responsável local, notas e linha do tempo. |
+| Cancelamentos | ARION OPS + origem histórica ArionBroker | `CancellationProcess`, filhos e referências legadas | Decisão humana, fluxo local e total informado; espelho OTRS sozinho não cria processo. |
 | Qualidade Operacional | ARION OPS + espelhos OTRS/CMDB | `QualityOrder`, `QualityOccurrence`, `QualityMonitoringCycle`, `QualityContact` | Gestão de reincidências, OQs, ciclos RREIP e contatos. |
 | Relatórios (Claro Multas) | Planilha original + espelhos + ARION OPS | `PenaltyCompetence`, `PenaltySourceRow`, `PenaltyTreatmentRow` | Apuração, enriquecimento controlado e tratativa auditada. |
 | Usuários, permissões e escopo | ARION OPS (Django Auth) | Tabelas auth + `GroupDataScope` | Autenticação, RBAC e Data Scope no backend. |

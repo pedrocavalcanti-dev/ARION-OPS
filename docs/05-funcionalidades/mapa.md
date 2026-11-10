@@ -25,7 +25,7 @@ A representacao e choropleth estadual com as 27 UFs do asset local `static/geo/b
 
 GET /base/api/mapa/ agrega contagens por UF sem enviar a lista completa de Tickets ao navegador. Aceita mode, client, project, provider, period, date_from, date_to, reason, status, priority, arion_status, assignee e provenance conforme o modo. GET /base/api/mapa/uf/ acrescenta uf, tab, ticket_search, ticket_page e ticket_page_size (25, 50 ou 100); a aba Chamados recebe somente a pagina solicitada. As abas Overview, Tickets, Projects, Providers, Reasons e Recurrence reutilizam os agregados filtrados. A integracao com Base preserva os filtros comerciais; Cockpit recebe UF, metrica, periodo e motivo quando aplicavel.
 
-O Mapbox recebe as geometrias estaduais e os valores agregados. O token e publico por definicao do SDK e vem de `MAPBOX_PUBLIC_TOKEN`; sem token ou sem rede, a pagina informa o erro recuperavel sem apagar o restante da aplicacao. Bandeiras sao assets locais em `static/imagens/bandeiras/estados/`. No tema escuro, o fundo do mapa e grafite neutro `#0c0d0d`; UFs sem dados usam cinza neutro `#363839`. O tema claro mantem o fundo atual.
+O Mapbox recebe as geometrias estaduais e os valores agregados. O token é público por definição do SDK: a integração Mapbox explicitamente registrada no banco tem precedência; `MAPBOX_PUBLIC_TOKEN` é fallback somente sem esse registro. Registro inválido/desabilitado não volta silenciosamente ao token antigo. Sem token ou rede, a página mostra erro recuperável. Bandeiras são assets locais em `static/imagens/bandeiras/estados/`. No tema escuro, o fundo é grafite `#0c0d0d` e UFs sem dados usam `#363839`; o tema claro mantém os tokens atuais.
 
 ## Interacao e apresentacao visual
 
@@ -44,7 +44,7 @@ Em Base, o Cliente predominante segue a regra existente e a intensidade varia co
 
 ## Nomes canônicos de Projeto no Mapa
 
-Filtros, opções, contagens e grupos do Mapa normalizam somente aliases explícitos: `BDN` e `BRADESCO` são exibidos como `BRADESCO`; `BB` e `BANCO DO BRASIL` são exibidos como `BANCO DO BRASIL`. Comparação ignora caixa, espaços excedentes e variações conservadoras de separadores. `BRADESCO SEGUROS` e `BB SEGUROS` continuam projetos distintos. O Data Scope é aplicado antes de descobrir e combinar aliases, então um nome equivalente fora do escopo não amplia o acesso. A normalização é analítica e exclusiva do Mapa; títulos, valores brutos e campos persistidos não são reescritos.
+Filtros, opções, contagens e grupos do Mapa normalizam somente aliases explícitos: `BDN` e `BRADESCO` são exibidos como `BRADESCO`; `BB` e `BANCO DO BRASIL` são exibidos como `BANCO DO BRASIL`. Comparação ignora caixa, espaços excedentes e variações conservadoras de separadores. `BRADESCO SEGUROS` e `BB SEGUROS` continuam projetos distintos. O Data Scope é aplicado antes de descobrir e combinar aliases, então um nome equivalente fora do escopo não amplia o acesso. A normalização é analítica e reutiliza helpers compartilhados de projeto; títulos, valores brutos e campos persistidos não são reescritos.
 
 Paletas de Projetos configuradas:
 

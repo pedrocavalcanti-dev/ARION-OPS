@@ -203,11 +203,13 @@ Nesta entrega nenhum corpo de artigo foi consultado, persistido ou enviado ao fr
 
 ## Importação histórica e limites
 
+O snapshot inicial de 09/11 e as conferências nas seções anteriores são evidências datadas. Após reconciliações autorizadas, a referência DEV de **10/11/2026** contém 162 processos: **11 Pedidos, 5 Solicitações, 3 Pendências e 143 Concluídos**, com 177 pendências, 426 obrigações, 1.819 eventos e 2.156 referências. Não significa carga desses dados no MySQL de produção. O relatório de auditoria referencia as validações originais sem executar nova importação nesta revisão.
+
 `importar_cancelamentos_legado` oferece preview, dry-run e Apply protegido. O snapshot real foi importado em SQLite DEV por autorização explícita anterior, com `--allow-sqlite-dev`, backup e reconciliação. Esta correção não reexecuta o importador. Permanecem 162 processos, 1.084 históricos, 594 movimentações, 135 observações, 172 pendências, 421 previsões financeiras e 2.147 referências. O caminho MySQL 8 DEV continua exigindo configuração e validação próprias; SQLite não o homologa.
 
 O processo oficial importado reutiliza `CancellationProcess`, sem criar triagem ou aprovação fictícia quando não houver entrada correspondente. Fila determina a etapa; status original, responsável legado e datas brutas ficam separados da operação atual. Concluídos sem data são sinalizados, ano 0026 não é convertido, DESCARTADA é distinta de RESOLVIDA e pendências abertas continuam visíveis mesmo em histórico concluído. Identidade OTRS usa número operacional exato; vínculo CMDB exige evidência. Atribuição atual, inclusive em concluídos, não altera responsável legado. Textos livres importados têm exposição financeira conservadora até revisão. Ver [mapeamento completo, configuração e comandos](cancelamentos-migracao-arionbroker.md) e [plano de integração](cancelamentos-plano-integracao.md).
 
-Permanecem futuros: configurar/homologar MySQL DEV, reconciliação de status CMDB, múltiplos processos por ticket, reconsideração da decisão de triagem, upload privado de anexos, envio automático, painel Financeiro, confirmação de pagamento e gráficos financeiros. Não há automação remota ou deploy nesta entrega.
+Permanecem futuros: homologar MySQL de ensaio, liberar carga seletiva produtiva, reconciliação de status CMDB, múltiplos processos por ticket, reconsideração de triagem, upload privado de anexos, envio automático, painel Financeiro e confirmação de pagamento. **Gráficos financeiros já existem** no Dashboard Gerencial 1.4.0; valores informados não significam pagamento. O CSV é da lista operacional, não uma exportação própria de gráficos. A [carga histórica para produção](../06-integracoes-e-dados/arionbroker/carga-producao.md) é separada e permanece bloqueada pelo importador atual.
 
 ## Validação
 

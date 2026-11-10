@@ -1,209 +1,151 @@
 # Implantação e Produção
 
-Para o código 1.4.0, utilize o [checklist específico do Windows Server](../08-releases/v1.4.0-implantacao-windows.md), que separa atualização de código/schema, carga histórica de Cancelamentos e recuperação. Esta documentação não implica deploy executado. O importador histórico atual bloqueia produção; não contornar sua proteção alterando o ambiente.
+Referência operacional do código **1.4.0**, revisada em 10/11/2026. Produção utiliza Windows Server, MySQL e processos Web/Worker. Esta revisão inspecionou o repositório, sem acessar o servidor ou executar deploy. A versão instalada, a configuração efetiva e a política de senhas do servidor devem ser consultadas antes de qualquer intervenção.
+
+## Ambiente conhecido e confirmação
+
+| Item | Referência informada pela operação | Contrato do código |
+|---|---|---|
+| Checkout | `C:\Users\Arion\Desktop\ARION-OPS` | Scripts resolvem a raiz do checkout; não exigem esse caminho |
+| Domínio | `https://nocatacadoarion.bicoai.com.br/` | `ARION_PUBLIC_BASE_URL`, hosts, CSRF e ingress precisam concordar |
+| Web interno | `127.0.0.1:8100` | Bind fixo em loopback; `ARION_WEB_PORT` configurável, padrão **8000** |
+| Banco | MySQL local do servidor | Produção recusa SQLite, host não local e usuário `root` |
+| Inicialização | Web/Worker supervisionados | Instalador fornece tarefas `ARION-Web` e `ARION-Integration-Worker`; Cloudflared é serviço independente |
+
+8100 e o domínio são referências da última implantação conhecida, não valores descobertos no servidor nesta auditoria. O exemplo `deploy/windows/cloudflare/config.example.yml` usa 8000 e hostname ilustrativo. Não sobrescrever a configuração instalada com esse exemplo. Conferir tarefas, conta de execução, porta e ingress no host autorizado.
 
 ## Arquitetura V1
 
 ```text
-Navegador HTTPS → Cloudflare → Cloudflare Tunnel → cloudflared
-              → Waitress em 127.0.0.1:<ARION_WEB_PORT> → Django → MySQL local
-
-Integration Worker → MySQL ARION local
-                   → OTRS remoto somente leitura
-                   → CMDB remota somente leitura
+Navegador HTTPS → Cloudflare → Tunnel → cloudflared
+    → Waitress em 127.0.0.1:<ARION_WEB_PORT> → Django → MySQL local
+Worker supervisionado → MySQL ARION + OTRS read-only + CMDB Search/Get
+Envios humanos autorizados → Brevo SMTP/API
 ```
 
-O repositório prepara o modo production e os processos Windows; ainda são manuais a máquina, domínio, conta Cloudflare, DNS, criação do Tunnel, credenciais e usuário de serviço. Não há proxy reverso adicional. O Worker é processo separado e nunca é iniciado por uma request.
+OTRS/CMDB são as fontes técnicas oficiais. A base ARION também contém registros próprios que um FULL não recompõe: contas, grupos, escopos, Qualidade, Cancelamentos, financeiro, auditoria, ARI e relatórios. O Worker não é iniciado por uma request. Não usar `runserver` nem iniciar um segundo scheduler em produção.
 
-## Modo production e servidor web
+## Estrutura persistente e dependências
 
-`ARION_ENV=production` exige `DEBUG=False`, `DJANGO_SECRET_KEY` forte e externa ao código, `DJANGO_ALLOWED_HOSTS` e `DJANGO_CSRF_TRUSTED_ORIGINS` explícitos. Produção aceita somente origens CSRF HTTPS exatas, MySQL em loopback e usuário MySQL próprio diferente de `root`. A aplicação encerra a inicialização se esses requisitos falharem.
+| Caminho na raiz | Uso e cuidado |
+|---|---|
+| `.venv/` | Python 3.12 e `requirements-prod.txt`; os scripts usam o executável diretamente |
+| `frontend_src/`, `package.json`, `package-lock.json` | Fontes e build Node 24, sem framework adicional |
+| `arion_geo/gerenciar.py` | Comandos Django; `config.wsgi:application` é o WSGI |
+| `arion_geo/static/`, `arion_geo/static/arion_build/` | Assets fonte e bundles gerados; não editar bundles |
+| `var/arion-frontend-manifest.json` | Manifest padrão do build; confirmar `DJANGO_FRONTEND_MANIFEST` |
+| `var/staticfiles/` | Destino padrão do `collectstatic`; confirmar `DJANGO_STATIC_ROOT` |
+| `var/private_media/` | Mídia privada padrão de produção; confirmar `DJANGO_MEDIA_ROOT`, copiar e proteger separadamente do banco |
+| `var/database-config.json` | Configuração local do banco com segredo protegido; confirmar `ARION_DATABASE_CONFIG` |
+| `var/run/` | Locks e identidades de processos, arquivos transitórios; não restaurar PIDs como processos vivos |
+| `var/logs/` | `arion-web.log`, `arion-worker.log`, logs Django e relatórios do gerenciador |
+| `.env` e certificados externos | Privados, fora do Git, com ACL para a conta autorizada |
+| `arion-backups/` ao lado do projeto | Destino padrão dos dumps; nunca dentro do checkout/web root |
 
-O supervisor em `deploy/windows/run_process.py` inicia Waitress com bind fixo em `127.0.0.1` e porta de `ARION_WEB_PORT` no `.env` (padrão 8000). A request pública HTTPS chega pelo Tunnel; `X-Forwarded-Proto=https` é confiável porque o serviço WSGI só escuta loopback. Django ativa `SECURE_PROXY_SSL_HEADER` e `SECURE_SSL_REDIRECT`; valide o ciclo pelo Tunnel antes de liberar o hostname. Não execute `runserver` em produção.
+Validar caminhos efetivos: os defaults não substituem a configuração instalada. A conta Windows autorizada precisa acessar banco, DPAPI, storage e logs. Web/Worker devem usar a mesma identidade capaz de abrir as credenciais. Executar um diagnóstico em outro usuário não prova que a tarefa agendada terá acesso. DPAPI não é transportável automaticamente entre usuários/máquinas.
 
-Sessão e CSRF usam cookies `Secure`, `SameSite=Lax`; o cookie de sessão é `HttpOnly`. O cookie CSRF permanece legível pelo JavaScript para os POSTs AJAX same-origin. HSTS começa em 3600 segundos; `includeSubDomains` e `preload` ficam desativados. CSP está em `Report-Only` para permitir validação de Mapbox antes de enforcement. Respostas dinâmicas recebem `Cache-Control: private, no-store`; cache público deve ser limitado a estáticos.
+## Configuração de produção
 
-## Build de frontend
+Não publicar valores secretos. Configurações relevantes:
 
-Fontes legíveis ficam em `frontend_src/`, fora dos diretórios coletados pelo Django em production. `npm run build:production` descobre todos os entrypoints `{% arion_js %}` nos templates e produz bundles minificados e ofuscados com fingerprint em `arion_geo/static/arion_build/`, além do manifest em `var/`. Não é criptografia. Source maps são desligados no build. Em development, o template tag `{% arion_js %}` resolve as fontes; em production, resolve apenas bundles registrados. O Service Worker é transformado e minificado em um asset especial fingerprinted; ele não passa pelo ofuscador para preservar a previsibilidade dos eventos `install`, `activate`, `fetch` e `message`. O manifest estático do Django fingerprinta CSS e demais assets públicos.
+- `ARION_ENV=production`, `DJANGO_DEBUG=false`, `DJANGO_SECRET_KEY` externa e forte.
+- `ARION_PUBLIC_BASE_URL`: origem HTTPS exata; `DJANGO_ALLOWED_HOSTS`: hosts explícitos sem wildcard; `DJANGO_CSRF_TRUSTED_ORIGINS`: origens HTTPS exatas autorizadas.
+- `ARION_WEB_PORT`: porta de loopback que deve coincidir com o ingress. O bind permanece `127.0.0.1`.
+- `DATABASE_URL`, quando presente, tem precedência sobre a conexão **active** do arquivo local. Um banco **candidate** não é escolhido automaticamente. Não imprimir a URL, o arquivo de configuração ou o dicionário `DATABASES`.
+- `ARION_DATABASE_CONFIG`, `DJANGO_STATIC_ROOT`, `DJANGO_FRONTEND_MANIFEST` e `DJANGO_MEDIA_ROOT`: confirmar os overrides e ACLs. `ARION_FRONTEND_MANIFEST_PATH` é o nome do setting Django resolvido pelo override `DJANGO_FRONTEND_MANIFEST`.
+- `DJANGO_SECURE_SSL_REDIRECT` e `DJANGO_SECURE_HSTS_SECONDS`: defaults de produção são redirect ativo e HSTS **31536000 segundos**, sem preload/includeSubDomains automáticos. O checker exige pelo menos 3600 segundos; esse mínimo não é o default do setting. Conferir o valor efetivo.
 
-Use Node 24, conforme `package.json`, e o lockfile versionado:
+O supervisor carrega `.env` da raiz com precedência para variáveis já herdadas do Windows. Alterar o arquivo sem reiniciar o processo não atualiza o ambiente em uso. O banco ativo é resolvido por `integracoes/services/arion_database.py`; não alternar a conexão durante uma revisão documental.
 
-```powershell
-npm ci
-npm audit
-npm run build:production
-```
+## Serviços, inicialização e logs
 
-Não publicar o `frontend_src` como static nem aplicar regras Cloudflare de cache amplo ao HTML.
-
-## Preparação local Windows
-
-Instale Python 3.12 e dependências de `requirements-prod.txt`; para o build, instale Node 24. Configure `.env` fora do Git a partir de `.env.example`, crie o MySQL local e restaure nele o dump operacional completo. Use a mesma conta Windows dedicada `ARION` para Web e Worker. A conta precisa ler `.env` e `var/database-config.json`, acessar `var/`, abrir credenciais DPAPI e executar os processos.
-
-```powershell
-deploy\windows\install-arion.ps1
-deploy\windows\production-check.ps1
-deploy\windows\install-tasks.ps1 -ServiceAccount '.\ARION'
-deploy\windows\status-arion.ps1
-```
-
-`install-arion.ps1` executa `npm ci`/build quando Node está disponível, coleta estáticos e executa o production-check. Ele não sincroniza fontes remotas nem altera a conta Cloudflare. `-ApplyMigrations` exige confirmação explícita; migrations são executadas somente depois do restore completo e da conferência do banco alvo. As tarefas agendadas iniciam no boot, rodam ocultas, usam a `.venv` e reiniciam processos encerrados. O supervisor grava `var/logs/arion-web.log` e `arion-worker.log` com rotação; `status-arion.ps1` informa Web, Worker e Cloudflared sem mostrar segredos.
-
-O supervisor carrega o `.env` da raiz do projeto para Web e Worker, mantendo as variáveis de ambiente já definidas no processo Windows como precedência. `status-arion.ps1` confirma supervisor e processo filho. `restart-arion.ps1 -Role worker` atua somente sobre o supervisor ARION do Worker. Para diagnosticar falha, compare estado de conexão (`Integration`), resultado da tentativa (`IntegrationRun`) e cursor/backoff (`IntegrationSyncState`); não infira falha TLS a partir de um erro de processamento. Esta tarefa não acessou nem alterou servidor ou banco de produção.
-
-`/manifest.webmanifest` tem cache curto de cinco minutos; `/service-worker.js` fica na raiz, recebe `Service-Worker-Allowed: /` e permanece fora de cache intermediário (`no-store`). O endpoint `/api/version/` também usa `no-store` e retorna apenas versão, data e título da release. Mantenha cache bypass para páginas/API e permita cache somente para estáticos públicos. O Service Worker não guarda HTML, JSON nem respostas operacionais; offline fornece uma página neutra sem snapshot. O nome dos caches combina a versão canônica com uma revisão do worker/build/assets offline. A ativação remove somente caches antigos com prefixos ARION e chama `clients.claim()`.
-
-### Versionamento e notas de release
-
-`docs/08-releases/releases.json` é a única fonte da versão atual e do histórico exibido ao usuário. Para uma nova release:
-
-1. Escolha o próximo número Semantic Versioning, sem reduzir `current_version`.
-2. Atualize `current_version` e acrescente o objeto da release no início de `releases`, com data ISO (`YYYY-MM-DD`), resumo e seções de novidades/melhorias adequadas à release. A 1.2.0 organiza as notas por ARION OPS, Cockpit, Rankings, Relatórios, Integrações e Interface; releases anteriores preservam suas categorias originais.
-3. Não replique a lista de notas em templates ou no código JavaScript. Detalhes internos continuam nos documentos técnicos e em `docs/07-estudos/`.
-4. Execute `npm ci`, `npm run build:production`, `collectstatic --noinput` e `check`; confirme a versão em `/api/version/` e na página Documentação → Atualizações e versões.
-
-O navegador compara a versão do HTML carregado com `/api/version/` ao abrir a aplicação, ao voltar ao foco depois de 15 minutos e em intervalo de 20 minutos. `registration.update()` verifica o Service Worker junto a esses momentos. “Depois” dispensa o aviso grande para a versão-alvo durante a sessão; o indicador compacto permanece disponível na navegação autenticada até a versão carregada coincidir com a do servidor. “Ver novidades” abre a página de releases, disponível a qualquer usuário autenticado; a documentação técnica e a busca continuam restritas à permissão administrativa existente.
-
-“Atualizar agora” mostra `Atualizando...`, desativa os controles, verifica a atualização do Service Worker e aguarda o worker novo. Se houver worker em espera, envia `SKIP_WAITING` e aguarda `controllerchange` antes de executar um único reload. Se a verificação não encontrar worker em espera, recarrega a página controlada. Rejeições e timeouts mostram erro recuperável e habilitam “Tentar novamente”. Navegações não são servidas do cache offline e os bundles/CSS com fingerprint mudam quando o conteúdo muda.
-
-No Mapa, em viewports desktop e tablet largo, o drawer de estado começa abaixo da altura real do cabeçalho global e se estende até a base da janela, sobre a faixa direita dos filtros, com largura de 480 px (440 px em tablets). Somente o conteúdo interno do drawer rola. Ao abrir, um backdrop escurece o restante da página e mantém o drawer acima dele. Em telas de até 760 px, permanece a folha inferior móvel existente. O indicador compacto de atualização fica disponível na navegação autenticada.
-
-Se o cache estático ficar inconsistente em uma emergência, use as ferramentas de armazenamento do navegador para remover somente os caches `arion-shell-*` e `arion-static-*` deste domínio e reabra a aplicação. Não apague caches de outros sites. Após o deploy, confirme resposta `no-store` do worker e da versão, versão atual no portal, banner em uma aba mantida aberta durante a publicação, atualização manual e acesso offline apenas ao shell neutro.
-
-### Publicação desta release
-
-No servidor Windows, a partir da raiz confirmada do projeto, o procedimento é:
+**Consulta** — na raiz confirmada do checkout:
 
 ```powershell
-git pull --ff-only origin main
-npm ci
-npm run build:production
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py collectstatic --noinput
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py migrate --plan
-# Após backup confirmado e autorização operacional para o banco de produção:
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py migrate --noinput
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py check
-.\deploy\windows\restart-arion.ps1 -Role web
 .\deploy\windows\status-arion.ps1
+.\deploy\windows\manage-arion.ps1 -Action Status
+.\deploy\windows\cloudflare\status-cloudflared.ps1
+Get-ScheduledTask -TaskName 'ARION-Web','ARION-Integration-Worker'
+Get-Content -LiteralPath .\var\logs\arion-web.log -Tail 80
+Get-Content -LiteralPath .\var\logs\arion-worker.log -Tail 80
 ```
 
-Esta estabilização adiciona a migration `0011_alter_penaltycompetence_options_and_more`, aplicada somente ao SQLite local de desenvolvimento. Ela adiciona os campos de arquivamento lógico; não foi aplicada em produção nesta tarefa. Antes de publicar este código, confira o plano de migrations e aplique a migration apenas após backup do banco alvo e autorização operacional. O Worker de integração não precisa ser reiniciado; o serviço Web deve ser reiniciado para carregar o código Django novo, e o Service Worker do navegador é atualizado pelo fluxo PWA.
+Logs podem conter contexto operacional mesmo sanitizados: consultar localmente e minimizar qualquer compartilhamento. O supervisor faz rotação dos logs. `var/run/<role>.pid`, `.launcher.pid` e `.child.pid` distinguem supervisor, launcher e Python efetivo; JSONs associados guardam criação/executável. Os scripts validam identidade para não atuar sobre PIDs reutilizados. Não usar encerramento genérico de processos Python nem apagar leases ativos.
 
-Para uma atualização que contenha a Gestão de Acessos 2.0, siga adicionalmente o checklist de [Gestão de acessos e ciclo de senhas](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md). As migrations estruturais marcam as contas existentes, mas a política global fica desligada até a verificação de Brevo, domínio, recuperação administrativa e backup e a execução explícita do comando auditado. Este repositório local não executou a ativação em produção.
-
-**Estado local em 06/11/2026:** a evolução seguinte inclui a migration `0013_penaltytreatmentpause_evidence_and_more`, o sincronizador OTRS/`integration_worker` para cobertura de quatro filas do Cockpit e a migration de dados `0014_normalize_closed_operational_status`, que consolida o alias legado `CLOSED` em `RESOLVED` sem alterar estado bruto nem datas. A migration `0014` foi validada em SQLite temporário e aplicada ao banco MySQL local do projeto, confirmado em loopback com `DEBUG=True`; não foi aplicada em produção nem em banco remoto. Antes de futura publicação, inspecione o plano e o banco alvo, faça backup e siga a autorização operacional existente; reinicie Web e Worker para carregar os respectivos códigos. A nota anterior de que o Worker não precisa reiniciar aplica-se somente à revisão associada à migration `0011`.
-
-## Checklist de atualização incremental 1.3.1
-
-Este procedimento é para execução futura pela equipe no Windows Server. A Etapa 3 não executou comandos remotos nem deploy. Confirme a raiz do repositório, branch `main`, backup recente do banco e janela operacional antes de aplicar migrations. A release mantém a versão `1.3.1`; não crie tag `1.4.0`.
-
-No PowerShell, a partir da raiz confirmada do projeto:
+**Crítica** — parar, iniciar e reiniciar afeta a disponibilidade e exige janela autorizada:
 
 ```powershell
-git status --short
-git pull --ff-only origin main
-
-# Execute apenas se requirements.txt ou requirements-prod.txt mudou:
-.venv\Scripts\python.exe -m pip install -r requirements-prod.txt
-# Execute apenas se package-lock.json mudou:
-npm ci
-
-# Revise o plano e confirme o backup antes de alterar o banco:
-.venv\Scripts\python.exe arion_geo\gerenciar.py makemigrations --check --dry-run
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrate --plan
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrate --noinput
-
-npm run build:production
-.venv\Scripts\python.exe arion_geo\gerenciar.py collectstatic --noinput
-.venv\Scripts\python.exe arion_geo\gerenciar.py check --deploy
-.\deploy\windows\restart-arion.ps1 -Role web
+.\deploy\windows\stop-arion.ps1 -Role worker
+.\deploy\windows\stop-arion.ps1 -Role web
+# Após a manutenção autorizada:
+.\deploy\windows\start-arion.ps1 -Role web
+.\deploy\windows\start-arion.ps1 -Role worker
+# Reinício isolado, quando necessário:
 .\deploy\windows\restart-arion.ps1 -Role worker
-.\deploy\windows\status-arion.ps1
-Get-Service -Name Cloudflared
 ```
 
-Não instale dependências se os manifests não mudaram: a etapa atual não adicionou dependências Python ou JavaScript. O build requer Node 24. A migration `integracoes.0014_normalize_closed_operational_status` normaliza o status local `CLOSED` para `RESOLVED`, preservando estado bruto e datas; confira o plano no banco alvo e faça backup antes de aplicar. A Etapa 3 não cria migration.
+O gerenciador `deploy/windows/ARION-OPS.bat` ou `manage-arion.ps1` coordena Start/Stop/Restart/Update/Diagnostics com lock e relatório sanitizado. Start/Stop/Restart/Update exigem Administradores locais. Diagnostics cria relatório local; não altera usuários ou banco. Cloudflared é consultado, não reiniciado pelo gerenciador. Web e Worker são processos supervisionados por tarefas, não serviços Windows com nomes inventados.
 
-Após reiniciar, confira Web, Worker e Cloudflared. Na Central de Integrações, use os testes de autenticação/conexão de OTRS e Brevo; o teste Brevo não deve enviar mensagem e nenhuma TQ deve ser reenviada. Verifique grupos e permissões, usuários sem `view_dashboard`, Data Scope, freshness e consistência dos indicadores de Dashboard, Chamados, Cockpit, Mapa e Rankings. Não apague OQs nem registros de homologação.
+`install-arion.ps1` e `install-tasks.ps1 -ServiceAccount '<conta Windows autorizada>'` são procedimentos críticos de instalação, não consultas nem passos de todo deploy. A instalação de tarefas solicita credencial local, modifica ACLs e inicia processos. Não reinstalar tarefas em operação somente para conferir status.
+
+## Build de frontend e versão
+
+O build reutiliza Node 24 e o lockfile: `npm ci`, seguido de `npm run build:production`. Gera bundles com fingerprint, minificação/ofuscação e manifest; Service Worker é minificado sem ofuscação. Não publica fontes legíveis de `frontend_src` nem source maps. `collectstatic` coleta CSS e assets com manifest para WhiteNoise. O build deve existir antes de inicializar Django em produção; se o checkout novo ainda não tem manifest, executar o build antes dos comandos Django de pré-validação.
+
+`docs/08-releases/releases.json` é a fonte única da versão para HTML, `/api/version/`, PWA, Sobre e Atualizações. Git contém **1.4.0**; a tag `v1.4.0` identifica o release de código. Consultar a revisão instalada com `git rev-parse HEAD`, a página Sobre e o endpoint de versão no domínio autorizado. A publicação de um commit posterior de documentação não regrava a tag histórica.
+
+## Processo completo de atualização
+
+**Operação crítica futura, não executada nesta auditoria.** O [checklist 1.4.0](../08-releases/v1.4.0-implantacao-windows.md) é a lista de execução da release; este guia define os cuidados permanentes.
+
+1. Confirmar host, raiz, commit, versão efetiva, banco MySQL, conta Windows, tarefas, porta, domínio e janela. Conferir alterações locais com `git status --short`; interromper se não estiverem reconciliadas.
+2. Revisar código/migrations da revisão aprovada. Fazer backup MySQL, configuração, storage e certificados; verificar checksum e restore isolado antes do corte.
+3. Usar `git fetch origin --tags`, revisar `git log --oneline HEAD..origin/main` e confirmar ancestralidade. Atualizar somente por fast-forward autorizado. Não usar reset destrutivo, force push ou substituir `.env`.
+4. Interromper Worker e Web para alterar código/schema. Instalar dependências dos manifests quando necessário. Gerar build antes de iniciar Django se o manifest ainda não existir.
+5. Executar `check`, `showmigrations --plan` e `migrate --plan` no MySQL alvo confirmado; revisar as operações antes de `migrate --noinput`. Não executar `makemigrations` para inventar schema no servidor; `makemigrations --check --dry-run` apenas verifica consistência.
+6. Gerar o build da revisão, executar `collectstatic --noinput`, `check --deploy` e `production-check.ps1`. A checagem de produção não valida por si só conectividade externa, restore, grants, contagens ou a saúde de uma sincronização.
+7. Iniciar Web, depois Worker; conferir supervisor **e** filho, logs e versão. Validar login, convite/troca com conta autorizada, permissões/escopo, OTRS/CMDB, Cancelamentos e Qualidade. Não disparar TQ, OTP ou sincronização somente para satisfazer um smoke test.
+8. Registrar revisão final, migrations, backup, horários, resultados e pendências em registro operacional privado. Abrir a aplicação somente com validações aprovadas ou limites expressamente aceitos pelo responsável.
+
+Não repetir `ativar_politica_senhas --confirm` no deploy. A operação informou que a política já foi ativada no servidor conhecido; confirmar seu estado por consulta. Código/migrations da política e ativação operacional são etapas distintas. Veja [política de acesso](../03-seguranca-e-qualidade/politica-de-senhas-e-acessos.md).
 
 ## Cloudflare Tunnel e proteção perimetral
 
-`deploy/windows/cloudflare/config.example.yml` é apenas um modelo. O serviço Windows usa config e credentials-file em `C:\Windows\System32\config\systemprofile\.cloudflared`; o script de instalação copia o JSON local para essa pasta e restringe ACL para SYSTEM/Administrators. Não coloque token, `cert.pem`, JSON de credenciais ou config preenchida no repositório. A instalação do serviço exige Tunnel UUID, hostname, `cloudflared.exe` e JSON previamente obtidos pela equipe responsável; o script não cria Tunnel, DNS ou hostname.
+O modelo de config está em `deploy/windows/cloudflare/config.example.yml`. A instalação fornece config e credentials-file privados em `C:\Windows\System32\config\systemprofile\.cloudflared`, com ACLs SYSTEM/Administrators, e log de exemplo em `C:\ProgramData\ARION\logs\cloudflared.log`. Confirmar caminhos efetivos no serviço instalado sem divulgar credenciais. O instalador não cria automaticamente Tunnel, DNS ou hostname.
 
-O ingress encaminha somente para `http://127.0.0.1:<porta>` e encerra com `http_status:404`. O Tunnel é uma conexão outbound; mantenha inbound público fechado para 8000, 3306, 80 e 443. O MySQL deve escutar em loopback, sem acesso público. Nenhum Caddy, Nginx ou Apache é necessário nesta V1.
+Conferir ingress para a porta local correta e regra final `http_status:404`, HTTPS público, serviço `Cloudflared`, saúde do Tunnel e registros DNS. Waitress confia em um proxy de loopback para X-Forwarded-For/Proto/Host; não expor sua porta diretamente. MySQL também fica em loopback. Não abrir portas públicas de banco/Web interno para resolver problema de Tunnel.
 
-Na conta Cloudflare, configurar e revisar:
-
-- DNS/hostname apontando para o Tunnel correto e health/conectividade do Tunnel;
-- WAF e Managed Rules compatíveis com as rotas do ARION;
-- rate limiting, managed challenge e proteção de bots em `/login/`, conforme recursos disponíveis no plano;
-- Security Events e alertas de indisponibilidade;
-- cache bypass para páginas dinâmicas, `/api/*`, `/ari/api/*`, `/base/api/*`, `/rankings/*`, `/chamados/*`, `/dashboard/*`, `/cockpit/*`, `/configuracoes/*` e `/admin/*`; cache somente de `/static/*`;
-- restrição do token público Mapbox ao hostname de produção no painel Mapbox.
-
-Cloudflare Access pode ser avaliado futuramente, mas não faz parte da V1 e não deve ser ativado por estes scripts.
+Cookies de sessão e CSRF são Secure/SameSite=Lax em produção; sessão é HttpOnly e CSRF é legível pelo AJAX same-origin. CSP global é Report-Only. Manter bypass de cache para HTML, login, ativação, módulos e APIs, inclusive `/cancelamentos/*` e `/qualidade/*`; cache público somente de estáticos apropriados. `/api/version/` e `/service-worker.js` usam no-store. O Service Worker não oferece cache offline de HTML autenticado nem dados operacionais. WAF, rate limit e restrições de token Mapbox exigem configuração pela equipe nos respectivos painéis; não são garantidos por este checkout.
 
 ## Worker e integrações
 
-O comando de produção é executado pelo supervisor, não pelo Django web:
+OTRS FAST: 2 min; FULL: 30 min; CMDB: 10 min; projeção de triagem: 2 min; histórico de backlog: 1 h após sucesso. Qualidade consulta artigos por cursor com intervalo padrão de 120 s. Backoff preserva a última leitura. Frequências são configurações do scheduler, não SLAs. Detalhes e comandos manuais estão em [Worker e sincronização](worker-e-sincronizacao.md).
 
-```powershell
-.venv\Scripts\python.exe arion_geo\gerenciar.py integration_worker
-```
-
-Cadências permanecem OTRS FAST 2 min, OTRS FULL 30 min e CMDB FULL 10 min. Windows supervisiona o processo e `IntegrationLease` evita trabalho concorrente entre processos/instâncias. Não instale outro scheduler. A conexão OTRS precisa de grants somente leitura; CMDB usa operações Search/Get. Após restore e configuração de credenciais, execute FULL CMDB e FULL OTRS e verifique freshness, estados e lease antes da liberação.
-
-## DPAPI e segredos
-
-DPAPI usa o contexto do usuário Windows que protegeu o segredo. Um segredo protegido pelo usuário `ARION` pode não ser aberto por `SYSTEM`, outro usuário ou um serviço iniciado com outra identidade. Cadastre os segredos depois de definir a conta de serviço e sempre sob o mesmo usuário que executará Web e Worker. Não migre ciphertext DPAPI automaticamente entre usuários/máquinas; reconfigure segredos no novo host. O instalador das tarefas restringe ACL de `.env`, configuração local do banco, logs, runtime e mídia.
-
-Nunca grave no log ou mostre em tela `SECRET_KEY`, senha, token, `DATABASE_URL`, Tunnel credentials, Authorization, Cookie ou secret de integração.
-
-## MySQL e transferência para a máquina nova
-
-O sistema atual já utiliza MySQL. A transferência é um dump e restore completos do MySQL atual para o MySQL local novo, preservando users, Groups/Permissions, Data Scope, preferências, tracking/notas/eventos, filas pessoais, auditoria, ARI, Saved Views, integrações e mirrors locais. FULL OTRS/CMDB não recompõe os dados próprios do ARION.
-
-1. Planeje janela e consistência; pare Web/Worker de origem durante o dump final se for necessário congelar escritas locais.
-2. Use `deploy/windows/backup-arion.ps1` na origem ou ferramenta equivalente para criar o dump completo com timestamp fora da pasta web. O script lê a conexão ativa do ARION/DPAPI, usa arquivo temporário de opções protegido por ACL, não coloca senha na linha de comando e remove esse arquivo ao terminar.
-3. No host novo, crie o schema e um usuário próprio do ARION. Não use `root`; limite grants ao schema e às operações de leitura/escrita necessárias à aplicação, ao Worker e às migrations planejadas. Não exponha 3306 à rede pública.
-4. Transfira o dump por canal protegido, restaure-o por procedimento manual e confirme contagens/tabelas críticas. O backup inclui dados locais e mirrors, não apenas snapshots sincronizáveis.
-5. Configure `.env` e credenciais DPAPI no usuário `ARION`, execute migrations necessárias, `check`, testes e production-check; então execute FULL CMDB e OTRS.
-
-Não use SQLite como caminho principal desta migração. Não restaure o banco durante esta auditoria.
+Verificar configuração habilitada, teste da conexão, `IntegrationRun`, sucesso FULL, cursor e lease. Processo vivo não comprova freshness. OTRS/CMDB só são lidos; Brevo envia mensagens somente mediante autorização específica. A exceção temporária de TLS para OTRS legado exige todos os opt-ins do código e host exato; não flexibiliza TLS do restante do sistema.
 
 ## Backup e restore
 
-`backup-arion.ps1` grava por padrão em `arion-backups` ao lado do projeto, fora do web root; `-BackupDirectory` muda o destino e `-RetentionDays` configura retenção (0 desativa a remoção automática). Restrinja a pasta, inclua cópia offline/externa conforme política da organização e agende o script sob a mesma conta Windows com DPAPI. Monitore o exit code, tamanho/idade do dump e faça ensaios de restore.
+**Crítica** — exemplo de backup consistente, fora do checkout, com retenção automática desativada durante o corte:
 
-Restore é manual e destrutivo. Antes de restaurar: pare Web e Worker, crie e confirme um backup explícito do banco de destino, confira host/schema/arquivo e obtenha confirmação operacional explícita. Use credencial protegida e importe o dump completo. Depois valide migrations, integridade, permissions, Data Scope, `check` e acessos antes de iniciar os processos. Nenhum script deste repositório automatiza restore.
+```powershell
+.\deploy\windows\backup-arion.ps1 -RetentionDays 0
+```
 
-## Checklist antes de abrir
+`-BackupDirectory` permite destino externo explícito. O padrão de retenção é **30 dias**; se maior que zero, o script remove `arion-db-*.sql` antigos do destino. Não usar retenção sem revisar a política. O script exige `mysqldump` no PATH e configuração de produção recuperável pela mesma conta DPAPI. Cria arquivo de opções temporário protegido, sem senha na linha de comando, remove-o ao terminar e promove `.partial` para `.sql` somente em sucesso não vazio.
 
-- `production-check.ps1`, `check --deploy`, `makemigrations --check --dry-run` e testes relevantes aprovados;
-- `npm ci`, `npm audit` e build com resultado registrado; `collectstatic` sem sources ou `.map`;
-- restore completo conferido, conta MySQL local não-root e grants mínimos;
-- mesma conta Windows `ARION` para Web/Worker e credenciais DPAPI cadastradas nesse contexto;
-- tarefas de Web/Worker ativas no boot, recovery e logs conferidos;
-- serviço Cloudflared ativo no boot, config validada, ingress limitado a loopback e Tunnel saudável;
-- domínio/CSRF/HTTPS, WAF, rate limit, cache bypass, eventos de segurança e Mapbox testados no hostname;
-- smoke test de Login, Dashboard, Chamados, Cockpit, Mapa, Rankings, Base, Documentação e ARI;
-- backup externo e procedimento de restore documentados e ensaiados.
+O dump usa `--single-transaction --quick --routines --events --triggers --hex-blob --no-tablespaces --databases`. Confirmar privilégios e consistência das tabelas InnoDB; evitar DDL concorrente. A presença do arquivo não comprova restore. Registrar tamanho, SHA-256 (`Get-FileHash -LiteralPath '<dump privado>' -Algorithm SHA256`), cópia externa e resultado de restauração isolada. O backup **não** inclui `.env`, certificados, credenciais do Tunnel ou mídia privada.
 
-## Identidade dos processos Web e Worker no Windows
+Restore é manual; não há script de restore no repositório. O dump inclui criação/seleção do schema e pode recriar tabelas: não o apontar a um destino com trabalho a preservar. Em máquina isolada, usar cliente MySQL da versão compatível, conexão local autenticada por mecanismo privado e comando do cliente `source C:/caminho/privado/backup.sql`. Nunca usar `-pSENHA`, colar credenciais no comando ou importar cegamente um dump sobre outra base. Restaurar em schema/máquina de ensaio aprovado e comparar tabelas, PK/FK, migrations, contagens, Decimal, datas, usuários/grupos, históricos e arquivos privados. Não copiar o SQLite DEV sobre o MySQL produtivo.
 
-`status-arion.ps1` consulta o supervisor e os PIDs registrados para o launcher da `.venv` e para o processo Python efetivo. `var/run/<role>.pid` identifica o supervisor, `<role>.launcher.pid` identifica o processo iniciado pelo supervisor e `<role>.child.pid` identifica o processo que executa Waitress ou `integration_worker`. Arquivos JSON correspondentes guardam o horário de criação e o caminho do executável para validar a identidade.
+## Recuperação em caso de falha
 
-No Windows, a verificação usa `OpenProcess`, `WaitForSingleObject`, `GetProcessTimes` e `QueryFullProcessImageName`; a relação entre launcher e processo efetivo é conferida pela árvore nativa de processos. A comparação do horário de criação impede que um PID reutilizado seja aceito como o processo original. O mecanismo cobre o redirecionador Python da Microsoft Store e interpretadores Python convencionais, sem procurar por porta nem encerrar processos externos ao ARION.
+1. Suspender novas escritas/tráfego e parar Worker/Web. Preservar banco e logs da tentativa; registrar commit, migrations aplicadas e mudanças após o backup.
+2. Definir retorno compatível entre código, schema e dados. Reverter Git sozinho não desfaz migrations, envios, importações ou edições humanas. Não executar `migrate <versão antiga>` sem avaliar reversibilidade e perda.
+3. Quando restore for autorizado, conferir destino/backup, guardar o estado que será substituído e restaurar pelo procedimento validado; recuperar storage/configuração com ACLs. Reconciliar dados posteriores ao backup antes de liberar a operação.
+4. Reconfigurar segredos sob a identidade correta se a máquina/conta mudou. Conferir integridade, `check`, status, login, escopo, versão e integrações, depois iniciar Web/Worker controladamente.
 
-`start-arion.ps1` primeiro consulta o estado e não tenta criar uma segunda instância quando o supervisor já está ativo. O supervisor mantém o pedido de parada e o encerramento existente; se o launcher sair deixando o interpretador efetivo ativo, encerra somente o processo registrado com o mesmo PID e horário de criação. Os scripts usam diretamente `.venv\Scripts\python.exe`/`pythonw.exe` e não dependem da ativação do ambiente. Depois de atualizar esta correção, reinicie Web e Worker pelos scripts ARION para que os novos registros de identidade sejam criados. Nenhum banco, migration, `.env`, configuração OTRS/TLS, Brevo, Waitress, MySQL ou Cloudflared é alterado por essa correção.
+`rollback_banco_arion.py` somente troca a conexão de bootstrap para SQLite e exige reinício; **não restaura MySQL** e não é recuperação de produção. O modo `migrar_banco_arion --full-snapshot` serve para candidato vazio, sem mesclar dados do servidor. A [carga histórica de Cancelamentos](../06-integracoes-e-dados/arionbroker/carga-producao.md) tem plano independente e Apply produtivo ainda bloqueado no código.
 
-## Gerenciador Windows do ARION OPS
+## Evolução futura
 
-Na pasta do projeto, abra `deploy\windows\ARION-OPS.bat` por duplo clique para exibir o menu de operação. Também é possível abrir PowerShell como administrador e executar `.\deploy\windows\manage-arion.ps1`. O gerenciador usa diretamente `.venv\Scripts\python.exe`; não é necessário ativar o ambiente virtual. Ações que iniciam, param, reiniciam ou atualizam exigem uma conta autorizada no grupo Administradores locais do Windows. Status e diagnósticos são consultas. Se a conta tiver UAC habilitado, abra o terminal elevado antes de iniciar uma ação mutável.
-
-O menu coordena os scripts `start-arion.ps1`, `stop-arion.ps1` e `status-arion.ps1`, sem procurar nem encerrar processos Python por nome. Iniciar usa Web → Worker; parar usa Worker → Web; reiniciar executa a parada completa e depois Web → Worker. Cloudflared é apenas consultado. Um lock exclusivo em `var\run\manage-arion.lock` impede duas operações simultâneas. Logs e relatórios sanitizados ficam em `var\logs\manage-arion-*.log` e `manage-arion-report-*.json`.
-
-A opção de atualização aceita somente `main`, exige diretório sem alterações locais e usa `git fetch origin main` seguido de `git merge --ff-only origin/main`. Não faz reset, limpeza, force push nem sobrescreve `.env`. Dependências só são instaladas quando seus arquivos mudam e após confirmação. O plano de migrations é apresentado; se houver operações pendentes, o gerenciador cria e valida um dump MySQL fora do projeto usando `backup-arion.ps1` com retenção desativada e exige a frase `APLICAR MIGRATIONS` antes de parar os processos e aplicar o plano. Em caso de falha, a operação é interrompida e registrada; não há rollback automático do Git nem declaração de deploy concluído. Mudanças de frontend acionam build e `collectstatic`.
-
-Para validar a ordem e o lock sem tocar nos serviços, execute `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\deploy\windows\test_manage_arion.ps1`. A validação chama os fluxos com as operações de serviço simuladas; não inicia processos Web/Worker nem altera banco.
+Linux/Docker, `arionops.grupoarion.com.br`, DNS/IP corporativo, HTTPS sem dependência do Tunnel e Entra ID permanecem no [roadmap](../01-projeto/roadmap.md). Não substituem esta operação Windows/MySQL.

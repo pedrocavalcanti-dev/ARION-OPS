@@ -20,7 +20,7 @@ Espelhos locais
 └── OTRS
 ```
 
-Uma request web consulta exclusivamente o banco de dados local do ARION OPS. A sincronização ocorre fora do ciclo HTTP por meio do `integration_worker`, que lê as fontes oficiais (OTRS e CMDB) em modo somente leitura e atualiza os espelhos locais. Essa separação garante baixa latência nas telas e independência operacional caso o OTRS ou a CMDB apresentem lentidão temporária.
+Consultas operacionais de tela leem o banco local. O `integration_worker` lê OTRS/CMDB e atualiza os espelhos fora do HTTP, preservando a consulta quando a origem está indisponível. Exceções explícitas são testes/inspeções administrativas, enriquecimento autorizado de Relatórios com lookup remoto opcional e envios Brevo confirmados. Esses POSTs não tornam a navegação passiva um sincronizador nem autorizam escrita OTRS/CMDB.
 
 ### Caminho da request
 

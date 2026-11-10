@@ -18,6 +18,10 @@ Revisado em 10/11/2026. A versão **1.4.0** está registrada no catálogo intern
 
 ## PLANEJADO — Próximas evoluções funcionais
 
+- **Correções de governança verificadas na auditoria documental:** separar escrita de importação de `view_reports` e definir Data Scope de competências/linhas; incluir `manage_quality_contacts` no catálogo administrativo; proteger contas por convite pendente na coorte do comando global de senhas. Não apresentar essas correções como implementadas.
+- **Migração histórica produtiva:** habilitar modo seletivo autorizado, homologar em MySQL real e reconciliar o snapshot atualizado sem substituir o banco existente; o importador atual permanece DEV-only.
+- **Microsoft 365 / Entra ID:** login corporativo, MFA, vinculação das contas locais existentes, sincronização/mapeamento de grupos para RBAC e preservação do Data Scope interno. Nenhum SSO/MFA Microsoft foi implementado na 1.4.0.
+
 - **Central de Relatórios (fase futura):** evoluir o módulo para acompanhar resultados operacionais em tempo real por cliente/contrato e analisar desempenho operacional, SLA, qualidade, reincidência, volume, resultados alcançados e evolução ao longo do tempo. Apoiar também o acompanhamento do desempenho da ARION junto a clientes e contratos, incluindo rankings e indicadores fornecidos por clientes quando houver fonte oficial.
 
 - **Critérios formais e playbooks R1–R5 na Qualidade (PLANEJADO):** formalização operacional definitiva dos critérios de classificação R1–R5 e playbooks orientados por nível.
@@ -29,6 +33,8 @@ Revisado em 10/11/2026. A versão **1.4.0** está registrada no catálogo intern
 ## PLANEJADO — Evolução de escalabilidade e infraestrutura
 
 A arquitetura V1 opera como um **monólito modular Django** com Waitress e MySQL local. Conforme o volume de acessos e dados crescer, a evolução planejada prevê etapas progressivas (não implementadas na V1):
+
+O próximo destino de hospedagem planejado é Linux corporativo com Docker, DNS/IP fornecidos pela ARION, domínio `arionops.grupoarion.com.br`, HTTPS e independência do Cloudflare Tunnel atual. Ainda não implantado; Windows Server e o domínio conhecido continuam a referência operacional. Evitar novas dependências de Windows sem necessidade, preservando compatibilidade das funcionalidades existentes e planejando a substituição segura de DPAPI.
 
 1. Otimização contínua de consultas e índices no MySQL;
 2. Separação dedicada de workers de sincronização e processamento assíncrono;

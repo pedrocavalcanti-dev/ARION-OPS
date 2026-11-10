@@ -517,12 +517,12 @@ def documentation_home(request):
     category_map = {category["name"]: category["documents"] for category in categories}
     card_definitions = (
         ("inicio", "Começar", "Visão geral, arquitetura e fontes de dados.", ("Começar",)),
-        ("modulos", "Funcionalidades", "Chamados, Base, Dashboard, Cockpit, Mapa, Rankings e ARI.", ("Funcionalidades",)),
+        ("modulos", "Funcionalidades", "Cancelamentos, Qualidade, Chamados, Dashboard, Cockpit, Mapa, Rankings, Base, Relatórios e ARI.", ("Funcionalidades",)),
         ("dados", "Dados e Integrações", "Banco de dados, OTRS, worker e dicionário.", ("Dados e Integrações",)),
         ("otrs", "OTRS", "Referência técnica da integração, sincronização e dados.", ("OTRS",)),
         ("cmdb", "CMDB ServiceUp", "Referência técnica da origem, espelhos e consumidores.", ("CMDB ServiceUp",)),
         ("administracao", "Administração", "Usuários, grupos, escopos, configurações e auditoria.", ("Administração",)),
-        ("operacao", "Segurança e operação", "Segurança, testes, erros, implantação e padrões.", ("Segurança e operação", "Padrões")),
+        ("operacao", "Segurança e operação", "Login, convites, senhas, Windows Server, backup, recuperação e padrões.", ("Segurança e operação", "Padrões")),
     )
     home_cards = []
     for anchor, title, description, names in card_definitions:

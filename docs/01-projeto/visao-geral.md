@@ -47,7 +47,7 @@ Status ARION, responsável interno, prioridade interna, notas e eventos criados 
 | Chamados | Fila NOC, filtros e acompanhamento interno. | Não altera ticket, artigo ou nota no OTRS. |
 | Cockpit | Analytics, contextos Suporte/Cancelamentos/Geral, views salvas e exportações. | Consulta espelhos locais e respeita Data Scope no backend. |
 | Mapa e Rankings | Agregações geográficas por UF e análise de Provider/ISP. | Não são relatório contratual de SLA nem prova automática de causalidade. |
-| Qualidade | Links prioritários, Ordens de Qualidade (OQs), ocorrências, ciclos RREIP e contatos. | Classificação R1–R5 e abertura de OQ são manuais; não abre nem edita TQ no OTRS. |
+| Qualidade | Links prioritários, OQs, TQs locais, ciclos RREIP, contatos e decisão humana final. | Brevo pode enviar solicitação autorizada; correlação QID confirma o ticket externo, sem escrita direta OTRS. |
 | Base | Links e Providers/ISP do espelho CMDB. | Importação XLSX antiga é legado e não faz parte do fluxo operacional normal. |
 | Relatórios | Claro Multas, baseline automático, pausas, evidências e tratativas. | Cálculo automático é baseline; decisão final é humana e auditada. |
 | ARI I.A | Conversas, anexos privados e artefatos em Preview. | Não anunciar integração LLM externa como ativa nesta versão. |
@@ -57,7 +57,7 @@ Status ARION, responsável interno, prioridade interna, notas e eventos criados 
 
 - A fonte oficial de tickets e itens de configuração continua sendo OTRS/CMDB; o espelho é projeção local reconstruível.
 - Views operacionais não consultam fontes remotas durante requests HTTP de leitura.
-- Data Scope é aplicado no backend antes de filtros, agregações, paginação e exportação.
+- Consultas operacionais aplicam Data Scope no backend. Limites de competências de Relatórios e permissões estão explícitos na [matriz por módulo](../05-funcionalidades/usuarios-grupos-e-escopos.md); não presumir segregação onde ainda não existe.
 - Cliente e Projeto derivados do nome CMDB mantêm origem e confiança explícitas.
 - Não apresentar métrica operacional interna como SLA contratual ou verdade oficial externa.
 - Estudos e contagens pontuais ficam em `docs/07-estudos/`, fora da referência normativa.

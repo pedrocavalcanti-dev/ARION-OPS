@@ -27,7 +27,7 @@ As rotas usam o namespace `qualidade` sob `/qualidade/`. O dashboard combina OQs
 
 O app Django `aplicativos.qualidade` contém os models `QualityOrder`, `QualityOccurrence`, `QualityTicket`, `QualityMonitoringCycle`, `QualityContact` e `QualityAuditEvent`. `services/recurrence.py` centraliza a formação de episódios por circuito; dashboard, Links Prioritários, detalhe do Link, detalhe da OQ e monitoramento reutilizam essa política.
 
-OQ pode se relacionar ao `CMDBLinkMirror` e mantém snapshots de designação, ConfigItem, cliente, projeto, ISP e UF. Referências de tickets usam o mirror `OTRSTicket` quando disponível e preservam identificadores e rótulos locais. Requests não chamam os serviços remotos nem escrevem no OTRS ou na CMDB.
+OQ pode se relacionar ao `CMDBLinkMirror` e mantém snapshots de designação, ConfigItem, cliente, projeto, ISP e UF. Referências de tickets usam o mirror `OTRSTicket` quando disponível e preservam identificadores e rótulos locais. Consultas de tela são locais. Envios Brevo são POSTs explícitos autorizados; não há escrita direta no OTRS/CMDB.
 
 A permissão `qualidade.view_quality` protege as páginas e a navegação. `QualityDataScopeService` e o `DataScopeService` existente restringem as OQs e os links no backend antes de filtros, agregações e paginação. Usuários fora do escopo não conseguem abrir uma OQ por URL direta; sem escopo válido, o acesso aos dados é negado. Superuser técnico permanece global.
 
@@ -125,7 +125,7 @@ A migration `0002_qualityorder_manage_permission` registra a permissão de gest�
 ## Limites atuais
 
 - TQs podem ser preparadas e enviadas por Brevo SMTP/API mediante configuração e autorização. O envio não comprova criação de ticket: a correlação exata por QID e fila confirma o vínculo no espelho local. Nenhuma criação, alteração ou encerramento pela API do OTRS é executado pelo módulo. Veja [Qualidade e TQ no OTRS](../06-integracoes-e-dados/otrs/qualidade-tq.md).
-- O ciclo RREIP é iniciado e seu resultado é confirmado manualmente no ARION OPS. O ticket de reincidência deve ser válido no mirror, pertencer ao mesmo circuito e ter ocorrido após o início e até o fim previsto do ciclo. O sucesso só pode ser confirmado após 30 dias e quando não há ocorrência válida no intervalo. Reincidência retorna a OQ para Tratamento; sucesso permite a avaliação humana final da tratativa, cuja confirmação conclui a OQ. As decisões ficam na auditoria local e central. Nenhuma escrita é feita no OTRS.
+- O ciclo RREIP é iniciado e avaliado manualmente. Reincidência exige ticket válido do mesmo circuito, ocorrido após início e até fim previsto, descrição e confirmação humana de mesma causa raiz. Sucesso exige fim previsto atingido, análise final, validação de estabilidade e revisão textual das ocorrências; o código não infere sucesso automaticamente nem impõe um veto genérico a toda ocorrência de outra causa. Reincidência/cancelamento retornam OQ em Monitoramento para Tratamento. Sucesso mantém avaliação final pendente; concluir explicitamente a TQ fecha a OQ somente sem outras tratativas ativas. As decisões ficam auditadas, sem escrita OTRS.
 - Não há envio ou integração de mensagens pelo Teams ou Outlook.
 - O checklist da OQ é gerencial e manual; não existe motor de playbooks automáticos por nível R1–R5. O nível é uma classificação humana de complexidade/criticidade, independente da quantidade de reincidências; critérios definitivos ainda serão formalizados pela operação.
 - Para motivo financeiro, o início do RREIP exige confirmação da Qualidade e registro de evidência; esse controle não substitui um workflow financeiro integrado.
@@ -154,7 +154,7 @@ A regra vale para Links Prioritários, detalhe do link, fila e detalhe da OQ, cr
 - A aba Tratativas mostra o TQ atual, TQs anteriores, tipo, fila, estado, datas e resultado usando os snapshots/mirror locais. Ela oferece acesso ao ticket no OTRS sem copiar artigos ou conversas. Quando o mirror não possui o nome oficial do responsável, a interface informa que ele não está disponível em vez de exibir um ID interno.
 - O checklist gerencial usa `QualityAction`, pode ser atualizado por usuários com `qualidade.manage_quality_orders` e registra cada adição/conclusão/reabertura na auditoria local e central.
 - O monitoramento global apresenta ciclos ativos, terminando em até três dias, reincididos e concluídos, além da fila paginada e filtros por texto, cliente, projeto, provedor, UF, responsável, resultado e datas. A consulta aplica Data Scope antes de contadores, filtros e paginação. A tela da OQ mostra progresso em dias e ciclos anteriores.
-- O início do ciclo é uma decisão manual. A conclusão com sucesso só pode ser registrada depois do fim previsto. Uma reincidência exige ticket válido do espelho local, relacionado ao mesmo ConfigItem e ocorrido durante o ciclo. Cancelamento e demais resultados ficam auditados; o resultado do ciclo não muda o status da OQ automaticamente.
+- O início exige TQ em tratamento com ticket OTRS vinculado, confirmação de análise das ações e resumo. Só pode haver um ciclo ativo por OQ. Sucesso depende do fim previsto e da avaliação humana; reincidência exige ticket válido do mesmo ConfigItem no intervalo e confirmação de mesma causa. Cancelamento/reincidência fazem retorno local ao Tratamento; sucesso aguarda conclusão explícita da TQ. Nenhum resultado movimenta o ticket remoto.
 - Para OQ com motivo financeiro, o ciclo exige confirmação explícita da Qualidade e evidência textual de pagamento ou regularização definitiva. Desbloqueio não equivale a regularização.
 - O Histórico da OQ organiza eventos da ordem, ocorrências, tratativas e monitoramento. O Histórico global consulta eventos centrais de OQs e contatos visíveis ao usuário, oferece busca/filtros e paginação server-side e resolve Designação, projeto canônico e `provider_name`. Em MySQL, `action` e os IDs de objeto comparados à auditoria central são normalizados para `utf8mb4_unicode_ci` no ponto da consulta; não há conversão ampla do schema.
 - Contatos e escalonamentos possuem busca, filtros compactos, paginação, tabela adaptável, drawer de detalhes com observações, criação, edição, ativação/desativação e recomendação contextual no detalhe da OQ. As alterações exigem `qualidade.manage_quality_contacts` e geram auditoria. No escopo CUSTOM, cliente/operadora e projeto canônico devem pertencer à interseção permitida no backend.
@@ -166,7 +166,7 @@ A regra vale para Links Prioritários, detalhe do link, fila e detalhe da OQ, cr
 
 ## Fluxo operacional atual
 
-Ticket válido no espelho OTRS → episódio calculado por ConfigItem → Link Prioritário → abertura manual da OQ → revisão local das ocorrências → associação manual de TQ existente no espelho → início manual do RREIP de 30 dias → registro manual do resultado e conclusão ou retorno ao tratamento. O fluxo conserva os tickets e links oficiais como somente leitura; revisão, checklist, vínculo de TQ e ciclos são registros locais auditados. A Qualidade ainda decide manualmente a abertura da OQ, causa raiz, associação do TQ e resultado do ciclo. Não há criação ou alteração remota de tickets.
+Ticket válido → episódio por ConfigItem → Link Prioritário → abertura humana da OQ → revisão/triagem → TQ local → prévia e envio Brevo autorizado ou associação manual elegível → confirmação do ticket OTRS por QID/fila → análise das ações → RREIP de 30 dias → resultado humano → conclusão explícita da TQ/OQ ou retorno ao tratamento. O envio aceito não confirma ticket criado. Não existe escrita direta na API/banco OTRS; o recebimento do e-mail pelo OTRS é evento externo. R1–R5 e causa raiz continuam decisões humanas.
 
 Para avaliação visual local, `seed_qualidade_demo` cria OQs em datas diferentes, ocorrências revisadas, referências locais a tickets existentes, ciclos, checklist, contatos e auditoria marcados como demonstração. Os níveis de demonstração são escolhidos manualmente e não são derivados da contagem de reincidências. O comando exige `DEBUG=True`, ambiente não produtivo e MySQL em host local; `seed_qualidade_demo --clear` remove somente OQs/contatos com o marcador e eventos com `metadata.seed = "quality-demo-v1"`. O seed não cria nem altera registros dos espelhos CMDB/OTRS.
 
@@ -182,12 +182,12 @@ A pre-visualizacao funciona sem credencial Brevo e nao envia mensagem. O metodo 
 
 O envio exige integracao habilitada, credencial do metodo protegida, remetente/destinatario configurados, endereco da fila Qualidade validado no OTRS, autorizacao administrativa e confirmacao individual por POST. Antes do primeiro envio controlado deve ser usada uma caixa de testes autorizada. A criacao da TQ nunca dispara e-mail automaticamente. Tentativas simultaneas sao bloqueadas; cada tentativa registra metodo e UUID local. SMTP nao inventa `messageId`. Falhas confirmadas permitem nova tentativa explicita, enquanto resultado incerto fica bloqueado para reconciliacao.
 
-A aceitacao do servidor Brevo nao confirma a criacao do ticket OTRS. A correlacao futura usa o QID completo encontrado no corpo do artigo original do ticket na fila de Qualidade. O ARION nao escreve no OTRS.
+A aceitação Brevo não confirma criação do ticket. A correlação implementada usa QID completo no corpo do artigo da fila de Qualidade, com validação e checkpoint próprios. O ARION não escreve no OTRS.
 ## Envio Brevo e correlação automática
 
 A TQ possui prévia HTML/texto e confirmação individual por POST. O método SMTP Relay é o padrão quando não há preferência salva; API REST permanece disponível. To, Cc e Reply-To são campos distintos e editáveis. Cc é enviado como destinatário de cópia por SMTP e pela API REST; o roteamento pode criar outro ticket e ainda precisa de confirmação operacional. O envio continua bloqueado sem autorização, credencial recuperável, remetente/destinatário válidos e confirmação administrativa do endereço de entrada da fila.
 
-O worker dedicado agenda leitura read-only de artigos por lote e cursor incremental, com sobreposição para atualizações tardias, lease OTRS compartilhado e retry com backoff. Cadência, lote e filas aceitam configurações `ARION_QUALITY_OTRS_CORRELATION_INTERVAL_SECONDS`, `ARION_QUALITY_OTRS_CORRELATION_BATCH_SIZE` e `ARION_QUALITY_OTRS_QUEUE_NAMES`. Correlaciona somente o QID completo no corpo, valida a fila pelo nome exato configurado e mantém o corpo do artigo apenas em memória. O cursor e a falha sanitizada são locais. A configuração DEV atual não informa o schema/banco OTRS necessário; por isso a rotina está implementada, mas a descoberta da fila/schema e o vínculo automático real aguardam configuração e validação no ambiente conectado. Não há escrita no OTRS.
+O worker existente agenda leitura read-only de artigos por lote/cursor, sobreposição, lease OTRS e backoff. Cadência, lote e filas aceitam `ARION_QUALITY_OTRS_CORRELATION_INTERVAL_SECONDS`, `ARION_QUALITY_OTRS_CORRELATION_BATCH_SIZE` e `ARION_QUALITY_OTRS_QUEUE_NAMES`. QID completo e fila exata determinam o vínculo; corpo fica em memória, cursor e falha sanitizada são locais. Não se presume readiness produtiva pela existência do código: validar schema/fila, conta autorizada e checkpoint no ambiente conectado, sem afirmar configuração efetiva não consultada. Não há escrita OTRS.
 
 ## Fluxo Operacional: OQ → TQ → OTRS → RREIP
 
@@ -249,7 +249,9 @@ OQs arquivadas saem das consultas operacionais, indicadores e rankings. O arquiv
 - OTRS permanece a fonte oficial da tratativa tecnica; o ARION OPS guarda apenas resumo gerencial, situacao, proxima acao e atualizacoes curtas em auditoria.
 - Para iniciar o RREIP, o operador autorizado confirma que revisou as acoes no ticket OTRS, informa um resumo curto e declara o circuito apto. Nao ha cadastro tecnico paralelo. O sucesso do RREIP exige avaliacao de estabilidade e, depois, uma acao explicita para concluir a TQ.
 
-## Checklist antes da publicacao de Qualidade
+## Checklist antes da implantação de Qualidade
+
+O código está publicado no release 1.4.0; o checklist é para a implantação/homologação conectada no servidor, cujo estado não foi inspecionado nesta auditoria. A gestão de contatos exige `manage_quality_contacts`, ainda ausente do seletor operacional: ver [matriz de permissões](usuarios-grupos-e-escopos.md). Atribuição por grupo e restrição de contatos devem ser revistas antes de delegar a operação.
 
 - [ ] Comparar migrations do codigo e `showmigrations` no MySQL de destino; revisar cada migration pendente antes de autorizar qualquer aplicacao.
 - [ ] Inventariar arquivos rastreados e nao rastreados, incluindo ECharts 6.1.0 e avisos de licenca; conferir `collectstatic` sem introduzir requisito Node/npm no DEV.
@@ -257,5 +259,5 @@ OQs arquivadas saem das consultas operacionais, indicadores e rankings. O arquiv
 - [ ] Confirmar credencial SMTP nova do ARION OPS e teste de autenticacao sem envio.
 - [ ] Validar roteamento primeiro em caixa controlada; depois autorizar teste individual do To operacional; testar Cc separadamente para detectar duplicidade.
 - [ ] Confirmar leitura somente leitura do schema de artigos, fila exata, checkpoint e correlacao pelo QID do corpo; nao executar FULL para essa validacao.
-- [ ] Preservar `deploy/windows/production_check.py` especifico do servidor e revisar configuracao TLS legada somente para o host aprovado.
-- [ ] Conferir integridade dos registros OQ/TQ existentes, worker, URLs OTRS e staticfiles; nao alterar versao nem publicar antes do teste ponta a ponta aprovado.
+- [ ] Revisar eventuais alterações locais de `deploy/windows/production_check.py`, código versionado, sem confundir checker com arquivo privado de configuração; revisar TLS legado só para o host aprovado.
+- [ ] Conferir integridade OQ/TQ, worker, URLs OTRS e staticfiles; validar ponta a ponta autorizada antes da implantação, distinguindo-a da publicação de código já realizada.

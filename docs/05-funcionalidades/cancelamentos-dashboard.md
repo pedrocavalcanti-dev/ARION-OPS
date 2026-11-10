@@ -21,6 +21,8 @@ Cliente/projeto e ISP usam opções obtidas apenas do universo autorizado. Proje
 
 A tabela inferior reúne até oito clientes/projetos, com quantidade, Concluídos e total informado autorizado. Os gráficos usam Apache ECharts local, já utilizado em Qualidade; os dois módulos compartilham os mesmos helpers de paleta, tooltip e tema em `frontend_src/js/shared/chart_theme.js`. Não há CDN ou dependência nova.
 
+Não existe exportação específica de gráficos ou agregados nesta versão. **Exportar** na lista operacional continua produzindo CSV sob seus próprios filtros e permissions. O período da lista usa abertura do ticket; o dashboard usa cadastro do processo, portanto os recortes precisam ser alinhados conscientemente antes de comparar totais.
+
 ## Valores e segurança
 
 O ledger `FinancialObligation` é agregado no backend com `Decimal`, usando valor cobrado quando existe e previsto como alternativa, exatamente como tabela/detalhe/exportação. As expressões SQL e o agrupamento financeiro ficam em `financial_totals.py`. Multa + Equipamentos + Outros formam o total informado. Não há join nem soma de `CancellationPending`, evitando repetir a mesma cobrança.

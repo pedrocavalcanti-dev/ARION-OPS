@@ -23,7 +23,8 @@ O fluxo de acesso nunca grava senha, código OTP completo, token de convite/rede
 | Endpoint | Método | Finalidade |
 |---|---|---|
 | `/configuracoes/administracao/auditoria/` | GET | Lista eventos paginados e indicadores do recorte. |
-| `/configuracoes/administracao/auditoria/exportar/` | GET | Exporta CSV do recorte filtrado e registra `AUDIT_EXPORT`. |
+| `/configuracoes/administracao/auditoria/?export=csv` | GET | Exporta CSV do recorte filtrado e registra `AUDIT_EXPORT`; não existe subrota `exportar/`. |
+| `/configuracoes/administracao/auditoria/<pk>/` | GET | Detalhe administrativo autorizado do evento. |
 
 `AuditService` é o serviço central de gravação; `AuditEvent` é o model; as views administrativas em `aplicativos.configuracoes.views` consultam e exportam. As rotas exigem login e `view_audit_log`. Erros técnicos e `X-Request-ID` são tratados pela arquitetura global, não pela tabela de auditoria; veja [Tratamento Global de Erros](tratamento-global-de-erros.md).
 

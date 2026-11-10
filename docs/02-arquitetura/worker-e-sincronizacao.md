@@ -10,7 +10,7 @@ No supervisor Windows, `deploy/windows/run_process.py` carrega `.env` a partir d
 
 TLS permanece obrigatório para qualquer host remoto por padrão. Um MySQL legado sem suporte a TLS só pode usar o opt-in existente `use_tls=False` + `allow_insecure_remote=True` quando o host também corresponder exatamente a `ARION_OTRS_LEGACY_NO_TLS_HOST`, configurado no ambiente do servidor. Essa exceção temporária não se aplica a CMDB, Brevo, Mapbox ou ao banco principal. O tráfego OTRS nesse modo não é criptografado; prefira restaurar TLS no MySQL ou usar túnel privado e remova a variável e o opt-in após a migração.
 
-Antes de iniciar o worker em produção, configure a integração OTRS com host autorizado, schema, usuário somente leitura e credencial protegida; habilite-a somente após teste operacional autorizado. O worker suspende OTRS Full e a correlação de Qualidade quando a integração está desabilitada ou sem schema/credenciais e não altera automaticamente a configuração. `deploy/windows/production_check.py` é uma configuração local do servidor e não deve ser substituída ao preparar os bundles.
+Antes de iniciar o worker em produção, configure a integração OTRS com host autorizado, schema, usuário somente leitura e credencial protegida; habilite-a somente após teste operacional autorizado. O worker suspende FULL/correlação quando desabilitada ou sem schema/credenciais; não altera a configuração automaticamente. `deploy/windows/production_check.py` é **código versionado de checagem**, não arquivo de credenciais. Divergências locais devem ser revisadas no Git; a configuração privada está em ambiente/arquivo de banco/integrações. Não sobrescrever ajuste local sem reconciliá-lo.
 
 ```powershell
 .venv\Scripts\python.exe arion_geo\gerenciar.py integration_worker
@@ -30,6 +30,8 @@ O scheduler compara a ultima execucao e o estado sincronizado de cada fonte. OTR
 | OTRS FULL | 30 min | Reconcilia as quatro filas configuradas para o Cockpit e relações; tem prioridade sobre FAST. Um FULL é antecipado quando a cobertura configurada ainda não foi aplicada. |
 | CMDB FULL | 10 min | Busca Search/Get completa e reconcilia snapshot validado. |
 | Entrada Cancelamentos | 2 min; retry até 30 min | Projeção local da fila `NOC - CANCELAMENTOS NGO`, após avaliar as sincronizações; lease/estado `cancellation_intake`, execuções `RECONCILE`. Exige FULL aplicado e origem recente. Nunca cria pedidos oficiais. |
+| Histórico de backlog | 1 h após sucesso; backoff em falhas | `sincronizar_historico_backlog --apply`, chave `otrs_backlog_history`, leitura autorizada e substituição transacional apenas do cache local |
+| Correlação Qualidade | 120 s por padrão; mínimo 30 s | Lote padrão 100, teto 200, filas configuradas e checkpoint por artigo; não envia TQ e não guarda corpos |
 | Retry de falha | 2-30 min | Backoff progressivo persistido; preserva o mirror atual e informa a proxima tentativa. |
 
 Primeira carga e reconstrução requerem FULL. O scheduler é verificado em intervalos menores do que as cadências. Horários abaixo mostram somente uma sequência ilustrativa de um ciclo estável; início real depende do processo e não é promessa de minuto civil:

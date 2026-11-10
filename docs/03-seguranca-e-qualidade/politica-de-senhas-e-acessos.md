@@ -1,98 +1,78 @@
 # Gestão de acessos e ciclo de senhas
 
-## Escopo
+## Escopo e estado operacional
 
-O ARION OPS continua usando o usuário padrão do Django, sessões Django, Groups/Permissions e `GroupDataScope`. A política acrescenta estado de segurança por usuário, links de uso único e um middleware de bloqueio; não substitui autenticação nem altera grupos, permissões ou escopos existentes.
+Código 1.4.0, conferido em `autenticacao/models.py`, `security.py`, `views.py`, migrations e comandos. Login usa Django Auth por **usuário e senha**; e-mail corporativo é dado da conta e canal de compartilhamento. Não existe SSO Microsoft/Entra ID ativo. Groups/Permissions e `GroupDataScope` continuam independentes da política de senha.
 
-## Usuários novos
+A operação informou que a política de 90 dias já foi ativada no servidor conhecido. Seu estado atual não foi consultado nesta auditoria. Não reexecutar ativação global para atualizar documentação ou implantar código. `PasswordPolicy` nasce inativa na migration; isso não significa que uma instalação existente esteja inativa.
 
-O formulário administrativo exige login, e-mail e perfil de acesso, não possui campos de senha e grava uma senha inutilizável. Depois de salvar os dados, a administração emite o convite pela página do usuário. A URL é montada a partir de `ARION_PUBLIC_BASE_URL`, nunca do cabeçalho Host recebido.
+## Contas novas e convite de 48 horas
 
-O convite vale 48 horas, pode ser usado uma vez e guarda somente SHA-256 do token aleatório de 256 bits. A emissão de outro convite revoga os anteriores da mesma finalidade. A página de emissão, acessível somente após autorização no backend, mostra o link em um campo de cópia. O token fica apenas no fragmento da URL final (`#...`), que não é enviado ao servidor, e não é persistido em sessão, banco, path ou log. A página é isolada, sem recursos externos e com `Referrer-Policy: no-referrer`; ao fechá-la ou recarregá-la, o token original não pode ser recuperado. Uma nova emissão gera outro token e invalida o anterior. A administração copia e encaminha o link manualmente pelo e-mail corporativo. A ativação não pode tornar uma conta inativa ativa.
+1. Em Configurações → Usuários, administrador autorizado cadastra usuário, e-mail e grupo. A criação exige `manage_users` **e** `create_users`; usa senha inutilizável, sem senha inicial compartilhada.
+2. Revisar o escopo **do grupo**. Não existe um segundo escopo individual atual; alterar o grupo ou seu escopo afeta os integrantes correspondentes.
+3. Gerar convite individual pelo detalhe do usuário. A ação exige `generate_access_invites`, conta ativa e primeiro acesso ainda não concluído. Consultar o detalhe exige `manage_users` e `view_access_status`.
+4. Copiar o link exibido uma única vez e encaminhá-lo manualmente ao destinatário por canal corporativo seguro. Gerar convite **não envia e-mail automaticamente**, nem depende de Brevo.
+5. O usuário abre `/ativacao/`, define nova senha e confirmação. O token válido permite identificar o destinatário; o GET isolado não ativa a conta. A gravação ocorre por POST com CSRF.
+6. O consumo registra senha, `password_changed_at`, primeiro acesso e auditoria. O usuário entra pelo login normal; não recebe grupos adicionais pela ativação.
 
-## Troca inicial, renovação e bloqueio
+`issue_access_token` calcula `expires_at = now + 48 horas` **no momento da emissão**, não na abertura do link. No instante da expiração, o link já é inválido. É de uso único: consumo, revogação, expiração, finalidade incorreta e conta inativa impedem uso. Reemitir usa a mesma ação de geração, revoga tokens ainda não usados da mesma finalidade e reinicia as 48 horas do novo link; não prolonga o anterior. Recarregar a página de emissão não recupera o token: emitir novamente quando necessário. Revogar convite exige `revoke_access_invites` e não desativa a conta; desativação é ação própria.
 
-A migration `autenticacao.0001_initial` cria um `UserSecurityProfile` para cada conta preexistente e marca a troca inicial como pendente, sem tocar no hash atual. A política global nasce desligada. Enquanto ela estiver desligada, essa marcação inicial não bloqueia acessos. O comando local `ativar_politica_senhas` ativa o bloqueio apenas depois das verificações de rollout e permite identificar contas de serviço não interativas.
+O banco conserva somente hash SHA-256 do token aleatório. A URL usa `ARION_PUBLIC_BASE_URL` e fragmento; o JS remove o fragmento do endereço e envia o token em POST. A página de emissão não tem recursos externos e usa no-referrer; ativação/redefinição usam same-origin para preservar CSRF. Nunca copiar link/token para Git, auditoria, relatório, captura de tela ou chat de suporte.
 
-Quando ativada, a política bloqueia acessos de contas pendentes até que a nova senha seja definida. O fluxo de troca obrigatória direciona o usuário autenticado diretamente para a tela de atualização de senha pessoal (com nova senha e confirmação, mínimo de 8 caracteres, sem repetição da senha atual e validação backend do Django), sem solicitar código por e-mail ou OTP, visto que a identidade já foi autenticada pelas credenciais atuais. A infraestrutura de desafios e validação de OTP via Brevo permanece disponível para fluxos específicos de segurança que a necessitem.
+## Senhas e prazos distintos
 
-O middleware verifica cada requisição autenticada. Contas pendentes não chegam a views, APIs, exportações, páginas do admin ou módulos; APIs recebem JSON 403 com `PASSWORD_CHANGE_REQUIRED`, e páginas HTML seguem para o fluxo obrigatório. Login, logout, ativação, redefinição e arquivos estáticos necessários continuam acessíveis. A troca atualiza o hash Django e invalida sessões antigas pela verificação de hash de sessão; o usuário precisa autenticar novamente.
+| Regra | Implementação |
+|---|---|
+| Convite e link administrativo | 48 **horas** desde cada emissão; uso único |
+| Renovação da senha | Padrão de 90 **dias completos** desde `password_changed_at`; prazo em `PasswordPolicy.max_age_days` |
+| Validação | Mínimo 8 caracteres, similaridade com usuário, senhas comuns e senha inteiramente numérica pelos validadores Django |
+| Nova senha | Confirmação igual e proibição de repetir a senha atual |
+| Sessão | Prazo de sessão é independente; não há configuração de sessão de 8h neste checkout |
 
-A validade inicial é de 90 dias completos desde a última definição de senha, calculados com `timezone.now()` e datetimes com fuso. O prazo fica em `PasswordPolicy.max_age_days` e pode ser ajustado pelo comando local. As senhas novas precisam ter pelo menos 8 caracteres, passam pelos validadores Django de similaridade, lista de senhas comuns e conteúdo numérico, e não podem ser iguais à senha atual. Não há consulta externa de senhas comprometidas.
+Não são 48 dias nem 90 dias de convite. Não existe exigência adicional inventada de caracteres especiais nem consulta externa de senhas comprometidas.
 
-## Brevo e recuperação
+Troca voluntária em `/configuracoes/seguranca/` exige senha atual, nova senha e confirmação; atualiza a data e mantém a sessão corrente por `update_session_auth_hash`. Outras sessões deixam de validar o hash antigo ao serem usadas. Troca obrigatória em `/senha/obrigatoria/` ocorre após autenticar com a senha atual, exige nova senha e confirmação **sem OTP** e encerra a sessão ao concluir, retornando ao login. Redefinição por link também altera o hash; não preserva sessões antigas nem altera permissões/escopo.
 
-O envio de códigos usa a integração Brevo já registrada em Integrações. É necessário que ela esteja habilitada, que o envio real esteja autorizado, que o método selecionado (SMTP Relay ou API REST) e suas credenciais protegidas estejam válidos, e que `sender_email` esteja configurado. O código sempre vai para o e-mail da conta, sem cópia ou Reply-To configurados para outras rotinas.
+## Contas anteriores e bloqueio backend
 
-Administradores com as permissões correspondentes podem emitir links individuais de redefinição, válidos por 48 horas e independentes do Brevo. O link altera somente a senha: grupos, permissões e Data Scope permanecem iguais. Para recuperar o único administrador quando o fluxo normal não estiver disponível, o comando local `emitir_link_redefinicao_admin` exige um ator administrador, uma conta de destino ativa também administradora e confirmação do e-mail corporativo cadastrado. O comando emite token único, registra auditoria e não cria senha mestra nem bypass permanente.
+`autenticacao.0001_initial` criou perfis para contas preexistentes e marcou troca inicial sem alterar hashes. `0002_reconcile_legacy_security_profiles` corrige apenas perfis com motivo `initial`, primeiro acesso ausente, login registrado e senha utilizável; preserva a data de senha desconhecida. A criação normal de uma conta por convite deixa primeiro acesso pendente e senha inutilizável. A tela administrativa distingue **Aguardando ativação/Convite expirado** de **Troca obrigatória/Senha expirada**. A ação individual de exigir troca recusa conta ainda não ativada, orientando usar convite.
 
-## Permissões administrativas
+`password_change_required` verifica cada requisição autenticada: contas de serviço explicitamente marcadas são excluídas; exigência administrativa vale mesmo sem política global ativa; com política ativa, flag pendente, data desconhecida ou vencimento bloqueiam módulos. Não há exceção automática para superuser humano.
 
-Além de `manage_users`, cada operação sensível tem permission própria: `create_users`, `generate_access_invites`, `revoke_access_invites`, `generate_password_reset_links`, `require_password_change` e `view_access_status`. A proteção é aplicada no backend, independente da visibilidade dos controles.
+O middleware protege também sessões anteriores, APIs e exportações. HTML redireciona à troca obrigatória; API retorna 403 `PASSWORD_CHANGE_REQUIRED`. Login, logout, ativação, redefinição, troca obrigatória e estáticos permanecem liberados para o fluxo de recuperação. O vencimento não executa logout em lote ou cron: bloqueia na próxima requisição; o logout explícito ocorre ao concluir a troca obrigatória.
 
-O grupo `Gestão` é criado por migration e recebe matriz explícita de consulta: Dashboard, Cockpit, Mapa, Rankings, Base, Chamados, ARI, Qualidade e Relatórios. Não recebe permissões administrativas ou de escrita, nem `is_staff` ou `is_superuser`. Seu Data Scope inicial é personalizado e restritivo.
+## Recuperação e Brevo
 
-## Auditoria
+Administrador com `generate_password_reset_links` emite link de 48h para conta ativa com primeiro acesso concluído. A finalidade é distinta de convite e a reemissão revoga apenas tokens da mesma finalidade. Compartilhar manualmente pelo canal corporativo. Não existe recuperação pública autônoma por e-mail nesta versão.
 
-São auditados criação da conta, emissão/revogação/consumo de convite, ativação, envio/validação/falha de código, troca inicial, renovação, emissão de link administrativo, troca obrigatória, alteração de grupo e permissões. Eventos guardam ator quando a ação parte de uma sessão, usuário afetado, resultado e metadados não secretos. Nunca são gravados senha, código completo, token, URL secreta ou credenciais Brevo.
+O código conserva infraestrutura OTP de 10 minutos e envio por Brevo para fluxos específicos, mas a rota atual de renovação obrigatória **não a utiliza**. Não exigir configurar/enviar OTP como pré-requisito dessa rota. Brevo exige integração habilitada, autorização de envio real e remetente/credenciais protegidos quando um fluxo efetivamente o consumir.
 
-## Configuração do domínio público
-
-Defina `ARION_PUBLIC_BASE_URL` como a origem HTTPS pública exata, por exemplo `https://arion.example.com`, e inclua o mesmo host em `DJANGO_ALLOWED_HOSTS`. Em desenvolvimento, configure `ARION_WEB_PORT=8100` e `ARION_PUBLIC_BASE_URL=http://127.0.0.1:8100` no ambiente local. Sem origem explícita em DEV, o endereço usa `127.0.0.1` e a porta de `ARION_WEB_PORT`. Produção exige a origem HTTPS configurada; o cabeçalho Host da requisição nunca escolhe o domínio dos convites.
-
-A página de ativação recebe o fragmento pelo JavaScript, remove-o do endereço e envia o token em POST com CSRF para validação no backend. Somente um token válido permite personalizar a saudação com o nome do destinatário. As páginas com formulário usam `Referrer-Policy: same-origin`: preservam a origem no POST local e não enviam Referer para outros domínios. Não se permite `Origin: null` nem se desabilita CSRF. A página administrativa que apenas mostra o link continua com `no-referrer`.
-
-A migration `autenticacao.0002_reconcile_legacy_security_profiles` corrige perfis técnicos legados com senha utilizável e login registrado que foram classificados como convite pendente. Ela preserva a senha, a obrigação de troca, grupos, escopos e a data de alteração de senha desconhecida. Novas contas por convite continuam pendentes até a ativação real.
-
-## Ativação controlada no Windows Server
-
-Não execute esta ativação até que o checklist abaixo esteja concluído. Aplicar a migration não ativa a política: ela deixa os usuários preexistentes marcados, enquanto `PasswordPolicy.active` permanece `False`.
-
-1. Planeje janela operacional, faça backup MySQL completo e confirme o restore disponível. Pare Web e Worker antes de substituir os arquivos.
-2. Configure `ARION_PUBLIC_BASE_URL`, `DJANGO_ALLOWED_HOSTS` e `DJANGO_CSRF_TRUSTED_ORIGINS` com o domínio HTTPS público correto. Não use URL fornecida por request.
-3. Identifique contas não interativas. Elas serão explicitamente excluídas por login no comando, sem excluir administradores humanos ou superusuários.
-4. Confirme que existe administrador humano ativo com e-mail corporativo válido e permission de Administrador do Sistema.
-5. Em Integrações → Brevo, valide remetente, método e credenciais, habilite envio real e confirme que o teste de homologação foi recebido. Não registre nem copie credenciais nos logs.
-6. Atualize o código, confira o plano, aplique migrations, compile e colete os assets:
+Recuperação local de administrador ativo já ativado, por operador autorizado do servidor, usa o comando existente abaixo. **Operação administrativa sensível:** grava token e auditoria e imprime URL secreta; não usar transcript/log compartilhado. O ator precisa ser administrador ativo e pode ser o próprio destinatário quando autorizado; a conta de destino também deve ser administradora, não serviço, e o e-mail precisa coincidir.
 
 ```powershell
-Set-Location C:\ARION-OPS
-git pull --ff-only origin main
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py migrate --plan
-# Confirme o backup e o banco local MySQL antes de aplicar:
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py migrate --noinput
-npm ci
-npm run build:production
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py collectstatic --noinput
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py check --deploy
+.venv\Scripts\python.exe arion_geo\gerenciar.py emitir_link_redefinicao_admin --username <login-destino> --actor-username <login-admin> --confirm-email <email-confirmado>
 ```
 
-7. Reinicie Web e Worker conforme a janela aprovada e valide login, Brevo, HTTPS, domínio dos links e acesso às rotas principais. Complete no mínimo um convite e um código OTP com uma conta de teste antes da política global.
-8. Faça a simulação da ativação. Substitua os exemplos pelos logins de serviço efetivamente identificados:
+Conta inativa requer revisão/reativação administrativa antes de emissão; nunca criar senha mestra, contornar CSRF ou marcar primeiro acesso manualmente para “destravar”.
 
-```powershell
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py ativar_politica_senhas --exclude-usernames svc_otrs svc_worker
-```
+## Comando de ativação global
 
-9. Confirme a contagem e as exclusões com o responsável de segurança. Ative e registre o ator administrador; use 90 dias inicialmente:
+`ativar_politica_senhas` é procedimento crítico de rollout, **não rotina diária nem passo padrão do deploy**. Sem `--confirm`, apenas simula. Não foi executado nesta auditoria.
 
-```powershell
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py ativar_politica_senhas --confirm --actor-username admin --exclude-usernames svc_otrs svc_worker --max-age-days 90
-```
+| Parâmetro | Efeito |
+|---|---|
+| `--confirm` | Ativa política, marca perfis e grava auditoria |
+| `--actor-username` | Obrigatório na confirmação; administrador ativo responsável |
+| `--max-age-days` | De 1 a 3650; padrão inicial 90, preserva valor existente quando omitido |
+| `--exclude-usernames` | Logins existentes explicitamente classificados como serviço; remove exigência interativa |
+| `--include-usernames` | Reclassifica serviços como humanos e exige troca inicial |
 
-10. Valide a auditoria e confirme que usuários humanos, inclusive administradores e superusuários, estão em troca obrigatória. Teste primeiro a recuperação do administrador e depois o acesso de usuário comum. Contas inativas permanecem inativas.
-11. Confirme Dashboard, Cockpit, Mapa, Rankings, Base, Chamados, Qualidade, Relatórios, Configurações e APIs; confirme também que serviços excluídos continuam operando.
+A primeira ativação fixa `activated_at`. O comando seleciona contas com `date_joined <= activated_at`, incluindo logins explicitamente informados por inclusão/exclusão; não seleciona só contas humanas ativas. Repetição preserva o corte, mas pode remarcar quem não trocou senha após ele ou tem flags pendentes. A simulação mostra coorte/exclusões, não uma previsão exata de quantas contas terão flags alteradas.
 
-`ativar_politica_senhas` é idempotente: mantém a data original de ativação, o prazo atual quando nenhum novo é informado, contas já classificadas como serviço e os grupos/escopos. Sem `--confirm`, não grava dados. Use `--include-usernames` para reclassificar explicitamente uma conta de servico como humana; a simulacao mostra a contagem antes da gravacao.
+**Limite confirmado:** o loop do comando não filtra senha inutilizável/primeiro acesso pendente antes de marcar a coorte. Uma conta por convite anterior ao corte, ou explicitamente incluída, pode ser classificada incorretamente. Não usar o comando para regularizar convites nem como mecanismo de reemissão. Antes de um novo rollout, conferir a coorte, separar contas não ativadas e homologar uma proteção específica em tarefa de código. A ação administrativa individual já possui a proteção apropriada. Nesta auditoria não houve mudança do comando ou dos usuários.
 
-### Recuperação de administrador pelo servidor local
+Pré-requisitos de uma ativação excepcional: autorização de segurança, consulta do estado atual, backup MySQL/restore verificado, administrador de recuperação ativo, origens HTTPS corretas e revisão de toda a coorte/serviços. `--exclude-usernames` não é filtro genérico de exclusão: transforma a conta em serviço e não deve ser usado para esconder convites pendentes. O [guia administrativo](administracao-operacional.md) mostra consulta sem reativação. Não há comando documentado de desativação/rollback automático da política; recuperar individualmente e avaliar o caso com o responsável.
 
-Use apenas se Brevo e a emissão administrativa web não puderem ser usados. Abra PowerShell local autorizado, confirme a identidade do solicitante pelo canal corporativo e verifique que o e-mail digitado corresponde exatamente ao cadastrado. O responsável e a conta de destino precisam ser administradores ativos:
+## Auditoria e referências
 
-```powershell
-.\.venv\Scripts\python.exe .\arion_geo\gerenciar.py emitir_link_redefinicao_admin --username admin --actor-username admin --confirm-email admin@arion.example.com
-```
-
-O comando mostra o link uma vez no terminal. Encaminhe-o por canal corporativo seguro, feche/limpe o terminal e não o salve em arquivo ou log. O link expira em 48 horas, só pode ser usado uma vez e não remove o bloqueio permanentemente.
-
-Esta implementação prepara e documenta o rollout. Não executa atualização de servidor, ativação de política ou alteração em contas de produção.
+Criação, emissão/revogação/consumo, ativação, redefinição, exigência/troca de senha e alterações de grupo/escopo usam `AuditService`. Registrar ator, objeto e resultado; nunca senha, token, código ou URL secreta. Permissões administrativas e os grupos provisionados estão em [Usuários, Grupos e Escopos](../05-funcionalidades/usuarios-grupos-e-escopos.md). Procedimentos de host/HTTPS/DPAPI: [Implantação e Produção](../02-arquitetura/implantacao-e-producao.md).

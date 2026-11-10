@@ -13,9 +13,11 @@ A Central de Configurações concentra preferências da conta e administração 
 | Usuários | `manage_users`, `create_users`, permissions de convite/redefinição e `view_access_status` | Criar contas sem senha, atribuir perfil e escopo, emitir/revogar links e consultar o estado de acesso. |
 | Grupos e acessos | `manage_groups` | Administrar grupos e suas Django Permissions. |
 | Escopos de dados | `manage_data_scopes` | Configurar `GroupDataScope` por grupo. |
-| Auditoria | `view_audit_log` | Consultar e exportar eventos. |
+| Auditoria | `view_audit_log` | Consultar lista/detalhe e exportar CSV pela mesma lista com `?export=csv`; não existe rota `/auditoria/exportar/`. |
 
 O acesso não depende apenas de ocultar itens do menu: rotas verificam autenticação e permission. Usuário autenticado sem permission recebe 403 real. A camada global de erros fornece a resposta HTML; detalhes estão em [Tratamento Global de Erros](tratamento-global-de-erros.md).
+
+O escopo é atribuído ao grupo, não editado individualmente no cadastro do usuário. Detalhe de acesso exige `manage_users` e `view_access_status`; geração/revogação de convite e redefinição têm permissions próprias. A [administração operacional](../03-seguranca-e-qualidade/administracao-operacional.md) organiza os procedimentos diários e distingue consulta de alteração crítica.
 
 ## URLs e componentes
 

@@ -2,7 +2,7 @@
 
 Revisão em 10/11/2026 (código 1.4.0). A matriz descreve capacidades **IMPLEMENTADAS**, separadas do que permanece **PLANEJADO** no [Roadmap](roadmap.md). Contagens DEV de Cancelamentos são evidência datada de validação, não valores fixos da aplicação.
 
-Versão interna registrada em `docs/08-releases/releases.json`: **1.4.0**. O [Dashboard Gerencial de Cancelamentos](../05-funcionalidades/cancelamentos-dashboard.md) está implementado. A distribuição e a carga histórica em produção dependem do [procedimento próprio](../08-releases/v1.4.0-implantacao-windows.md), ainda não executado.
+Versão registrada em `docs/08-releases/releases.json`: **1.4.0**, código publicado em `origin/main`, commit `e03df52` e tag anotada `v1.4.0`. O [Dashboard Gerencial de Cancelamentos](../05-funcionalidades/cancelamentos-dashboard.md) está implementado. **Publicação não comprova implantação.** O servidor conhecido usa Windows Server/MySQL, domínio público e Web/Worker; não foi acessado nesta revisão. Atualização e carga histórica dependem do [checklist próprio](../08-releases/v1.4.0-implantacao-windows.md).
 
 ## Matriz de módulos (IMPLEMENTADO)
 
@@ -27,7 +27,7 @@ Versão interna registrada em `docs/08-releases/releases.json`: **1.4.0**. O [Da
 
 A Central de Integrações administra APIs externas Brevo e Mapbox. As credenciais Brevo são protegidas por DPAPI e o teste de conexão não envia mensagens. O envio real deve ser autorizado para códigos de segurança; sem configuração ou autorização, o fluxo falha fechado. O Mapbox prioriza token público configurado no banco, com fallback legado controlado pelo ambiente.
 
-A Gestão de Acessos 2.0 está implementada localmente: novos usuários são criados sem senha e recebem convite individual de 48 horas; a troca obrigatória de senha (inicial ou por expiração de 90 dias) valida nova senha e confirmação com mínimo de 8 caracteres diretamente no backend, sem exigência de código por e-mail no fluxo obrigatório; a política de renovação usa 90 dias configuráveis e o middleware bloqueia contas pendentes também nas APIs e sessões antigas. A migration `autenticacao.0001_initial` marca contas preexistentes sem mudar hashes, mas a política global permanece inativa até a ativação explícita e auditada pelo comando `ativar_politica_senhas`. O grupo de consulta `Gestão` é provisionado com permissões conservadoras. Não houve implantação ou alteração em produção.
+A Gestão de Acessos 2.0 cria contas sem senha utilizável, com convite **compartilhado manualmente**, válido por 48 horas desde emissão. Renovação obrigatória usa prazo configurável de 90 dias, nova senha/confirmacão e mínimo de oito caracteres, sem OTP nessa rota. O middleware bloqueia também APIs/sessões anteriores. Migration cria a política inativa, mas a operação informou **ativação prévia no servidor conhecido**, ainda não consultada nesta auditoria. Não repetir ativação global em deploy. O grupo Gestão tem defaults gerais de consulta, mas `view_reports` também libera criação/upload/importação: ver limitações abaixo.
 
 No código atual, o espelho OTRS preserva `external_state_name` e normaliza Resolvido/Encerrado como `business_status=RESOLVED`; backlog e aging do Cockpit consideram somente `OPEN` e `PENDING`; o aging da fila no Dashboard inclui também `SCHEDULED`, como a fila Chamados. A migration de dados `0014_normalize_closed_operational_status` converte linhas locais `CLOSED` sem alterar datas ou estado bruto. A importação histórica de Cancelamentos do ArionBroker foi homologada e executada no SQLite DEV em 09/11/2026 com `--allow-sqlite-dev` após backup consistente (`arion_geo_dev-before-import-20261109-150029.sqlite3`, SHA-256 `bbb2c0c2140b338d60c70e8e5fe7f8f5d64f87c33a0dc043a35c3076cb25a5b9`), dry-run consistente e reconciliação integral de 2.147 referências (162 processos, 1.813 fatos, 172 pendências, 421 obrigações financeiras), preservando os 120 intakes e contas existentes. Integração diferencia saúde da conexão de falha de processamento; o supervisor Windows carrega `.env` da raiz com precedência do ambiente herdado e valida o processo filho.
 
@@ -43,7 +43,7 @@ O Cockpit Suporte reconstrói a evolução de backlog pelos eventos reais de est
 
 **Autoria:** Concepção e desenvolvimento por **Pedro Cavalcanti** para apoio às operações do **NOC ATACADO** da ARION Serviços de Telecomunicações.
 
-A configuração suporta MySQL local (padrão operacional e obrigatório em produção) e SQLite para contingência/testes isolados. Não publicar nome de schema produtivo, host privado, usuário, senha nem connection string. Consulte [Banco de Dados](..\02-arquitetura\banco-de-dados.md) para precedência e fallback.
+A configuração exige MySQL local em produção; o checkout DEV atual utiliza SQLite. Não há fallback automático de produção para SQLite nem homologação MySQL obtida por testes SQLite. Não publicar host privado, usuário, senha ou connection string. Consulte [Banco de Dados](..\02-arquitetura\banco-de-dados.md) para precedência e bootstrap.
 
 A preparação de produção V1 inclui modo Django explícito (`ARION_ENV=production`), Waitress em loopback (`127.0.0.1`), supervisor Windows para Web/Worker, build de assets de produção, `collectstatic`, `production-check`, preparação do serviço Cloudflare Tunnel e backup MySQL. Consulte [Implantação e Produção](..\02-arquitetura\implantacao-e-producao.md).
 
@@ -54,6 +54,8 @@ OTRS e CMDB são as fontes oficiais externas. `CMDBLinkMirror`, `CMDBOperatorMir
 O frontend Django oferece navegação dedicada em desktop, tablet e mobile, com adaptações por módulo. O PWA possui manifest (`/manifest.webmanifest`), ícones oficiais, instalação Chromium/iOS, modo standalone e aviso de atualização sob confirmação explícita do usuário. A versão e as notas de release ficam em `docs/08-releases/releases.json`, que alimenta `/api/version/` e a página **Atualizações e versões**. Todos os entrypoints JS referenciados nos templates passam pelo build de produção (`npm run build`) com fingerprint, minificação e ofuscação em `arion_geo/static/arion_build/`; o Service Worker é minificado separadamente sem ofuscação e nunca armazena páginas autenticadas nem payloads operacionais em cache offline.
 
 ## O que permanece PLANEJADO (não anunciar como implementado)
+
+Antes de ampliar acessos ou fazer novo rollout, tratar as pendências verificadas na [auditoria documental 1.4.0](../08-releases/v1.4.0-auditoria-documental.md): Relatórios não segrega competências por Data Scope e `view_reports` inclui escrita de importação; a permission de contatos da Qualidade existe mas falta no seletor central; o comando global de senhas não exclui convites pendentes da coorte. Carga histórica produtiva é bloqueada pelo importador atual e MySQL de ensaio ainda precisa de homologação. Estas pendências não foram corrigidas por mudanças em Markdown.
 
 - Automação de abertura de TQ por e-mail ou escrita automática de tickets/artigos/notas no OTRS.
 - Playbooks automáticos por nível R1–R5 na Qualidade.

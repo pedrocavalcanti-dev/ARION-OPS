@@ -6,6 +6,23 @@ A Central administra configuração dos conectores CMDB/OTRS e mostra saúde/fre
 
 ## Conectores e estado
 
+### Matriz operacional 1.4.0
+
+| Integração | Origem → destino e tipo | Gatilho / dependências | Falhas, evidência e reconciliação |
+|---|---|---|---|
+| OTRS | MySQL remoto somente leitura → mirror local | Worker FAST 2 min/FULL 30 min; integração habilitada, conta read-only, schema/filas e TLS conforme política | `IntegrationRun`, `IntegrationSyncState`, lease; FULL reconcilia cobertura, delta mantém cursor em erro |
+| CMDB ServiceUp | Search/Get HTTPS somente leitura → links/provedores locais | Worker 10 min; classes, credencial e resposta completa | Run/estado/lease; snapshot inválido não marca ausências |
+| Backlog Suporte | Eventos estado/fila/procedência OTRS → intervalos locais | Worker 1 h após sucesso; leitura consistente autorizada | Cache anterior preservado, cobertura e backoff próprios; não lê artigos |
+| Entrada Cancelamentos | Mirror OTRS → triagem local | Projeção 2 min, FULL válido e freshness | Estado/lease `cancellation_intake`; upsert por TicketID, decisões preservadas, zero pedidos automáticos |
+| Qualidade/OTRS | Artigos da fila homologada → vínculo QID/TQ e checkpoint | Worker 120 s padrão, lote 100/teto 200; OTRS habilitado | Corpos transitórios, fila/QID exatos, conflitos auditados; envio Brevo aceito não confirma ticket |
+| Brevo | ARION → serviço SMTP/API externo; **envio de mensagem** | POST humano autorizado/confirmado; habilitação, remetente/To e credenciais DPAPI | Tentativa idempotente, resultado incerto bloqueia reenvio; teste de conexão não envia; teste de roteamento envia e é separado |
+| ArionBroker | Exportação autorizada → registros locais históricos | Comandos manuais DEV, preview/dry-run/apply controlado; sem polling ativo do legado | Origem/PK/checksum, lote, relatório privado e reconciliação; produção bloqueada, ver roteiro próprio |
+| Mapbox | Token público/configuração → SDK e serviço de mapa no navegador | Ao abrir Mapa; banco tem precedência sobre fallback de ambiente | Falha de token/rede recuperável; não é sync de CMDB nem geocodificação de links |
+
+Configurar requer `configuracoes.manage_integrations`, testar requer `run_integrations`, inspeção `inspect_integrations`, consulta `view_integrations`, conforme endpoint. Acesso administrativo não concede carteira operacional nem envia mensagens automaticamente. Logs/run/health check são sanitizados; antes de encaminhá-los remover contexto pessoal desnecessário. Não confundir `ExternalAPIHealthCheck` de Brevo/Mapbox com execução aplicada OTRS/CMDB.
+
+Verificação diária: integração habilitada → conexão/teste → último apply/FULL/checkpoint → contagens/cursor/lease → freshness na tela. Estado instalado de credenciais/rotas externas exige homologação no servidor; esta revisão não realiza envios, leitura remota ou sincronização. A [carga ArionBroker em produção](../06-integracoes-e-dados/arionbroker/carga-producao.md) permanece tarefa própria.
+
 - **CMDB ServiceUp:** GenericInterface Search/Get para classes `Links de internet` e `Operadoras`, destino local `CMDBLinkMirror` e `CMDBOperatorMirror`.
 - **OTRS MySQL:** conexão read-only às filas `NOC - ATACADO`, `NOC - CANCELAMENTOS NGO`, `NOC - RETIRA EQUIPAMENTO` e `NOC – PENDENTE PAGAMENTO` (travessão no nome real), com estados, relações e Dynamic Fields selecionados; destino `OTRSTicket`, `OTRSTicketConfigItem` e `OTRSStateMapping`. O conjunto atende aos universos do Cockpit. `OTRS_NOC_ATACADO_QUEUE_URL` é um deep link da interface web, não um filtro de sincronização.
 

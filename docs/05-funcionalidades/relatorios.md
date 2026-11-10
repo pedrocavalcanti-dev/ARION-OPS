@@ -4,7 +4,7 @@
 
 No ARION OPS, a Central de Relatórios organiza relatórios operacionais em módulos independentes, preservando a plataforma como camada de exploração e tratamento. O banco local guarda os dados importados e trabalhados pelo módulo; OTRS e CMDB continuam sendo as fontes oficiais quando aplicável.
 
-O app Django `aplicativos.relatorios` usa o namespace `relatorios` e rotas sob `/relatorios/`. As views exigem login e a permissão Django `relatorios.view_reports`; o bootstrap atribui essa permissão ao Administrador do Sistema e ao Gestor. Analista NOC e Consulta / Auditoria não recebem acesso por padrão. Superusers mantêm o comportamento nativo.
+O app `aplicativos.relatorios` usa `/relatorios/` e permission `relatorios.view_reports`, provisionada para Administrador, Gestor e Gestão quando os defaults se aplicam. Analista NOC e Consulta / Auditoria não recebem por padrão. Superuser mantém bypass nativo. **Limite atual:** `view_reports` também protege criação/upload/importação, portanto não representa apenas leitura. Competências, Original, workspace e exportações não são segregados pelo `GroupDataScope` geral; consultas de enriquecimento também não comprovam essa segregação. Conceder acesso apenas a pessoas autorizadas ao conjunto de competências disponibilizado, até correção funcional própria. Consulte a [matriz de acessos](usuarios-grupos-e-escopos.md).
 
 Relatórios reutiliza autenticação, menu de conta e tema do ARION, com uma barra superior própria que retorna à Visão Geral e uma sidebar dedicada. Em telas estreitas, a sidebar vira um seletor recolhível. A aparência usa os tokens globais claro/escuro.
 

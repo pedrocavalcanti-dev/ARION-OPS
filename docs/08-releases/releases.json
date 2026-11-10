@@ -43,7 +43,8 @@
         {
           "category": "Implantação e limites",
           "items": [
-            "Nota técnica, resumo gerencial e checklist Windows Server disponíveis na documentação. Nenhum deploy foi executado nesta publicação.",
+            "Nota técnica, resumo gerencial, guia Windows/MySQL, administração diária e auditoria documental disponíveis. Convites de 48 horas e renovação de 90 dias documentados conforme o código. Nenhum deploy executado nesta publicação.",
+            "Auditoria documental identificou pendências de código: coorte global de senhas pode alcançar convites pendentes; Relatórios não segrega competências por Data Scope e sua permission de consulta inclui importação; gestão de contatos da Qualidade falta no seletor central. Não anunciadas como corrigidas.",
             "Git e migrations não transportam os dados históricos do DEV. O Apply histórico atual bloqueia produção; sua carga seletiva requer tarefa autorizada e homologação próprias.",
             "Sem automação de pagamentos, alteração automática da CMDB, Microsoft 365/Entra ID, Linux/Docker, meteorologia ou GEO Intelligence futuro."
           ]
