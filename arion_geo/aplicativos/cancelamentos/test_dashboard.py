@@ -4,20 +4,21 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission, Group
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
+from django.db.models.functions import TruncMonth
 from django.urls import reverse
 
 from aplicativos.base_links.models import Operadora, Projeto
 from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.integracoes.models import CMDBLinkMirror
 from .models import CancellationProcess, CancellationPending, FinancialObligation
-from .services.dashboard import build_dashboard
+from .services.dashboard import build_dashboard, _month_key
 from .services.financial_totals import money_columns
 
 
-@override_settings(ALLOWED_HOSTS=["testserver"])
+@override_settings(ALLOWED_HOSTS=["testserver"], TIME_ZONE="America/Sao_Paulo", USE_TZ=True)
 class CancellationDashboardTests(TestCase):
     def setUp(self):
         self.admin = get_user_model().objects.create_superuser("dashboard-synthetic", password="synthetic-only")
@@ -46,6 +47,43 @@ class CancellationDashboardTests(TestCase):
         self.assertEqual(result["client_rows"][0]["count"], 2)
         exact = sum((money_columns(p.obligations.all())["total"] or Decimal(0) for p in (self.a, self.b, self.c)), Decimal(0))
         self.assertEqual(result["metrics"]["total"], exact)
+
+    def test_historical_dashboard_without_database_timezone_definitions(self):
+        message = "Database returned an invalid datetime value. Are time zone definitions for your database installed?"
+
+        def missing_timezones(execute, sql, params, many, context):
+            if "convert_tz(" in sql.lower() or "django_datetime_trunc(" in sql.lower():
+                raise ValueError(message)
+            return execute(sql, params, many, context)
+
+        original = list(CancellationProcess.objects.values())
+        original_values = list(FinancialObligation.objects.values())
+        self.client.force_login(self.admin)
+        with connection.execute_wrapper(missing_timezones):
+            # Reproduce the old query's production failure, then exercise both fixed series.
+            with self.assertRaisesRegex(ValueError, "time zone definitions"):
+                list(CancellationProcess.objects.annotate(month=TruncMonth("created_at")).values("month"))
+            result = build_dashboard(self.admin, self.params)
+            response = self.client.get(reverse("cancelamentos:dashboard"), self.params)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["metrics"]["count"], 3)
+        self.assertEqual(result["metrics"]["completed"], 1)
+        self.assertEqual(result["metrics"]["total"], Decimal("30.25"))
+        self.assertEqual([row["count"] for row in result["charts"]["months"]], [1, 2])
+        self.assertEqual([row["total_label"] for row in result["charts"]["finance"]], ["R$ 30,25", "R$ 0,00"])
+        self.assertEqual(list(CancellationProcess.objects.values()), original)
+        self.assertEqual(list(FinancialObligation.objects.values()), original_values)
+
+    def test_local_year_boundary_and_repeated_category_preserve_monthly_totals(self):
+        CancellationProcess.objects.filter(pk=self.a.pk).update(created_at=datetime(2026, 1, 1, 2, 59, tzinfo=utc.utc))
+        FinancialObligation.objects.create(process=self.a, kind="CONTRACT", estimated_amount=Decimal("1.25"))
+        result = build_dashboard(self.admin, {"period":"custom", "start":"2025-12-31", "end":"2026-02-28"})
+        self.assertEqual([row["count"] for row in result["charts"]["months"]], [1, 0, 2])
+        self.assertEqual(result["charts"]["finance"][0]["contract"], Decimal("11.50"))
+        self.assertEqual(result["metrics"]["total"], Decimal("31.50"))
+        # Repeated charges of one category still represent just one known process.
+        filtered = build_dashboard(self.admin, {"period":"custom", "start":"2025-12-31", "end":"2025-12-31"})
+        self.assertFalse(filtered["metrics"]["partial"])
 
     def test_all_widgets_follow_canonical_context_and_provider_filters(self):
         all_data = build_dashboard(self.admin, self.params)
@@ -122,3 +160,12 @@ class CancellationDashboardTests(TestCase):
         self.assertContains(response, "vendor/echarts/echarts.min.js")
         self.assertNotContains(response, 'href="/dashboard/" class="header-link is-active"')
         self.assertContains(response, 'href="/cancelamentos/" class="header-link is-active"')
+
+
+@override_settings(TIME_ZONE="America/Sao_Paulo", USE_TZ=True)
+class DashboardHistoricalDateTests(SimpleTestCase):
+    def test_missing_naive_invalid_and_out_of_range_dates_have_no_invented_month(self):
+        for value in (None, "invalid", datetime(2026, 1, 1), datetime(1, 1, 1, tzinfo=utc.utc)):
+            with self.subTest(value=value):
+                self.assertIsNone(_month_key(value))
+        self.assertEqual(_month_key(datetime(2026, 2, 1, 2, 59, tzinfo=utc.utc)), "2026-01")

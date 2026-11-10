@@ -6,7 +6,7 @@ Disponível em `/cancelamentos/dashboard/`, pelo botão **Dashboard** da lista o
 
 Seis indicadores: total de processos oficiais, Concluídos, em andamento, valor total informado, multas contratuais e equipamentos. Pedido, Solicitação e Pendências compõem o andamento; cada processo conta uma vez. Entrada OTRS não é processo oficial e não integra os totais.
 
-O período usa `CancellationProcess.created_at`, preservado na importação. Não utiliza abertura do ticket ou conclusão como substitutos. Os meses usam o fuso da aplicação. No MySQL, as tabelas de fusos precisam estar disponíveis para as funções temporais Django, como nas demais consultas temporais do projeto.
+O período usa `CancellationProcess.created_at`, preservado na importação. Não utiliza abertura do ticket ou conclusão como substitutos. Os meses são agrupados em Python com datetimes aware e `timezone.localtime`, usando o fuso da aplicação. O dashboard não depende de `TruncMonth`, `CONVERT_TZ` ou das tabelas de timezone do MySQL. Datas ausentes ou que não podem ser convertidas não recebem mês presumido.
 
 Atalhos: Este mês, Últimos 3 meses, Últimos 6 meses, Este ano e Personalizado. Meses são calendários, terminando na data atual. O padrão é o ano corrente quando os registros mais recentes estão nele; se o último registro pertence a outro ano, oferece esse ano com dados. A consulta personalizada admite até dez anos. Filtros inválidos retornam erros e nenhum dado agregado.
 
@@ -31,4 +31,4 @@ NULL continua desconhecido; zero informado continua zero. Um total com categoria
 
 `view_cancellations` protege a rota e o serviço. `view_cancellation_finance` controla todos os dados monetários. Sem essa permission, os três KPIs financeiros mostram acesso restrito e valores não são serializados no HTML, JSON dos gráficos, tabela ou tooltips. `CancellationScope` filtra antes das opções, agregações e rankings; registros sem vínculo confiável ou mistos mantêm as restrições existentes. Superuser conserva seu acesso global.
 
-As consultas agrupam dimensões, mês e etapa no banco, sem carregar processos completos no navegador, criar tabelas de agregação ou disparar integrações. Os testes cobrem datas importadas, limite de mês no fuso local, filtros, aliases, NULL/zero, repetição de cobrança em pendência, permissions e Data Scope. Não há migration nova para este dashboard.
+As consultas agrupam dimensões, timestamps brutos e etapa no banco; a consolidação mensal acontece em Python após RBAC/Data Scope e filtros. Somente os campos necessários são lidos, sem carregar processos completos no navegador, criar tabelas de agregação ou disparar integrações. Os testes cobrem datas importadas, ausência das tabelas de timezone MySQL, limite de mês no fuso local, filtros, aliases, NULL/zero, repetição de cobrança em pendência, permissions e Data Scope. Não há migration nova para este dashboard.

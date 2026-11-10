@@ -6,7 +6,6 @@ from decimal import Decimal
 from django import forms
 from django.core.exceptions import PermissionDenied
 from django.db.models import Count, Max, Q, Sum
-from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
 from aplicativos.base_links.services.cmdb.excel_provider import normalize_provider
@@ -87,12 +86,27 @@ def _finish(bucket):
             **{k.lower() + "_label": format_brl(bucket["amounts"][k]) for k in KINDS}}
 
 
+def _local_datetime(value):
+    # ORM datetimes are aware with USE_TZ; never guess missing/invalid historical dates.
+    if not isinstance(value, datetime) or timezone.is_naive(value):
+        return None
+    try:
+        return timezone.localtime(value)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _month_key(value):
+    local = _local_datetime(value)
+    return f"{local.year:04}-{local.month:02}" if local else None
+
+
 def build_dashboard(user, params):
     if not user.has_perm("cancelamentos.view_cancellations"):
         raise PermissionDenied
     base = CancellationScope.processes(user)
-    latest = base.aggregate(latest=Max("created_at"))["latest"]
-    default_year = timezone.localtime(latest).year if latest else timezone.localdate().year
+    latest = _local_datetime(base.aggregate(latest=Max("created_at"))["latest"])
+    default_year = latest.year if latest else timezone.localdate().year
     contexts, isps, catalog = {}, {}, []
     for raw in base.order_by().values(*DIMENSIONS).distinct():
         item = dimension(raw)
@@ -120,26 +134,28 @@ def build_dashboard(user, params):
     can_finance = user.has_perm("cancelamentos.view_cancellation_finance")
     total, months, providers, clients = _bucket(), defaultdict(_bucket), defaultdict(_bucket), defaultdict(_bucket)
     stages = {stage: 0 for stage, _ in CancellationProcess.Stage.choices}
-    for row in (processes.order_by().annotate(month=TruncMonth("created_at"))
-                .values("month", "stage", *DIMENSIONS).annotate(n=Count("pk"))):
+    # Group raw timestamps in SQL, then combine months in the application's timezone.
+    # TruncMonth/CONVERT_TZ requires MySQL timezone tables which may not be installed.
+    for row in (processes.order_by().values("created_at", "stage", *DIMENSIONS)
+                .annotate(n=Count("pk")).iterator()):
         item = dimension(row)
-        key = row["month"].strftime("%Y-%m")
+        key = _month_key(row["created_at"])
         provider, client = providers[item["isp_key"]], clients[item["context_key"]]
         provider["label"], client["label"] = isps[item["isp_key"]], contexts[item["context_key"]]
         stages[row["stage"]] += row["n"]
-        for bucket in (total, months[key], provider, client):
+        for bucket in (total, provider, client, *([months[key]] if key else [])):
             bucket["count"] += row["n"]
             bucket["completed"] += row["n"] if row["stage"] == "COMPLETED" else 0
     if can_finance:
         dimensions = ["process__" + f for f in DIMENSIONS]
         ledger = FinancialObligation.objects.filter(process__in=processes).annotate(
-            month=TruncMonth("process__created_at"), amount=principal_amount_expression(), category=principal_kind_expression())
-        for row in (ledger.order_by().values("month", "category", *dimensions).annotate(
+            amount=principal_amount_expression(), category=principal_kind_expression())
+        for row in (ledger.order_by().values("process__created_at", "category", *dimensions).annotate(
                 value=Sum("amount"), known_processes=Count("process_id", distinct=True, filter=Q(amount__isnull=False)),
-                nulls=Count("pk", filter=Q(amount__isnull=True)))):
+                nulls=Count("pk", filter=Q(amount__isnull=True))).iterator()):
             item, category = dimension(row, "process__"), row["category"]
-            key = row["month"].strftime("%Y-%m")
-            for bucket in (total, months[key], providers[item["isp_key"]], clients[item["context_key"]]):
+            key = _month_key(row["process__created_at"])
+            for bucket in (total, providers[item["isp_key"]], clients[item["context_key"]], *([months[key]] if key else [])):
                 if row["value"] is not None:
                     bucket["amounts"][category] = (bucket["amounts"][category] or Decimal(0)) + row["value"].quantize(Decimal("0.01"))
                 bucket["known"][category] += row["known_processes"]
