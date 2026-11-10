@@ -340,6 +340,40 @@ class OTRSStateMapping(models.Model):
         return f"{self.external_name} → {self.business_status}"
 
 
+class OTRSBacklogHistory(models.Model):
+    """Coverage of the last atomic, read-only NOC history reconstruction."""
+
+    queue_name = models.CharField(max_length=250, unique=True)
+    earliest_at = models.DateTimeField()
+    through = models.DateTimeField()
+    ticket_count = models.PositiveIntegerField(default=0)
+    event_count = models.PositiveIntegerField(default=0)
+    diagnostics = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class OTRSBacklogInterval(models.Model):
+    """Proven active membership or an explicitly unknown lifecycle interval."""
+
+    coverage = models.ForeignKey(OTRSBacklogHistory, on_delete=models.CASCADE, related_name="intervals")
+    ticket_external_id = models.PositiveBigIntegerField(db_index=True)
+    source_event_id = models.PositiveBigIntegerField(default=0)
+    source_created_at = models.DateTimeField()
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField()
+    known = models.BooleanField(default=True)
+    business_status = models.CharField(max_length=16, blank=True)
+    external_state_name = models.CharField(max_length=250, blank=True)
+    responsibility = models.CharField(max_length=20, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("coverage", "started_at", "ended_at"), name="otrs_backlog_interval_idx")]
+        constraints = [models.UniqueConstraint(
+            fields=("coverage", "ticket_external_id", "source_event_id", "started_at"),
+            name="uniq_otrs_backlog_interval",
+        )]
+
+
 class OTRSTicket(models.Model):
     external_id = models.PositiveBigIntegerField(unique=True)
     ticket_number = models.CharField(max_length=80, unique=True)

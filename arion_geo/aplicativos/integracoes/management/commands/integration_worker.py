@@ -53,6 +53,7 @@ class Command(BaseCommand):
                     self.stderr.write(self.style.ERROR("Worker lease lost; stopping to avoid duplicate scheduling."))
                     break
                 self._schedule_once(timezone.now())
+                self._backlog_history(timezone.now())
                 self._cancellation_intake()
                 if options["once"]:
                     break
@@ -102,6 +103,23 @@ class Command(BaseCommand):
         if self._run_due(fast_run, full_success, self.FAST_CADENCE, now, retry_state=otrs_state):
             self._due("otrs_fast", now, self._otrs_fast)
         self._quality_tq_correlation(now)
+
+    def _backlog_history(self, now):
+        from aplicativos.integracoes.clients.factory import otrs_configuration_notice
+
+        integration = Integration.objects.filter(key=Integration.Key.OTRS).first()
+        if otrs_configuration_notice(integration):
+            return
+        state = IntegrationSyncState.objects.filter(key="otrs_backlog_history").first()
+        if state and state.last_error_at:
+            if now < state.last_error_at + self._retry_delay(state.failure_count):
+                return
+        elif state and state.last_success_at and now < state.last_success_at + timedelta(hours=1):
+            return
+        try:
+            call_command("sincronizar_historico_backlog", apply=True, stdout=self.stdout, stderr=self.stderr)
+        except Exception as exc:
+            self.stderr.write(f"Histórico backlog: {self._safe_error_summary(exc)}; cache anterior preservado.")
 
     def _cancellation_intake(self):
         from aplicativos.cancelamentos.services.otrs_intake import project_intakes

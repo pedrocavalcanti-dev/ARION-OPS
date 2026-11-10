@@ -554,7 +554,9 @@ button.cockpit-calendar-day:hover { border-color:var(--accent-teal); box-shadow:
 .cockpit-ops-bar.cancel-closed { background:color-mix(in srgb,var(--arion-orange) 48%,var(--surface-primary)); border:1px solid var(--arion-orange); }
 .cockpit-ops-legend i.backlog-line-key { width:15px; height:2px; border-radius:0; background:var(--accent-blue); }
 .cockpit-point-tooltip { z-index:7; }
-.cockpit-ops-point:hover .cockpit-point-tooltip,.cockpit-ops-point:focus-visible .cockpit-point-tooltip { display:grid; }
+.cockpit-ops-point:hover .cockpit-point-tooltip,.cockpit-ops-point:focus-visible .cockpit-point-tooltip,.cockpit-ops-point[data-tooltip-open="true"] .cockpit-point-tooltip { display:grid; }
+.cockpit-ops-point:first-child .cockpit-point-tooltip { left:0; transform:translateY(4px); }
+.cockpit-ops-point:last-child .cockpit-point-tooltip { right:0; left:auto; transform:translateY(4px); }
 .cockpit-kpi-info { width:14px; height:14px; margin-left:4px; padding:0; border:1px solid var(--border-strong); border-radius:50%; background:transparent; color:var(--text-muted); font:inherit; font-size:8px; line-height:12px; cursor:help; vertical-align:middle; }
 .cockpit-kpi-info:focus-visible { outline:2px solid var(--accent-teal); outline-offset:2px; }
 .cockpit-aging-chart > header { margin-bottom:10px; }

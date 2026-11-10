@@ -361,6 +361,21 @@ class AnalyticsQueryService:
             include_improcedente=include_improcedente,
             backlog_observations=backlog_observations,
         )
+        if scope == "support":
+            from .backlog_history import reconstructed_backlog
+
+            reconstruction = reconstructed_backlog(
+                user=user, links=allowed_links, filters=filters, buckets=operational_buckets,
+                period_end=end_exclusive, apply_filters=self._apply_filters,
+            )
+            points = reconstruction.pop("points")
+            operational["backlog_history"] = reconstruction
+            for point in operational["series"]:
+                evidence = points.get(point["key"], {})
+                point["backlog_reconstructed"] = evidence.get("value")
+                point["backlog_reconstructed_at"] = evidence.get("at")
+                point["backlog_reconstructed_position"] = evidence.get("position")
+                point["backlog_unknown_tickets"] = evidence.get("unknown_tickets")
         date_field = self._metric_date_field(metric)
         if metric in self.SNAPSHOT_METRICS:
             temporal_rows = filtered

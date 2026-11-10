@@ -313,6 +313,29 @@ class OTRSReadOnlyClient:
             finally:
                 self._active_connection = None
 
+    @contextmanager
+    def read_only_snapshot(self):
+        """One repeatable, read-only source snapshot for multi-query histories."""
+        application_error = None
+        with self.read_only_session():
+            with self._active_connection.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+            try:
+                yield self
+            except Exception as exc:
+                # execute_select already sanitizes driver failures. Preserve
+                # caller validation errors instead of relabeling them as SQL.
+                application_error = exc
+            finally:
+                try:
+                    self._active_connection.rollback()
+                except Exception:
+                    if application_error is None:
+                        raise
+        if application_error is not None:
+            raise application_error
+
     def quote_table(self, table_name, database=None):
         table = self._validated_table(table_name, self._validated_database(database))
         return f"`{table}`"

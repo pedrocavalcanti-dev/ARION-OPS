@@ -37,6 +37,8 @@ A Central de Integrações organiza conexão, último teste, sincronização, re
 
 O ranking inclui Score Operacional comparativo com amostra mínima e métricas normalizadas por exposição; SLA não é inferido. As páginas analíticas e de Chamados compartilham consultas locais escopadas, reduzem agregações repetidas e não carregam todos os tickets antecipadamente. A Gestão de Acessos acrescenta `autenticacao.0001_initial`, `configuracoes.0010_alter_groupdatascope_options` e `configuracoes.0011_seed_management_group`; a migration de dados `integracoes.0014_normalize_closed_operational_status` permanece parte do plano de publicação.
 
+O Cockpit Suporte reconstrói a evolução de backlog pelos eventos reais de estado, fila e procedência OTRS, incluindo reaberturas e tickets que saíram da fila. A migration aditiva `integracoes.0016` cria o cache de intervalos; `sincronizar_historico_backlog` e o worker existente atualizam somente essa base local. A série reconstruída é distinta das capturas FULL, preserva lacunas como indisponíveis e aplica Data Scope antes das contagens. Detalhes e limitações estão na [documentação do Cockpit](../05-funcionalidades/cockpit.md).
+
 ## Banco e fontes
 
 **Autoria:** Concepção e desenvolvimento por **Pedro Cavalcanti** para apoio às operações do **NOC ATACADO** da ARION Serviços de Telecomunicações.

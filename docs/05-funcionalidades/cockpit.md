@@ -66,11 +66,38 @@ O atalho **Improcedentes** continua filtrando especificamente os tickets cuja pr
 
 O saldo do fluxo e a variação do estoque podem divergir: backlog e aging representam somente tickets `OPEN` e `PENDING`, sem `SCHEDULED`, improcedentes ou desconhecidos.
 
-O mirror atual não persiste um ledger completo de transições, reaberturas e pertencimento às filas. Para começar uma série confiável de estoque, cada FULL aplicada com sucesso grava um snapshot operacional imutável por dia e assinatura exata de filas. O snapshot guarda o estado dos tickets presentes, suas datas operacionais e as dimensões de ConfigItems observadas naquele momento. O estado de backlog considera apenas `OPEN` e `PENDING`, excluindo improcedentes.
+### Backlog histórico reconstruído e backlog observado
 
-Cada ponto de backlog é a observação no horário da FULL, não um fechamento projetado do dia, semana ou mês. Se não houver snapshot dentro do período ou de um intervalo do gráfico, esse ponto fica ausente; não se preenche lacuna com zero. Snapshots são deduplicados por cobertura e data local. Filtros de Provedor, UF e Projeto/cliente usam os valores capturados junto ao snapshot, e tickets com múltiplos ConfigItems são contados uma vez. Data Scope continua aplicado pelos ConfigItems atualmente autorizados ao usuário antes da contagem.
+Em **Suporte**, o modo **Backlog** usa os intervalos locais `OTRSBacklogHistory` / `OTRSBacklogInterval`, reconstruídos do `ticket_history` autorizado. A população inclui tickets que passaram pela fila exata `NOC - ATACADO`, inclusive os que já saíram dela. Não se limita aos tickets atualmente presentes no mirror. Os eventos de estado e fila permitem contar entradas, saídas, cancelamentos e reaberturas. O histórico do campo de procedência permite excluir improcedentes no instante em que a classificação era conhecida. Cada instante conta TicketIDs distintos, somente em `OPEN` ou `PENDING`; estados terminais, agendados e desconhecidos não compõem o estoque.
 
-O aviso antigo dependia apenas de datas presentes nas linhas atuais. A normalização do alias legado `CLOSED` ampliou as linhas terminais avaliadas e tornou visíveis datas de resolução ausentes; uma FULL também tira do conjunto atual tickets que saíram das filas. Em cada sincronização, campos de resolução ausentes na leitura OTRS são gravados como ausentes no mirror. Preservar automaticamente uma data antiga seria incorreto quando houve reabertura, então o serviço falha de forma conservadora em vez de transformar esse conjunto mutável em uma história de estoque.
+O comando `sincronizar_historico_backlog` usa a integração e o cliente OTRS existentes, com transação de leitura consistente, lotes limitados e lease compartilhado. Lê somente IDs, estados, filas, datas e o campo específico de procedência; não lê artigos, anexos, autores ou títulos. Por padrão faz preview; `--apply` substitui atomicamente apenas o cache local. Falhas preservam a cobertura anterior. O `integration_worker` agenda essa carga a cada hora, com estado e backoff próprios; nenhuma consulta HTTP acessa o OTRS remoto.
+
+```powershell
+.venv\Scripts\python.exe arion_geo\gerenciar.py sincronizar_historico_backlog
+.venv\Scripts\python.exe arion_geo\gerenciar.py sincronizar_historico_backlog --apply
+```
+
+A migration aditiva `integracoes.0016` cria o cache. A reconstrução parte dos estados realmente registrados, sem supor backlog inicial zero, sem usar o estado atual como estado passado e sem somar Novos menos Resolvidos do mirror para simular um ledger. Os pontos correspondem ao fechamento do intervalo selecionado, limitado ao horário coberto pela extração. O mês corrente pode ter ponto parcial no horário real de cobertura. Granularidade horária, diária, semanal ou mensal segue o período da consulta. Os DATETIME dos eventos seguem o fuso local OTRS já utilizado pelo sincronizador; o limite da carga usa explicitamente `UTC_TIMESTAMP()` em UTC, sem aplicar novamente o deslocamento local ao relógio SQL. As sete tabelas da fonte são verificadas como InnoDB antes da leitura consistente.
+
+Antes da primeira evidência de um ticket ou em uma cauda sem reconciliação com a fonte, o intervalo permanece desconhecido. Se uma dessas lacunas atingir o instante do ponto, o valor é `NULL`, com indicação de indisponibilidade; nunca vira zero. A linha histórica é interrompida nesses trechos. Eventos fisicamente apagados da origem não podem ser recuperados pelo cache; histórico com referências a tickets ausentes impede a publicação silenciosa de uma população incompleta.
+
+Data Scope é aplicado antes da agregação pelos vínculos CMDB atualmente autorizados, inclusive para tickets que deixaram a fila. Provedor, UF, cliente/projeto, serviço, SLA, responsável e motivo usam as dimensões disponíveis atualmente no mirror quando selecionados; a interface informa que esse recorte não prova a atribuição histórica dessas dimensões. Estado, fila, procedência e idade, por sua vez, são avaliados no instante histórico. Um vínculo permitido não amplia as opções de filtro para vínculos não autorizados. Superuser conserva o acesso global.
+
+**Backlog observado** continua separado em `operational.backlog` e nos campos originais da série, com origem e horário FULL. Cada FULL aplicada com sucesso grava um snapshot imutável por dia e assinatura de filas, com as dimensões de ConfigItems capturadas. Esses pontos são fotografias, não fechamentos históricos. Quando o cache de eventos ainda não estiver carregado, o gráfico identifica explicitamente a alternativa como **Backlog observado (FULL)**; não a apresenta como reconstrução. Os contextos Geral e Cancelamentos mantêm suas observações existentes. Os indicadores atuais e o aging não são recalculados por esta nova série.
+
+**Ambos** exibe Novos e Resolvidos; **Novos** e **Resolvidos** isolam as respectivas barras. **Backlog** exibe a linha de estoque com legenda, data/hora e origem próprias. Capturas FULL não são misturadas na linha reconstruída.
+
+### Diagnóstico da regressão e validação da recuperação
+
+| Versão | Cálculo e consequência |
+| --- | --- |
+| `c25e6dd` | `AnalyticsQueryService._operational_summary` montava baseline e saldo acumulado por criação e encerramento dos tickets do mirror atual. Dependia de completude de datas; não tinha todos os ciclos de reabertura ou transferências. |
+| `ac1c722` | Desativou a reconstrução não comprovada pelo mirror mutável. A correção da normalização de estados tornou as lacunas de datas mais visíveis. |
+| `1ebc12c` | Substituiu a origem da série por capturas FULL locais, sem recuperar os eventos históricos da origem. |
+| `649b8eb` | Explicou a captura única na interface, mas não recuperou a evolução histórica. |
+| Implementação atual | Reconstrói intervalos com eventos reais OTRS e preserva fotografias FULL como métrica separada. |
+
+Na validação DEV, a extração de **10/11/2026 às 09:50:06 (America/Sao_Paulo)** encontrou **13.190 tickets**, **105.183 eventos selecionados** e **17.295 intervalos ativos ou explicitamente desconhecidos**. Os **12 fechamentos calculados**, de dezembro/2025 a novembro/2026, tiveram cobertura suficiente: **9, 13, 12, 26, 11, 17, 19, 11, 13, 3, 12, 31**. Novembro representa o instante final da extração, não o fim futuro do mês. São valores calculados dos intervalos, não apenas 12 rótulos no eixo. A fotografia FULL anterior de **35 em 09/11 às 11:27** continua como observação separada; os horários e as origens diferem. Esses números documentam o recorte conferido; a carga horária pode atualizar o mês corrente.
 
 **Novos** e **Resolvidos** usam as datas disponíveis nas linhas atuais do mirror e contam TicketIDs distintos. Um ticket em `RESOLVED` ou no alias legado `CLOSED` contribui uma vez para a categoria Resolvido; cancelamento permanece separado. Como o mirror não guarda todos os ciclos de reabertura nem tickets que saíram das filas, essas séries podem omitir eventos antigos. Elas não são um ledger histórico completo e não devem ser usadas para reconstruir o estoque. A data de criação não representa entrada na fila. Dimensões de Provedor, UF e Projeto/cliente nos eventos atuais descrevem os vínculos disponíveis no mirror, não comprovam a atribuição histórica na data do evento.
 
