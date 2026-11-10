@@ -16,6 +16,9 @@ venv/
 
 # Django
 arion_geo/db.sqlite3
+arion_geo/db.sqlite3-journal
+arion_geo/db.sqlite3-wal
+arion_geo/db.sqlite3-shm
 var/database-config.json
 var/logs/
 var/backups/

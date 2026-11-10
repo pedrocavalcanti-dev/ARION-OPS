@@ -171,14 +171,20 @@ def _assert_all_migrations_applied(alias):
     return report
 
 
-def prepare_candidate_schema():
+def prepare_candidate_schema(*, full_snapshot=False):
     _require_candidate_test()
     with candidate_database() as alias:
         try:
+            if full_snapshot:
+                from .arion_database_snapshot import assert_empty_before_prepare
+                assert_empty_before_prepare(alias)
             recorder = MigrationRecorder(connections[alias])
             before = len(recorder.applied_migrations())
             call_command("migrate", database=alias, interactive=False, verbosity=0)
             _ensure_current_model_permissions(alias)
+            if full_snapshot:
+                from .arion_database_snapshot import prepare_empty_snapshot_candidate
+                prepare_empty_snapshot_candidate(alias)
             report = _assert_all_migrations_applied(alias)
             report["newly_applied"] = max(0, report["applied_migrations"] - before)
         except ValidationError:
@@ -678,6 +684,8 @@ def copy_local_data(*, source_alias="default"):
     state = migration_state()
     if not state["schema_prepared"]:
         raise ValidationError("Prepare o schema MySQL candidato antes de copiar dados locais.")
+    if apps.get_model("cancelamentos", "CancellationProcess").objects.using(source_alias).exists():
+        raise ValidationError("A origem contém Cancelamentos. Use migrar_banco_arion --full-snapshot com snapshot explícito e candidato vazio para preservar todo o domínio.")
     backup_path = None
     if connections[source_alias].vendor == "sqlite":
         backup_path = create_sqlite_backup(source_alias=source_alias)

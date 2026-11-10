@@ -213,6 +213,8 @@ def _process_context(request, pk):
     for pending in pendings:
         reference = getattr(pending, "legacy_reference", None)
         pending.historical_creator = pending_names.get(reference.source_data.get("criada_por_id"), "Nome não disponível") if reference else ""
+        if reference and reference.entity == "workbook_pending":
+            pending.historical_creator = reference.source_data.get("creator_name") or "Nome não disponível"
         pending.historical_responsible = legacy["responsible_name"] if reference and legacy else ""
         pending.can_resolve = False
         if can_pending and pending.status == "OPEN" and (manage_finance or not pending_is_financial(pending)):

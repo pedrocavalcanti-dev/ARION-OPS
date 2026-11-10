@@ -1,8 +1,35 @@
 # Cancelamentos — importação histórica ArionBroker
 
-Estado em 09/11/2026: **importação histórica executada com sucesso no SQLite DEV**. O importador foi refatorado para suportar duas modalidades: SQLite DEV (via `--allow-sqlite-dev`, restrito a ambiente de desenvolvimento) e MySQL 8 DEV (para migrações futuras com schema `arion_geo_dev`). Todas as 2.147 referências de origem foram importadas e reconciliadas, preservando contas, permissões, triagens OTRS e vínculos CMDB existentes.
+Estado em 10/11/2026: **162 processos históricos no SQLite DEV, com reconciliação posterior por Excel**. A carga original de 09/11 preserva suas 2.147 referências imutáveis. O relatório posterior é aplicado separadamente, sem reimportar processos, substituir responsáveis atuais ou modificar OTRS/CMDB. O importador original mantém as modalidades SQLite DEV explicitamente autorizado e MySQL 8 DEV; isso não equivale a um ensaio MySQL já executado.
 
-## Snapshot conferido
+## Atualizações posteriores por relatório
+
+`reconciliar_cancelamentos_excel` relaciona `Ticket Arion` à identidade original importada, valida fila/status, utiliza o fuso declarado e registra cada alteração como nova evidência/auditoria. O relatório de 10/11/2026 contém **11 Pedidos, 5 Solicitações, 3 Pendências e 143 Concluídos**, totalizando 162: quatro mudanças de etapa em relação à carga inicial, incluindo duas conclusões históricas.
+
+As datas/horas de conclusão são lidas da coluna `Conclusão`, independentemente de `Data Cancelamento`. Autor de conclusão ausente permanece nulo; o operador da reconciliação fica na auditoria e não vira o autor histórico. A aprovação de novas entradas OTRS continua humana; a reconciliação não cria pedidos nem comprova tratamento ISP, baixa de faturamento ou pagamento.
+
+As 172 pendências originais são reconhecidas por assinatura única de ticket, tipo, descrição, valor, data prevista e criação. Cinco pendências posteriores elevam o total para 177. Não há ID individual no Excel: a assinatura e a evidência são preservadas como origem `workbook_pending`, sem inventar PK legada. Status divergente ou correspondência ambígua bloqueia o Apply. Datas históricas anômalas já importadas são preservadas, sem correção presumida.
+
+O Excel informa `Valor Final`, mas não discrimina os três campos financeiros principais. Esses campos só são acrescentados com evidência complementar revisada, em JSON privado; não se deduzem valores principais somando pendências. A soma conhecida deve corresponder ao total informado no Excel. NULL permanece ausente, zero explícito é preservado e conciliação/pagamento continuam independentes.
+
+```powershell
+$arionExcel = 'C:\ARION\privado\relatorio_cancelamentos.xlsx'
+$arionValores = 'C:\ARION\privado\valores-principais.json'
+$arionAtor = 1 # substituir pelo ID ativo autorizado no DEV
+
+.venv\Scripts\python.exe arion_geo\gerenciar.py reconciliar_cancelamentos_excel --file $arionExcel --actor $arionAtor --principal-values $arionValores --report var/reconciliacao-cancelamentos/preview.json
+
+# Após revisar o preview e verificar um backup consistente do DEV:
+.venv\Scripts\python.exe arion_geo\gerenciar.py reconciliar_cancelamentos_excel --file $arionExcel --actor $arionAtor --principal-values $arionValores --apply --approved-report var/reconciliacao-cancelamentos/preview.json --report var/reconciliacao-cancelamentos/apply.json
+```
+
+Formato sintético de cada item do JSON complementar: `{"ticket":"900001","evidence":"Referência revisada dos campos principais","valor_multa_rescisao":"25.00","valor_equipamento":null,"valor_outros":null}`; o arquivo contém uma lista desses itens. Não versionar evidências reais. `--principal-values` é opcional quando os valores principais existentes já correspondem ao relatório.
+
+Preview não altera domínio. Apply exige permission de importação, escopo global, DEV, fingerprint atual sem conflitos e revisão local compatível; alterações locais não são sobrescritas. Pause escritas concorrentes de Web/Worker DEV durante o Apply em SQLite para evitar disputa pelo único escritor. Repetição do mesmo estado não cria pendências, valores ou eventos adicionais. O comando não modifica as evidências originais e não dispensa o diagnóstico/dump para mudanças não comprovadas pelo relatório.
+
+Para levar **todo o banco ARION**, incluindo estes deltas, ao servidor, siga [Transferência completa para MySQL](../06-integracoes-e-dados/migracao-completa-arion-mysql.md). O modo antigo de seleção de modelos não cobre Cancelamentos e não deve ser usado para essa transferência.
+
+## Snapshot da carga inicial
 
 Os quatro arquivos ficam fora do Git, em diretório privado definido por `--source-dir` ou `ARION_CANCELAMENTOS_MIGRATION_DIR`. Não são copiados para static, media ou fixtures. O leitor não executa SQL: interpreta apenas INSERTs com colunas explícitas e literais, validando aspas, escapes, Unicode, NULL, Decimal, PKs e referências. O schema é lido como metadados; seus DROP/CREATE nunca são enviados ao destino.
 
@@ -126,17 +153,16 @@ Procedimento mantido para quando o ambiente MySQL 8 DEV dedicado for provisionad
 3. Parar somente Web/Worker DEV durante o corte. Fazer backup consistente e imutável do SQLite atual e registrar seu caminho. Reutilizar a migração existente do próprio ARION para transportar suas contas, escopos, integrações, mirrors, entradas e os cancelamentos já importados.
 
 ```powershell
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --prepare
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --dry-run --source-sqlite $arionSqliteSnapshot
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --copy-local-data --source-sqlite $arionSqliteSnapshot
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --validate --source-sqlite $arionSqliteSnapshot
-.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --activate
+.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --prepare --full-snapshot
+.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --dry-run --full-snapshot --source-sqlite $arionSqliteSnapshot --report var/transferencia-arion/mysql-preview.json
+.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --copy-local-data --full-snapshot --source-sqlite $arionSqliteSnapshot --approved-report var/transferencia-arion/mysql-preview.json --report var/transferencia-arion/mysql-copy.json
+.venv\Scripts\python.exe arion_geo\gerenciar.py migrar_banco_arion --target mysql --validate --full-snapshot --source-sqlite $arionSqliteSnapshot --report var/transferencia-arion/mysql-validation.json
 ```
 
-4. Reiniciar somente processos DEV com a configuração validada. Confirmar no novo processo `ARION_ENV=development`, backend mysql, `DATABASE()=arion_geo_dev`, versão 8, usuário/porta locais; conferir contagens transportadas, RBAC e mirrors. O mecanismo suporta rollback ao SQLite; manter o backup. Não imprimir a configuração com senha/URL completa.
+4. Somente após o ensaio e em etapa autorizada, ativar a configuração validada e reiniciar processos DEV. Confirmar no novo processo `ARION_ENV=development`, backend mysql, `DATABASE()=arion_geo_dev`, versão 8, usuário/porta locais; conferir contagens transportadas, RBAC e mirrors. Reconfigurar credenciais das integrações na conta Windows de destino: o snapshot não transfere secrets. O mecanismo suporta rollback de conexão ao SQLite; manter o backup. Não imprimir a configuração com senha/URL completa.
 5. Executar `check` e verificar migrations no MySQL.
 
-## Validação desta etapa
+## Validação da carga inicial (09/11/2026)
 
 - Preview real: 2.147 registros, estrutura/colunas/tipos e relacionamentos conferidos; nenhum SQL de origem executado.
 - Reconciliação e Apply SQLite DEV: 162 cancelamentos, 1.084 eventos, 594 movimentações, 135 observações, 172 pendências e 421 obrigações financeiras importados com sucesso; zero falhas, zero duplicações, transações atômicas por processo.

@@ -48,6 +48,7 @@ def legacy_context(process, user):
 
 
 EVENT_TITLES = {
+    "legacy_reconcile": "Estado histórico reconciliado com o ArionBroker",
     "legacy_historicofila": "Etapa alterada", "legacy_observacaocancelamento": "Observação registrada",
     "legacy_historicocancelamento": "Atualização do atendimento", "pending_add": "Pendência adicionada",
     "pending_update": "Pendência atualizada", "pending_resolve": "Pendência resolvida ou encaminhada",

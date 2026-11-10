@@ -1,5 +1,8 @@
 ﻿from django.core.management.base import BaseCommand, CommandError
 from django.core.exceptions import ValidationError
+from django.conf import settings
+import json
+from pathlib import Path
 
 from aplicativos.integracoes.services.arion_database import activate_candidate, rollback_to_previous
 from aplicativos.integracoes.services.arion_database_migration import (
@@ -21,9 +24,14 @@ class Command(BaseCommand):
         phases.add_argument("--activate", action="store_true")
         phases.add_argument("--rollback", action="store_true")
         parser.add_argument("--source-sqlite", help="Arquivo SQLite imutavel usado como origem.")
+        parser.add_argument("--full-snapshot", action="store_true", help="Todos os models/M:N para candidato vazio; sem sessões, leases ou secrets.")
+        parser.add_argument("--report", help="JSON privado em var/, obrigatório no snapshot completo.")
+        parser.add_argument("--approved-report", help="Preview aprovado para cópia completa.")
 
     def handle(self, *args, **options):
         try:
+            if options["full_snapshot"] and not options["prepare"] and (not options.get("source_sqlite") or not any(options[k] for k in ("dry_run", "copy_local_data", "validate"))):
+                raise CommandError("--full-snapshot exige --prepare ou --source-sqlite com --dry-run, --copy-local-data ou --validate.")
             if options.get("source_sqlite") and not any(options[key] for key in ("dry_run", "copy_local_data", "validate")):
                 raise CommandError("--source-sqlite so pode ser usado com --dry-run, --copy-local-data ou --validate.")
             if options["rollback"]:
@@ -35,7 +43,7 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS("MySQL validado configurado para o proximo inicio; reinicie web e worker."))
                 return
             if options["prepare"]:
-                report = prepare_candidate_schema()
+                report = prepare_candidate_schema(full_snapshot=True) if options["full_snapshot"] else prepare_candidate_schema()
                 if report["newly_applied"]:
                     message = f"Schema preparado; migrations aplicadas nesta etapa: {report['newly_applied']} (total: {report['applied_migrations']})."
                 else:
@@ -64,6 +72,22 @@ class Command(BaseCommand):
                      if options.get(name)), "unknown")
 
     def _run_data_phase(self, options, source_alias):
+        if options.get("full_snapshot"):
+            from aplicativos.integracoes.services.arion_database_snapshot import run_snapshot_phase
+            path = Path(options.get("report") or "").resolve()
+            if not path.is_relative_to((Path(settings.BASE_DIR).parent / "var").resolve()) or path.suffix != ".json":
+                raise CommandError("Snapshot completo exige --report JSON privado dentro de var/.")
+            approved_path = options.get("approved_report")
+            approved = json.loads(Path(approved_path).read_text(encoding="utf-8")) if approved_path else None
+            if approved_path and Path(approved_path).resolve() == path:
+                raise CommandError("Preserve o preview aprovado em arquivo separado.")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8"):
+                pass
+            report = run_snapshot_phase(source_alias, self._selected_stage(options), approved=approved)
+            path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.stdout.write(self.style.SUCCESS(f"Snapshot completo: {self._selected_stage(options)}; relatório privado gravado; conflitos: {len(report.get('conflicts', []))}."))
+            return
         if options["dry_run"]:
             report = dry_run_migration(source_alias=source_alias)
             self.stdout.write(self.style.SUCCESS(

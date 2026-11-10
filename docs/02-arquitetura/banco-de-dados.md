@@ -208,6 +208,8 @@ Os nomes e campos da tabela acima vêm de models/migrations; os motivos são inf
 
 ## Migração SQLite → MySQL
 
+Há dois modos: o fluxo seletivo descrito abaixo e `migrar_banco_arion --full-snapshot`, que transfere todos os modelos gerenciados e relações M:N para candidato vazio. Para uma base que já contém Cancelamentos, use o [roteiro de transferência completa](../06-integracoes-e-dados/migracao-completa-arion-mysql.md): o fluxo seletivo bloqueia sua cópia para não omitir processos e históricos. O modo completo preserva os mirrors, dispensa sessões/leases e exige reconfiguração das credenciais no destino; não ativa a conexão automaticamente.
+
 ### Preparar cópia
 
 ```mermaid
