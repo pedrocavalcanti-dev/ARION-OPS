@@ -1,6 +1,55 @@
 {
-  "current_version": "1.3.1",
+  "current_version": "1.4.0",
   "releases": [
+    {
+      "version": "1.4.0",
+      "released_at": "2026-11-10",
+      "title": "ARION OPS 1.4.0 — Cancelamentos e consolidação operacional",
+      "summary": "Novo Dashboard Gerencial de Cancelamentos, fluxo operacional consolidado, leitura financeira consistente e melhorias em acessos, backlog, aging e documentação. Publicação de código; implantação Windows Server e carga histórica em produção permanecem separadas.",
+      "sections": [
+        {
+          "category": "Cancelamentos",
+          "items": [
+            "Triagem humana da Entrada OTRS, fluxo Pedido, Solicitação, Pendências e Concluídos, responsáveis, tratativas ISP, observações, equipamentos, histórico e auditoria. Importar ticket não cria cancelamento.",
+            "Dashboard Gerencial dedicado com seis KPIs, quatro gráficos, ranking de ISPs, resumo por cliente/projeto e filtros de período. Componentes locais ECharts e temas existentes reutilizados.",
+            "Total informado calculado com Decimal, sem repetir cobranças presentes em pendências. Valores ausentes e zero explícito permanecem distintos; conciliação e pagamento são informações separadas.",
+            "Importação ArionBroker no DEV com preview, dry-run, idempotência, nomes históricos e reconciliação posterior por relatório, preservando a origem e responsáveis atuais."
+          ]
+        },
+        {
+          "category": "Análise operacional e interface",
+          "items": [
+            "Cockpit recupera a evolução real do backlog mensal, mantendo lacunas quando falta histórico, com legenda e tooltips simplificados.",
+            "Aging do Dashboard geral passa a usar a mesma fila ativa de Chamados, incluindo agendados, sem alterar a regra do backlog histórico.",
+            "Menus e modais operacionais de Cancelamentos, fila de Pendências e sidebar da Documentação corrigidos; exploradores OTRS/CMDB e datas operacionais documentados."
+          ]
+        },
+        {
+          "category": "Qualidade e integrações consolidadas",
+          "items": [
+            "Fluxo OQ/TQ/RREIP e conclusão humana final revisados com testes focados; playbooks automáticos continuam fora do escopo.",
+            "Brevo SMTP/API com controles de envio, tratamento de resultado incerto e correlação exata por QID no OTRS preservados. Envio aceito não comprova criação do ticket.",
+            "Supervisor Windows e diagnóstico de Web/Worker refinados, com credenciais locais e fontes técnicas oficiais preservadas."
+          ]
+        },
+        {
+          "category": "Segurança e melhoria técnica",
+          "items": [
+            "Ciclo de convite, ativação e redefinição de senha consolidado; mínimo de oito caracteres e demais validadores mantidos.",
+            "Dashboard de Cancelamentos aplica RBAC e Data Scope antes das opções e agregados. Valores financeiros não são serializados para quem não possui a permission correspondente.",
+            "Agregações no backend, runtime de tema/gráficos compartilhado e build local sem dependência adicional. Modo de transferência integral preparado somente para candidato MySQL vazio."
+          ]
+        },
+        {
+          "category": "Implantação e limites",
+          "items": [
+            "Nota técnica, resumo gerencial e checklist Windows Server disponíveis na documentação. Nenhum deploy foi executado nesta publicação.",
+            "Git e migrations não transportam os dados históricos do DEV. O Apply histórico atual bloqueia produção; sua carga seletiva requer tarefa autorizada e homologação próprias.",
+            "Sem automação de pagamentos, alteração automática da CMDB, Microsoft 365/Entra ID, Linux/Docker, meteorologia ou GEO Intelligence futuro."
+          ]
+        }
+      ]
+    },
     {
       "version": "1.3.1",
       "released_at": "2026-11-06",

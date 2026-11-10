@@ -1,5 +1,7 @@
 # Cancelamentos — operação NOC
 
+O [Dashboard Gerencial](cancelamentos-dashboard.md) está em `/cancelamentos/dashboard/`, acessível pelo botão **Dashboard** da lista. Apresenta seis KPIs, quatro gráficos e resumo por cliente/projeto, sempre com permissions e Data Scope; valores financeiros exigem acesso específico.
+
 Estado: operação em DEV com 162 cancelamentos históricos importados do ArionBroker no SQLite DEV autorizado. A fila Pendências usa a etapa principal; pendências individuais são consultadas separadamente. Triagem humana, tratativa ISP, responsáveis, equipamentos e encaminhamento manual ao Financeiro permanecem locais, sem escrita OTRS/CMDB. Não houve deploy nem alteração de versão.
 
 ## Acesso e telas

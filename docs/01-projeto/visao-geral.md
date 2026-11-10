@@ -13,6 +13,7 @@ O sistema reduz a fragmentação entre consultas e facilita a exploração diár
 - Rankings de provedores/ISP;
 - Dashboard e Cockpit analítico;
 - Qualidade operacional (reincidências, OQs e ciclos RREIP);
+- Cancelamentos, da triagem humana ao acompanhamento oficial, com Dashboard Gerencial e valores informados;
 - Central de Relatórios (Claro Multas);
 - análise por projeto, cliente, operadora/ISP e comparação temporal.
 

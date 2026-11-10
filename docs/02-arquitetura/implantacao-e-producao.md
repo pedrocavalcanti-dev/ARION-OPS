@@ -1,5 +1,7 @@
 # Implantação e Produção
 
+Para o código 1.4.0, utilize o [checklist específico do Windows Server](../08-releases/v1.4.0-implantacao-windows.md), que separa atualização de código/schema, carga histórica de Cancelamentos e recuperação. Esta documentação não implica deploy executado. O importador histórico atual bloqueia produção; não contornar sua proteção alterando o ambiente.
+
 ## Arquitetura V1
 
 ```text

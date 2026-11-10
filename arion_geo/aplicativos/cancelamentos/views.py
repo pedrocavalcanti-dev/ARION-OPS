@@ -36,6 +36,13 @@ def module_access(view):
     return login_required(permission_required("cancelamentos.view_cancellations", raise_exception=True)(view))
 
 
+@module_access
+@never_cache
+def dashboard(request):
+    from .services.dashboard import build_dashboard
+    return render(request, "cancelamentos/dashboard.html", build_dashboard(request.user, request.GET))
+
+
 def _url_params(params, **changes):
     query = params.copy()
     query.pop("page", None)

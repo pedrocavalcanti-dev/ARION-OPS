@@ -19,7 +19,7 @@
       <h2>Navegação principal</h2>
       <nav aria-label="Navegação principal">
         <a href="{% url 'painel:index' %}"{% if request.resolver_match.app_name == 'painel' and request.resolver_match.url_name == 'index' %} aria-current="page"{% endif %}>Início</a>
-        {% if perms.configuracoes.view_dashboard %}<a href="{% url 'dashboard' %}"{% if request.resolver_match.url_name == 'dashboard' and request.resolver_match.app_name != 'qualidade' %} aria-current="page"{% endif %}>Dashboard</a>{% endif %}
+        {% if perms.configuracoes.view_dashboard %}<a href="{% url 'dashboard' %}"{% if request.resolver_match.view_name == 'dashboard' %} aria-current="page"{% endif %}>Dashboard</a>{% endif %}
         {% if perms.configuracoes.view_operational_tickets %}<a href="{% url 'chamados:index' %}"{% if request.resolver_match.app_name == 'chamados' %} aria-current="page"{% endif %}>Chamados</a>{% endif %}
         {% if perms.configuracoes.view_cockpit %}<a href="{% url 'cockpit' %}"{% if request.resolver_match.url_name == 'cockpit' %} aria-current="page"{% endif %}>Cockpit</a>{% endif %}
         {% if perms.configuracoes.view_map %}<a href="{% url 'mapa:index' %}"{% if request.resolver_match.app_name == 'mapa' %} aria-current="page"{% endif %}>Mapa</a>{% endif %}

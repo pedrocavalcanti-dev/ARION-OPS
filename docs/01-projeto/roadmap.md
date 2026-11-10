@@ -1,8 +1,8 @@
 # Roadmap de evolução
 
-Revisado em 02/11/2026. A versão **1.3.0** está registrada no catálogo interno `docs/08-releases/releases.json`. Este documento distingue explicitamente o que já está **IMPLEMENTADO** do que permanece **PLANEJADO**.
+Revisado em 10/11/2026. A versão **1.4.0** está registrada no catálogo interno `docs/08-releases/releases.json`. Este documento distingue o que está **IMPLEMENTADO** no código do que permanece **PLANEJADO**; publicação não equivale a implantação.
 
-## IMPLEMENTADO — Entregas 1.2.0 e 1.3.0 (Qualidade Operacional Fases 1 a 4, Dashboard, Cockpit, Rankings e Segurança)
+## IMPLEMENTADO — Entregas consolidadas até 1.4.0
 
 - **Identidade visual ARION OPS · NOC ATACADO:** consolidada nos templates, cabeçalho, login institucional, exportações e documentação, com crédito institucional em Sobre o ARION OPS e `NOTICE.md`.
 - **PWA e atualizações:** aviso de nova versão persistente em páginas autenticadas, indicador discreto no cabeçalho e ativação controlada pelo usuário.
@@ -11,14 +11,17 @@ Revisado em 02/11/2026. A versão **1.3.0** está registrada no catálogo intern
 - **Base inicial Claro Multas:** fluxo existente preservado no código; fica fora da navegação padrão da V1 apresentada.
 - **Qualidade Operacional (Fases 1–4):** Dashboard gerencial com ECharts local, carteira derivada de Links Prioritários (Ativos, Estabilizados e Todos), fila e detalhe completo de Ordens de Qualidade (Resumo, Ocorrências, Tratativas, Monitoramento RREIP de 30 dias e Histórico), diretório de contatos/escalonamentos e histórico auditado.
 - **Sincronização OTRS FAST/FULL:** cobertura das quatro filas operacionais do Cockpit com controle de lease e sinalização de cobertura aplicada.
+- **Cancelamentos:** triagem humana, fluxo oficial, histórico, valores informados e Dashboard Gerencial com filtros e controle financeiro. Importação e reconciliação histórica executadas somente no DEV.
+- **Qualidade/Brevo/OTRS:** solicitação de TQ por SMTP/API autorizada, envio idempotente e correlação exata por QID; monitoramento e decisão humana final da Qualidade.
+- **Acessos:** ciclo de convite, ativação e redefinição de senha, controles administrativos, RBAC, Data Scope e auditoria.
+- **Backlog e aging:** fechamento mensal histórico do Suporte e aging da fila atual do Dashboard alinhado à página Chamados.
 
 ## PLANEJADO — Próximas evoluções funcionais
 
 - **Central de Relatórios (fase futura):** evoluir o módulo para acompanhar resultados operacionais em tempo real por cliente/contrato e analisar desempenho operacional, SLA, qualidade, reincidência, volume, resultados alcançados e evolução ao longo do tempo. Apoiar também o acompanhamento do desempenho da ARION junto a clientes e contratos, incluindo rankings e indicadores fornecidos por clientes quando houver fonte oficial.
 
-- **Automação de abertura de TQ por e-mail (PLANEJADO):** preparação estruturada e envio automatizado de solicitação de Ticket de Qualidade (TQ) a partir da OQ (atualmente toda associação de TQ é manual sobre tickets já existentes no espelho OTRS).
 - **Critérios formais e playbooks R1–R5 na Qualidade (PLANEJADO):** formalização operacional definitiva dos critérios de classificação R1–R5 e playbooks orientados por nível.
-- **Histórico de movimentação de filas OTRS (PLANEJADO):** materialização de eventos `Move` e `StateUpdate` para medir duração histórica por etapa em Cancelamentos e Suporte.
+- **Duração histórica por etapa (PLANEJADO):** ampliar o uso de eventos para métricas homologadas de tempo em etapas de Cancelamentos/Suporte. O cache de estado/fila/procedência usado no backlog histórico de Suporte já está implementado.
 - **Evolução da ARI I.A (PLANEJADO):** conexão a provedor LLM aprovado com governança de dados e escopo (atualmente opera em modo Preview local).
 - **Histórico temporal de denominadores CMDB (PLANEJADO):** snapshots periódicos da base de links para permitir denominadores históricos em análises retrospectivas de longo prazo.
 - **Definições formais ANOP / ETIT e SLA contratual (PLANEJADO):** dependentes de homologação das regras de negócio com a operação antes de qualquer implementação.

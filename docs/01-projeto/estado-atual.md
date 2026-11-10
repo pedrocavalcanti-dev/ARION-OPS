@@ -1,8 +1,8 @@
 # Estado atual do ARION OPS
 
-Revisão estrutural em 08/11/2026 (Atualização incremental 1.3.1). A matriz descreve capacidades **IMPLEMENTADAS** no código, separadas explicitamente do que permanece **PLANEJADO** no [Roadmap](roadmap.md), sem publicar contagens voláteis de uma base específica.
+Revisão em 10/11/2026 (código 1.4.0). A matriz descreve capacidades **IMPLEMENTADAS**, separadas do que permanece **PLANEJADO** no [Roadmap](roadmap.md). Contagens DEV de Cancelamentos são evidência datada de validação, não valores fixos da aplicação.
 
-Versão interna registrada em `docs/08-releases/releases.json`: **1.3.1**. A distribuição em produção depende do build e do procedimento de implantação do ambiente de destino.
+Versão interna registrada em `docs/08-releases/releases.json`: **1.4.0**. O [Dashboard Gerencial de Cancelamentos](../05-funcionalidades/cancelamentos-dashboard.md) está implementado. A distribuição e a carga histórica em produção dependem do [procedimento próprio](../08-releases/v1.4.0-implantacao-windows.md), ainda não executado.
 
 ## Matriz de módulos (IMPLEMENTADO)
 

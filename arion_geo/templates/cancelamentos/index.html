@@ -1,6 +1,7 @@
 {% extends "cancelamentos/base.html" %}{% load cancellation_display %}
 {% block cancellation_content %}
 <header class="canc-heading canc-heading--compact"><div><p class="canc-eyebrow">OPERAÇÃO NOC</p><h1>Cancelamentos</h1><p>Gerencie pedidos e acompanhe cada etapa do cancelamento.</p></div><div class="canc-actions">
+<a class="canc-button" href="{% url 'cancelamentos:dashboard' %}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 20V11M10 20V5M16 20v-8M22 20H2"/></svg>Dashboard</a>
 {% if perms.cancelamentos.export_cancellations %}<a class="canc-button" href="{% url 'cancelamentos:export' %}?{{ export_query }}">Exportar</a>{% endif %}
 {% if perms.cancelamentos.configure_cancellations %}<a class="canc-link" href="{% url 'cancelamentos:configuration' %}">Configuração</a>{% endif %}
 </div></header>

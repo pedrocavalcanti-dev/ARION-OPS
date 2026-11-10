@@ -1,0 +1,39 @@
+{% extends "cancelamentos/base.html" %}{% load static %}
+{% block title %}Dashboard de Cancelamentos · ARION OPS{% endblock %}
+{% block extra_css %}{{ block.super }}<link rel="stylesheet" href="{% static 'css/cancelamentos/dashboard.css' %}">{% endblock %}
+{% block cancellation_content %}
+<section class="canc-dashboard" aria-labelledby="canc-dashboard-title">
+  <header class="canc-heading canc-heading--compact"><div><p class="canc-eyebrow">VISÃO GERENCIAL</p><h1 id="canc-dashboard-title">Dashboard de Cancelamentos</h1><p>Volume, andamento e valores informados dos processos oficiais.</p></div><a class="canc-button" href="{% url 'cancelamentos:index' %}">← Voltar aos Cancelamentos</a></header>
+  <form method="get" class="canc-dashboard-filters" aria-label="Filtros do dashboard">
+    {% for field in dashboard_form %}<div class="canc-filter"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>{% endfor %}
+    <div class="canc-filter-actions"><button class="canc-button canc-button--primary" type="submit">Aplicar</button><a class="canc-link" href="{% url 'cancelamentos:dashboard' %}">Limpar</a></div>
+    {% if dashboard_form.non_field_errors %}<div class="canc-dashboard-errors" role="alert">{{ dashboard_form.non_field_errors }}</div>{% endif %}
+  </form>
+  <p class="canc-muted canc-dashboard-reference">Período pela data de cadastro do cancelamento, inclusive nos registros importados. A abertura do ticket e a data de conclusão não definem este recorte.</p>
+  <dl class="canc-metrics canc-dashboard-metrics" aria-label="Indicadores gerenciais">
+    <div><dt>Total de cancelamentos</dt><dd>{{ metrics.count }}</dd><small>Processos oficiais no período</small></div>
+    <div><dt>Concluídos</dt><dd>{{ metrics.completed }}</dd><small>Etapa atual: Concluídos</small></div>
+    <div><dt>Em andamento</dt><dd>{{ metrics.ongoing }}</dd><small>Pedido, Solicitação e Pendências</small></div>
+    {% if can_finance %}
+    <div><dt>Valor total informado</dt><dd>{{ metrics.total_label }}</dd><small>{% if metrics.partial %}Subtotal conhecido · parcial{% else %}Multa + Equipamentos + Outros{% endif %}</small></div>
+    <div><dt>Multas contratuais</dt><dd>{{ metrics.contract_label }}</dd><small>Valores informados</small></div>
+    <div><dt>Equipamentos</dt><dd>{{ metrics.equipment_label }}</dd><small>Valores informados</small></div>
+    {% else %}
+    <div><dt>Valor total informado</dt><dd class="canc-dashboard-locked">Restrito</dd><small>Requer acesso financeiro</small></div>
+    <div><dt>Multas contratuais</dt><dd class="canc-dashboard-locked">Restrito</dd><small>Requer acesso financeiro</small></div>
+    <div><dt>Equipamentos</dt><dd class="canc-dashboard-locked">Restrito</dd><small>Requer acesso financeiro</small></div>
+    {% endif %}
+  </dl>
+  {% if can_finance %}<p class="canc-muted canc-dashboard-reference">Valores informados não comprovam pagamento. Campos ausentes permanecem desconhecidos; pendências individuais não são somadas novamente. A conciliação financeira permanece separada.</p>{% endif %}
+  <div class="canc-dashboard-grid">
+    <article class="canc-section"><header><h2>Cancelamentos por mês</h2><p class="canc-muted">Quantidade por mês de cadastro.</p></header>{% if not is_empty %}<div class="canc-dashboard-chart" data-cancellation-chart="months" role="img" aria-label="Quantidade de cancelamentos por mês"></div>{% else %}<p class="canc-empty">Nenhum processo encontrado neste recorte.</p>{% endif %}</article>
+    <article class="canc-section"><header><h2>Valores informados por mês</h2><p class="canc-muted">Referência: cadastro do processo. Não há data financeira validada para este indicador.</p></header>{% if can_finance %}{% if not is_empty %}<div class="canc-dashboard-chart" data-cancellation-chart="finance" role="img" aria-label="Multas, equipamentos e outros valores informados por mês"></div>{% else %}<p class="canc-empty">Sem valores a apresentar neste recorte.</p>{% endif %}{% else %}<p class="canc-empty">Acesso financeiro restrito.</p>{% endif %}</article>
+    <article class="canc-section"><header><h2>Distribuição por etapa</h2><p class="canc-muted">Cada processo é contado uma vez. Entrada OTRS não compõe o total oficial.</p></header>{% if not is_empty %}<div class="canc-dashboard-chart" data-cancellation-chart="stages" role="img" aria-label="Distribuição dos processos pelas quatro etapas"></div>{% else %}<p class="canc-empty">Nenhum processo encontrado neste recorte.</p>{% endif %}</article>
+    <article class="canc-section"><header><h2>ISPs com mais cancelamentos</h2><p class="canc-muted">Oito principais provedores por quantidade de processos.</p></header>{% if not is_empty %}<div class="canc-dashboard-chart" data-cancellation-chart="providers" role="img" aria-label="Ranking de provedores por quantidade de cancelamentos"></div>{% else %}<p class="canc-empty">Nenhuma ISP encontrada neste recorte.</p>{% endif %}</article>
+  </div>
+  <section class="canc-table-section" aria-labelledby="canc-dashboard-clients-title"><header class="canc-table-caption"><h2 id="canc-dashboard-clients-title">Clientes / projetos com mais cancelamentos</h2><span>Oito principais grupos</span></header><div class="canc-table-scroll"><table><thead><tr><th>Cliente / projeto</th><th>Cancelamentos</th><th>Concluídos</th>{% if can_finance %}<th>Total informado</th>{% endif %}</tr></thead><tbody>{% for row in client_rows %}<tr><td>{{ row.label }}</td><td>{{ row.count }}</td><td>{{ row.completed }}</td>{% if can_finance %}<td>{{ row.total_label }}{% if row.partial %}<small>Parcial</small>{% endif %}</td>{% endif %}</tr>{% empty %}<tr><td colspan="4" class="canc-empty">Nenhum cliente/projeto encontrado neste recorte.</td></tr>{% endfor %}</tbody></table></div></section>
+  <noscript><p class="canc-muted">Ative JavaScript para visualizar os gráficos. Os indicadores e o resumo acima já refletem os filtros aplicados.</p></noscript>
+  {{ charts|json_script:"cancellation-dashboard-data" }}
+</section>
+{% endblock %}
+{% block extra_js %}{{ block.super }}{% if not is_empty %}<script id="arion-echarts-vendor" src="{% static 'vendor/echarts/echarts.min.js' %}"></script>{% endif %}<script type="module" src="{% arion_bundle_js 'js/cancelamentos/dashboard.js' %}"></script>{% endblock %}

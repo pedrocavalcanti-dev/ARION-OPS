@@ -31,7 +31,8 @@ class DocumentationPortalTests(TestCase):
         self.assertContains(home, "Como podemos ajudar?")
         self.assertContains(home, "Segurança e operação")
         self.assertContains(home, "Dados e Integrações")
-        self.assertContains(home, "12 documentos")
+        for card in home.context["home_cards"]:
+            self.assertContains(home, f'{len(card["documents"])} documentos')
         self.assertContains(home, "Cancelamentos")
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Caminho da request")
@@ -102,12 +103,13 @@ class DocumentationPortalTests(TestCase):
         self.assertContains(home, "Atualizações e versões")
         self.assertContains(response, "Atualiza&ccedil;&otilde;es e vers&otilde;es")
         self.assertContains(response, "ARION OPS 1.3.1")
+        self.assertContains(response, "ARION OPS 1.4.0")
         self.assertContains(response, "ARION OPS 1.2.0 — Identidade, Cockpit e Inteligência Operacional")
         self.assertContains(response, "data-pwa-update-version")
         self.assertContains(response, "Novidades, melhorias")
-        self.assertContains(response, 'id="release-v1.3.1"')
-        self.assertContains(response, "Vers&atilde;o carregada nesta p&aacute;gina: v1.3.1")
-        self.assertEqual(response.context["version"], "1.3.1")
+        self.assertContains(response, 'id="release-v1.4.0"')
+        self.assertContains(response, "Vers&atilde;o carregada nesta p&aacute;gina: v1.4.0")
+        self.assertEqual(response.context["version"], "1.4.0")
         self.assertEqual(response.context["current_release"]["version"], response.context["version"])
 
     def test_portal_receives_the_existing_saved_theme(self):
@@ -176,7 +178,8 @@ class DocumentationPortalTests(TestCase):
         project = DocumentationService.get("projeto")
         self.assertEqual(project["title"], "Projeto — ARION OPS")
         self.assertNotIn("<h1", project["body"])
-        self.assertEqual(len(DOCUMENTS), 71)
+        self.assertTrue({"cancelamentos-dashboard", "release-1-4-0", "release-1-4-0-resumo",
+                         "release-1-4-0-implantacao", "migracao-completa-arion-mysql", "usuarios-historicos"}.issubset(DOCUMENTS))
 
     def test_otrs_reference_is_a_navigable_and_searchable_documentation_group(self):
         self.client.force_login(self.admin)

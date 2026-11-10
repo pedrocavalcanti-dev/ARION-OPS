@@ -6,6 +6,7 @@ app_name = "cancelamentos"
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("dashboard/", views.dashboard, name="dashboard"),
     path("exportar/", views.export, name="export"),
     path("configuracao/", views.configuration, name="configuration"),
     path("entrada/<int:pk>/", views.intake_detail, name="intake_detail"),

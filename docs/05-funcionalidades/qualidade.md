@@ -124,8 +124,8 @@ A migration `0002_qualityorder_manage_permission` registra a permissão de gest�
 
 ## Limites atuais
 
-- Tickets TQ são somente associados a partir do espelho local; nenhuma criação, alteração ou encerramento remoto no OTRS é feito pelo módulo.
-- O ciclo RREIP é iniciado e seu resultado é confirmado manualmente no ARION OPS. O ticket de reincidência deve ser válido no mirror, pertencer ao mesmo circuito e ter ocorrido após o início e até o fim previsto do ciclo. O sucesso só pode ser confirmado após 30 dias e quando não há ocorrência válida no intervalo. Reincidência retorna a OQ para Tratamento; sucesso conclui a OQ. Ambas as transições ficam na auditoria local e central. Nenhuma escrita é feita no OTRS.
+- TQs podem ser preparadas e enviadas por Brevo SMTP/API mediante configuração e autorização. O envio não comprova criação de ticket: a correlação exata por QID e fila confirma o vínculo no espelho local. Nenhuma criação, alteração ou encerramento pela API do OTRS é executado pelo módulo. Veja [Qualidade e TQ no OTRS](../06-integracoes-e-dados/otrs/qualidade-tq.md).
+- O ciclo RREIP é iniciado e seu resultado é confirmado manualmente no ARION OPS. O ticket de reincidência deve ser válido no mirror, pertencer ao mesmo circuito e ter ocorrido após o início e até o fim previsto do ciclo. O sucesso só pode ser confirmado após 30 dias e quando não há ocorrência válida no intervalo. Reincidência retorna a OQ para Tratamento; sucesso permite a avaliação humana final da tratativa, cuja confirmação conclui a OQ. As decisões ficam na auditoria local e central. Nenhuma escrita é feita no OTRS.
 - Não há envio ou integração de mensagens pelo Teams ou Outlook.
 - O checklist da OQ é gerencial e manual; não existe motor de playbooks automáticos por nível R1–R5. O nível é uma classificação humana de complexidade/criticidade, independente da quantidade de reincidências; critérios definitivos ainda serão formalizados pela operação.
 - Para motivo financeiro, o início do RREIP exige confirmação da Qualidade e registro de evidência; esse controle não substitui um workflow financeiro integrado.

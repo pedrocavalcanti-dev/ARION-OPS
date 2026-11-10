@@ -134,7 +134,8 @@ class AccountSettingsTests(TestCase):
         self.assertContains(response, "Plataforma Operacional — NOC Atacado")
         self.assertContains(response, "Concepção e desenvolvimento")
         self.assertContains(response, "Pedro Cavalcanti")
-        self.assertContains(response, "Versão 1.3.1")
+        from config.releases import current_version
+        self.assertContains(response, f"Versão {current_version()}")
         self.assertContains(response, "Django · MySQL · JavaScript · ECharts · Mapbox")
         self.assertContains(response, "Controle de acesso · Data Scope · auditoria · espelhos locais OTRS/CMDB")
         self.assertContains(response, "ARION Serviços de Telecomunicações")

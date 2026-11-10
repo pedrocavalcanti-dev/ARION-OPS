@@ -8,12 +8,15 @@ O **ARION OPS** centraliza a exploração operacional diária dos circuitos sinc
 
 O sistema opera sobre espelhos locais sincronizados em modo somente leitura a partir das fontes oficiais, mantendo a navegação rápida e desacoplada da latência dos sistemas externos.
 
+A versão registrada no catálogo central é **1.4.0**. Consulte a [nota técnica](docs/08-releases/v1.4.0.md), o [resumo gerencial](docs/08-releases/v1.4.0-resumo-gerencial.md) e o [checklist futuro para Windows Server](docs/08-releases/v1.4.0-implantacao-windows.md). A publicação do código não executa deploy nem transporta dados históricos.
+
 ## Objetivo
 
 Reduzir a fragmentação entre consultas operacionais e oferecer visão consolidada de fila, impacto, reincidência, distribuição geográfica, desempenho de provedores/ISP e apurações gerenciais, **sem substituir** o OTRS ou a CMDB como sistemas de registro técnico oficial.
 
 ## Módulos
 
+- **Cancelamentos (`/cancelamentos/`):** triagem humana OTRS, fluxo operacional, responsáveis, pendências, histórico e valores informados; [Dashboard Gerencial](docs/05-funcionalidades/cancelamentos-dashboard.md) dedicado em `/cancelamentos/dashboard/`.
 - **Dashboard (`/dashboard/`):** visão executiva de links, chamados e séries temporais.
 - **Chamados (`/chamados/`):** fila operacional do NOC com acompanhamento interno (`TicketTracking`), notas, prioridade local e histórico.
 - **Cockpit (`/cockpit/`):** motor analítico com contextos Suporte, Cancelamentos e Geral, views salvas e exportações CSV/PDF/XLSX.
