@@ -7,7 +7,7 @@
   const ADVANCED_KEYS = ["source_state", "uf", "sla", "priority", "service", "stage", "origin", "project", "responsibility", "responsible", "queue", "age_bucket"];
   const DEFAULT_START = page.dataset.defaultStart;
   const DEFAULT_END = page.dataset.defaultEnd;
-  const DEFAULTS = { scope: "support", metric: "tickets", start: DEFAULT_START, end: DEFAULT_END, compare_to: "", selected_month: "", group_by: "provider", chart_view: "all", chart_origin: "consolidated", include_cancelled: false, include_improcedente: false, detail_page: 1, ticket_page: 1, ticket_page_size: 25, ticket_search: "", filters: Object.fromEntries(FILTER_KEYS.map(key => [key, "all"])) };
+  const DEFAULTS = { scope: "support", metric: "tickets", start: DEFAULT_START, end: DEFAULT_END, compare_to: "", selected_month: "", group_by: "provider", chart_view: "all", chart_origin: "consolidated", include_cancelled: true, include_improcedente: true, detail_page: 1, ticket_page: 1, ticket_page_size: 25, ticket_search: "", filters: Object.fromEntries(FILTER_KEYS.map(key => [key, "all"])) };
   const METRICS = { tickets: "Tickets criados no período", open_tickets: "Em atendimento no período", pending_tickets: "Pendentes no período", scheduled_tickets: "Agendados no período", resolved_tickets: "Resolvidos no período", closed_tickets: "Resolvidos no período", resolved_closed_tickets: "Resolvidos no período", canceled_tickets: "Cancelados no período", links_affected: "Links afetados", recurrences: "Links reincidentes", backlog: "Backlog atual" };
   const DIMENSIONS = { provider: "Provedor", uf: "UF", status: "Status atual", source_state: "Status de origem", sla: "SLA", priority: "Prioridade", termination_reason: "Motivo de encerramento", cancellation_stage: "Etapa do cancelamento", operational_origin: "Origem", project: "Projeto / cliente", month: "Per\u00edodo" };
   const FILTER_LABELS = { ...DIMENSIONS, service: "Servi\u00e7o", stage: "Etapa", origin: "Origem", responsibility: "Proced\u00eancia", responsible: "Respons\u00e1vel", queue: "Fila", age_bucket: "Aging" };
@@ -136,8 +136,8 @@
     state.selected_month = validMonth(state.selected_month) ? state.selected_month : "";
     state.chart_view = ["all", "created", "closed", "backlog"].includes(state.chart_view) ? state.chart_view : "all";
     state.chart_origin = state.chart_origin === "origin" ? "origin" : "consolidated";
-    state.include_cancelled = state.include_cancelled === true;
-    state.include_improcedente = state.include_improcedente === true;
+    state.include_cancelled = state.include_cancelled !== false;
+    state.include_improcedente = state.include_improcedente !== false;
     const oldFilters = state.filters || {};
     state.filters = Object.fromEntries(FILTER_KEYS.map(key => [key, oldFilters[key] ?? "all"]));
     if (state.filters.responsibility === "IMPROCEDENTE" && state.metric !== "backlog") state.include_improcedente = true;

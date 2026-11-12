@@ -344,9 +344,6 @@ class AnalyticsQueryService:
             metric_universe = metric_universe.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression(),
             })
-        # Incident indicators use one validity rule; the internal history remains available.
-        if scope == "support" and metric not in {"backlog","canceled_tickets"} and not (include_cancelled or include_improcedente):
-            metric_universe = IncidentRules.valid(metric_universe)
         options = self._options(metric_universe, allowed_links)
         filtered = self._apply_filters(metric_universe, allowed_links, filters)
         history_meta = self._backlog_history_meta(stock_rows)
@@ -1500,7 +1497,7 @@ class AnalyticsQueryService:
         if selected_month:
             selected_month = _month_date(selected_month).strftime("%Y-%m")
         def option_enabled(key):
-            value = payload.get(key, False)
+            value = payload.get(key, True)
             if isinstance(value, bool):
                 return value
             if value in (1, "1", "true", "True", "on", "yes"):
@@ -1529,14 +1526,14 @@ class AnalyticsQueryService:
     @classmethod
     def _metric_semantics(cls, metric, *, scope="support", include_cancelled=True,
                           include_improcedente=True):
-        note = " Consulta histórica ampliada; cancelados e/ou improcedentes conforme as opções. Não representa o universo de incidentes válidos." if scope=="support" and (include_cancelled or include_improcedente) and metric!="backlog" else ""
+        note = ""
         if not include_cancelled or (not include_improcedente and metric != "backlog"):
             excluded = []
             if not include_cancelled:
                 excluded.append("cancelados")
             if not include_improcedente and metric != "backlog":
                 excluded.append("improcedentes")
-            note += " Registros exclu\u00eddos: " + "; ".join(excluded) + "."
+            note = " Registros exclu\u00eddos: " + "; ".join(excluded) + "."
         if metric == "tickets":
             return "Data de cria\u00e7\u00e3o no per\u00edodo; a distribui\u00e7\u00e3o mostra o status atual dos tickets distintos no recorte." + note
         if metric in {"open_tickets", "pending_tickets", "scheduled_tickets"}:
