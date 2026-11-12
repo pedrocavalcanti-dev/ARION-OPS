@@ -9,13 +9,13 @@
 {% if tab == 'pending' or tab == 'completed' %}{% if perms.cancelamentos.view_cancellation_finance %}<th class="canc-money">Multa (R$)</th><th class="canc-money" title="Equipamentos (R$)">Equip. (R$)</th><th class="canc-money">Outros (R$)</th><th class="canc-money" title="Total informado: Multa + Equipamento + Outros; não comprova pagamento. Valores ausentes tornam o subtotal parcial.">Total (R$)</th>{% endif %}{% endif %}
 <th title="{% if tab == 'completed' %}Conclusão operacional{% elif tab == 'pending' %}Próxima ação{% else %}Abertura do ticket{% endif %}">{% if tab == 'completed' %}Conclusão{% elif tab == 'pending' %}Próx. ação{% else %}Abertura{% endif %}</th>{% if tab != 'completed' %}<th>Status</th>{% endif %}<th>Responsável</th><th>Ações</th></tr></thead><tbody>
 {% for obj in page %}<tr>{% if tab == 'intake' %}
-<td><a class="canc-record" href="{% url 'cancelamentos:intake_detail' obj.pk %}">{{ obj.ticket_number }}</a></td>
+<td>{% with ticket_url=obj|cancellation_ticket_url %}{% if ticket_url %}<a class="canc-record" data-otrs-ticket href="{{ ticket_url }}" target="_blank" rel="noopener noreferrer">{{ obj.ticket_number }} ↗</a>{% else %}<span title="Vínculo OTRS indisponível">{{ obj.ticket_number }}</span>{% endif %}{% endwith %}</td>
 <td><span class="canc-truncate" title="{{ obj.designation_snapshot }}">{{ obj.designation_snapshot|default:"Vínculo a revisar" }}</span></td>
 <td><span class="canc-truncate" title="{{ obj.client_snapshot }} · {{ obj.project_snapshot }}">{{ obj.client_snapshot|default:"Não identificado" }} · {{ obj.project_snapshot|default:"—" }}</span></td>
 <td><span class="canc-truncate" title="{{ obj.link.operator.name }}">{{ obj.link.operator.name|default:"—" }}</span></td>
 <td>{{ obj.source_created_at|date:"d/m/Y"|default:"—" }}</td><td><span class="canc-status">{{ obj.get_status_display }}</span>{% if not obj.current_entry %}<small>Fora do KPI 1</small>{% endif %}</td>
 {% else %}
-<td><a class="canc-record" title="{{ obj.display_ticket_number }} · {{ obj.designation }}" href="{% url 'cancelamentos:detail' obj.pk %}">{{ obj.display_ticket_number|default:obj.code }}</a></td>
+<td>{% with ticket_url=obj|cancellation_ticket_url %}{% if ticket_url %}<a class="canc-record" data-otrs-ticket href="{{ ticket_url }}" target="_blank" rel="noopener noreferrer">{{ obj.display_ticket_number|default:obj.code }} ↗</a>{% else %}<span title="Vínculo OTRS indisponível">{{ obj.display_ticket_number|default:obj.code }}</span>{% endif %}{% endwith %}</td>
 {% if tab == 'order' or tab == 'request' %}<td><span class="canc-truncate" title="{{ obj.designation }}">{{ obj.designation|default:"Vínculo a revisar" }}</span></td>{% endif %}
 <td><span class="canc-truncate" title="{{ obj.final_client }}">{{ obj.final_client|default:"Não informado" }}</span></td>
 {% if tab == 'order' %}<td><span class="canc-truncate" title="{{ obj.city }} / {{ obj.state }}">{{ obj.city|default:"—" }} / {{ obj.state|default:"—" }}</span></td>{% endif %}

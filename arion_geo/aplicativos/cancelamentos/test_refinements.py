@@ -36,6 +36,21 @@ class RefinementTests(TestCase):
     def setUp(self):
         self.client.force_login(self.admin)
 
+    def test_ticket_list_uses_source_ticket_id_and_retains_separate_local_action(self):
+        from unittest.mock import patch
+        from .templatetags.cancellation_display import cancellation_ticket_url
+        entry=self.entry(902)
+        with patch("aplicativos.cancelamentos.templatetags.cancellation_display.otrs_ticket_url",return_value="https://otrs.example.invalid/index.pl?Action=AgentTicketZoom;TicketID=902") as url:
+            response=self.client.get(reverse("cancelamentos:index"),{"tab":"intake"})
+            self.assertContains(response,'data-otrs-ticket')
+            self.assertContains(response,'target="_blank" rel="noopener noreferrer"')
+            self.assertContains(response,'Visualizar')
+            url.assert_called_with(entry.ticket_external_id)
+        orphan=CancellationProcess(origin="ARIONBROKER",ticket_number="902")
+        with patch("aplicativos.cancelamentos.templatetags.cancellation_display.otrs_ticket_url",return_value="") as url:
+            self.assertEqual(cancellation_ticket_url(orphan),"")
+            url.assert_called_once_with(None)
+
     def reference(self, process, **data):
         return LegacyCancellationReference.objects.create(process=process, source=SOURCE, entity="cancelamento", legacy_pk=str(process.pk),
             source_data={"responsavel_id": 7, "atendente_id": 8, **data})

@@ -24,11 +24,14 @@
     dialog.addEventListener("close", () => {
       if (opener?.isConnected) opener.focus();
     });
-    dialog.addEventListener("click", (event) => {
-      if (event.target !== dialog) return;
-      const box = dialog.getBoundingClientRect();
-      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) dialog.close();
+    dialog.addEventListener("input", () => { dialog.dataset.dirty = "1"; });
+    dialog.addEventListener("change", () => { dialog.dataset.dirty = "1"; });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      feedback("Use Fechar ou Cancelar para encerrar o formulário.");
     });
+    dialog.addEventListener("close", () => { delete dialog.dataset.dirty; });
+
   };
   const fetchDialog = async (url, trigger) => {
     if (loadingDialog) return;
@@ -153,6 +156,9 @@
       requestAnimationFrame(() => document.querySelectorAll(".canc-action-menu[open]").forEach(positionMenu));
     }
   }, true);
+  document.querySelector(".canc-shell")?.addEventListener("click", event => {
+    if (event.target.closest("[data-otrs-ticket]")) event.stopPropagation();
+  });
   document.addEventListener("click", async (event) => {
     if (!event.target.closest(".canc-action-menu")) closeMenus();
     const remote = event.target.closest("[data-dialog-url]");
@@ -182,7 +188,12 @@
     const open = event.target.closest("[data-open-dialog]");
     if (open) { const dialog = document.getElementById(open.dataset.openDialog); if (dialog instanceof HTMLDialogElement) { opener = open.closest(".canc-action-menu")?.querySelector("summary") || open; closeMenus(); wireDialog(dialog); dialog.showModal(); } }
     const close = event.target.closest("[data-close-dialog]");
-    if (close) close.closest("dialog")?.close();
+    if (close) {
+      const dialog = close.closest("dialog");
+      if (dialog?.querySelector("form[data-busy]")) return;
+      if (dialog?.dataset.dirty && !window.confirm("Descartar as alterações não salvas deste formulário?")) return;
+      dialog?.close();
+    }
     const copy = event.target.closest("[data-copy-target]");
     if (copy) {
       const target = document.getElementById(copy.dataset.copyTarget);
@@ -219,6 +230,7 @@
         try { if (list) await refreshList(data.url); else await refreshDetail(form.closest("dialog")); }
         catch { form.closest("dialog")?.close(); feedback("Registro salvo. Atualize a página para conferir o recorte antes de continuar."); return; }
         if (repeat) {
+          if (form.closest("dialog")) delete form.closest("dialog").dataset.dirty;
           const kind = form.elements.kind.value;
           const context = form.elements.return_query?.value;
           form.reset(); form.elements.revision.value = data.revision; form.elements.kind.value = kind;
