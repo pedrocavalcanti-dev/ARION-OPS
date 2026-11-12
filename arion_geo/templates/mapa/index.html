@@ -5,13 +5,15 @@
 {% block extra_css %}
   {% if mapbox_token %}<link href="https://api.mapbox.com/mapbox-gl-js/v3.33.0/mapbox-gl.css" rel="stylesheet">{% endif %}
   <link rel="stylesheet" href="{% static 'css/mapa/mapa.css' %}">
+  <link rel="stylesheet" href="{% static 'css/mapa/intelligence.css' %}">
 {% endblock %}
 {% block content %}
 <section class="geo-page" aria-labelledby="geo-title">
   {% include "mapa/_cmdb.html" %}
+  {% include "mapa/_weather_panel.html" %}
 </section>
 {% endblock %}
 {% block extra_js %}
   {% if mapbox_token %}<script src="https://api.mapbox.com/mapbox-gl-js/v3.33.0/mapbox-gl.js" defer></script>{% endif %}
-  <script src="{% arion_js 'js/mapa/mapa-real.js' %}" defer></script>
+  <script type="module" src="{% arion_js 'js/mapa/mapa-real.js' %}" defer></script>
 {% endblock %}

@@ -13,7 +13,7 @@ GROUP_AUDITOR = "Consulta / Auditoria"
 GROUP_EXECUTIVE = "Gestão"
 
 MODULE_PERMISSIONS = (
-    "view_dashboard", "view_cockpit", "save_analytics_views", "view_map",
+    "view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "present_geo",
     "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets",
     "view_ari", "import_cmdb", "export_base",
     "view_quality", "manage_quality_orders",
@@ -57,6 +57,7 @@ PERMISSION_LABELS = {
     "view_cockpit": ("Cockpit", "Visualizar"),
     "save_analytics_views": ("Cockpit", "Salvar visões"),
     "view_map": ("Mapa", "Visualizar"),
+    "present_geo": ("Mapa", "Apresentar GEO Intelligence por cliente"),
     "view_rankings": ("Rankings", "Visualizar"),
     "view_base": ("Base", "Visualizar"),
     "view_operational_tickets": ("Chamados", "Visualizar fila operacional"),

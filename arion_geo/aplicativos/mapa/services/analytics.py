@@ -19,6 +19,8 @@ from aplicativos.integracoes.services.ticket_business_identity import TicketBusi
 from aplicativos.integracoes.services.link_business_identity import BusinessIdentityRules
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
 from aplicativos.integracoes.services.project_names import canonical_project_name, project_alias_groups
+from aplicativos.integracoes.services.geography import region_states, state_query
+from aplicativos.integracoes.services.incidents import IncidentRules
 
 
 STATE_NAMES = {
@@ -55,7 +57,7 @@ def _uf(value):
 
 
 def _bounds(params):
-    period = (params.get("period") or "").strip()
+    period = (params.get("period") or "last_month").strip()
     today = timezone.localdate()
     if period == "this_month":
         return today.replace(day=1), today
@@ -67,13 +69,8 @@ def _bounds(params):
     if period == "last_90":
         return today - timedelta(days=89), today
     if len(period) == 7 and period[4] == "-":
-        try:
-            year, month = (int(part) for part in period.split("-"))
-            start = date(year, month, 1)
-            next_month = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
-            return start, next_month - timedelta(days=1)
-        except (ValueError, TypeError):
-            raise ValueError("Periodo do mapa invalido.") from None
+        from aplicativos.integracoes.services.weather import month_bounds
+        return month_bounds(period)
     if period in {"", "custom"}:
         return PeriodService.parse(params)
     raise ValueError("Periodo do mapa invalido.")
@@ -202,7 +199,7 @@ class MapAnalyticsService:
         )
 
     @classmethod
-    def query(cls, user, params):
+    def query(cls, user, params, *, fixed_client=False):
         mode = (params.get("mode") or "base").strip()
         if mode not in cls.MODES:
             raise ValueError("Modo de mapa invalido.")
@@ -229,9 +226,19 @@ class MapAnalyticsService:
         if provenance not in {"", *VALID_PROCEDENCE}:
             raise ValueError("Procedencia do ticket invalida.")
         uf_filter = (params.get("uf") or "").strip().upper()
+        region = (params.get("region") or "").strip().upper()
+        if params.get("category") and params.get("category") not in IncidentRules.LABELS:
+            raise ValueError("Categoria operacional inválida.")
+        allowed_ufs = region_states(region)
+        if uf_filter and (uf_filter not in STATE_NAMES or uf_filter not in allowed_ufs):
+            raise ValueError("UF incompatível com a região selecionada.")
 
         # Data Scope is applied first, before option catalogs, dimensions, and counts.
         scoped = LinkQueryService.base(user)
+        if fixed_client:
+            scoped = _client_filter(scoped,client)
+        if region:
+            scoped = scoped.filter(state_query(allowed_ufs))
         filtered = _client_filter(scoped, client)
         ticket_candidates = scoped
         if provider:
@@ -276,20 +283,20 @@ class MapAnalyticsService:
         priority_options = []
         if mode in {"projects", "calls", "repeat", "motives"}:
             period_relations = OTRSTicketConfigItem.objects.filter(
-                is_present_in_source=True, ticket__in=TicketQueryService.noc_tickets(),
+                is_present_in_source=True, ticket__in=IncidentRules.valid(TicketQueryService.noc_tickets()),
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).filter(business_statuses_query(
                 "ticket__business_status", VALID_TICKET_STATES,
             )).select_related("ticket")
             current_relations = OTRSTicketConfigItem.objects.filter(
-                is_present_in_source=True, ticket__in=TicketQueryService.noc_tickets(),
+                is_present_in_source=True, ticket__in=IncidentRules.valid(TicketQueryService.noc_tickets()),
                 ticket__business_status__in=ACTIVE_TICKET_STATES,
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).select_related("ticket")
             terminal_relations = OTRSTicketConfigItem.objects.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
             }).filter(
-                is_present_in_source=True, ticket__in=TicketQueryService.noc_tickets(),
+                is_present_in_source=True, ticket__in=IncidentRules.valid(TicketQueryService.noc_tickets()),
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).filter(business_statuses_query(
                 "ticket__business_status", TERMINAL_TICKET_STATES,
@@ -322,6 +329,9 @@ class MapAnalyticsService:
             terminal_relations = filter_tracking_relations(
                 terminal_relations, arion_status=arion_status, assignee=assignee,
             )
+            period_relations = IncidentRules.filter(period_relations, params, "ticket__")
+            current_relations = IncidentRules.filter(current_relations, params, "ticket__")
+            terminal_relations = IncidentRules.filter(terminal_relations, params, "ticket__")
             if mode == "motives" and reason_filter:
                 terminal_relations = terminal_relations.filter(
                     ticket__closing_code_raw__in=ClosingReasonCanonicalizer.raw_values(reason_filter),
@@ -342,12 +352,16 @@ class MapAnalyticsService:
             client=client, project=project, provider=provider, uf_filter=uf_filter,
             arion_status=arion_status, assignee=assignee, provenance=provenance,
         )
+        unlinked_tickets = IncidentRules.filter(IncidentRules.valid(unlinked_tickets), params)
+        if region:
+            unlinked_tickets = unlinked_tickets.none()
         unlinked_ticket_count = unlinked_tickets.count()
 
         result = {}
         global_tickets, global_ticket_statuses, global_ticket_priorities, global_ticket_reasons, active_ids, global_terminal = set(), {}, {}, {}, set(), set()
         global_recurrence_ticket_ids = set()
         global_ticket_contexts = {}
+        global_ticket_dates, global_ticket_categories = {}, {}
         ticket_identity_cache = {}
         def identity_for(ticket):
             if ticket.pk not in ticket_identity_cache:
@@ -409,6 +423,8 @@ class MapAnalyticsService:
             global_ticket_statuses.update({ticket_id: normalize_business_status(ticket.business_status) for ticket_id, ticket in tickets.items()})
             global_ticket_priorities.update({ticket_id: ticket.priority_name for ticket_id, ticket in tickets.items()})
             global_ticket_reasons.update({ticket_id: ClosingReasonCanonicalizer.display(ticket.closing_code_raw) for ticket_id, ticket in tickets.items()})
+            global_ticket_dates.update({ticket_id: timezone.localtime(ticket.source_created_at).date().isoformat() for ticket_id,ticket in tickets.items() if ticket.source_created_at})
+            global_ticket_categories.update({ticket_id: IncidentRules.category(ticket.closing_code_raw) for ticket_id,ticket in tickets.items()})
             active_ids.update(active)
             global_terminal.update(terminal)
             item["tickets_by_id"].update(tickets)
@@ -458,6 +474,15 @@ class MapAnalyticsService:
                 city_counts[label] = city_counts.get(label, 0) + city["count"]
             item["city_counts"] = city_counts
             item["ticket_count"] = len(item["tickets_by_id"])
+            item["daily_counts"], item["technical_daily_counts"], item["category_counts"] = {}, {}, {}
+            for ticket in item["tickets_by_id"].values():
+                category = IncidentRules.category(ticket.closing_code_raw)
+                _inc(item["category_counts"], IncidentRules.LABELS[category])
+                if ticket.source_created_at:
+                    day = timezone.localtime(ticket.source_created_at).date().isoformat()
+                    _inc(item["daily_counts"], day)
+                    if category != "financeiro":
+                        _inc(item["technical_daily_counts"], day)
             item["active_tickets"] = len(item["active_ticket_ids"])
             item["recurrence_tickets"] = len(item["recurrence_ticket_ids"])
             for ticket in item["tickets_by_id"].values():
@@ -523,7 +548,21 @@ class MapAnalyticsService:
         metric_fields = {"base": "total_links", "projects": "total_links", "calls": "ticket_count",
                          "repeat": "recurrence_links", "motives": "motives"}
         metric = metric_fields[mode]
+        daily_counts, technical_daily_counts, category_counts = {}, {}, {}
+        for ticket in unlinked_tickets.only("pk","source_created_at","closing_code_raw"):
+            global_ticket_categories[ticket.pk] = IncidentRules.category(ticket.closing_code_raw)
+            if ticket.source_created_at:
+                global_ticket_dates[ticket.pk] = timezone.localtime(ticket.source_created_at).date().isoformat()
+        for ticket_id, day in global_ticket_dates.items():
+            _inc(daily_counts, day)
+            if global_ticket_categories.get(ticket_id) != "financeiro":
+                _inc(technical_daily_counts, day)
+        for category in global_ticket_categories.values():
+            _inc(category_counts, IncidentRules.LABELS[category])
         return {
+            "region": region, "allowed_ufs": allowed_ufs,
+            "daily_counts": daily_counts, "technical_daily_counts": technical_daily_counts,
+            "category_counts": category_counts,
             "mode": mode, "location_mode": "uf", "states": result,
             "source_total": source_total, "filtered_source_total": filtered_total,
             "client_identified_count": global_client_identified,

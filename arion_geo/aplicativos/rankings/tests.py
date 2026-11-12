@@ -506,20 +506,20 @@ class RankingsMirrorTests(TestCase):
         })
         self.assertEqual(response.status_code, 200)
         detail = response.json()
-        self.assertEqual(detail["tickets"], 7)
+        self.assertEqual(detail["tickets"], 3)
         self.assertEqual(detail["responsibility"]["procedentes"], 2)
-        self.assertEqual(detail["responsibility"]["improcedentes"], 4)
+        self.assertEqual(detail["responsibility"]["improcedentes"], 0)
         self.assertEqual(detail["responsibility"]["indeterminados"], 1)
-        self.assertEqual(detail["responsibility"]["procedure_rate"], 2 / 6)
-        self.assertTrue(detail["responsibility"]["review"])
-        self.assertEqual(detail["ticket_records_total"], 7)
+        self.assertEqual(detail["responsibility"]["procedure_rate"], 1)
+        self.assertFalse(detail["responsibility"]["review"])
+        self.assertEqual(detail["ticket_records_total"], 3)
         record = next(item for item in detail["ticket_records"] if item["id"] == procedente.pk)
         self.assertEqual(len(record["links"]), 2)
         self.assertIn("Criado no per", record["why"][0])
         self.assertNotIn("pessoa@example.com", record["title"])
         self.assertNotIn("99999-1234", record["title"])
 
-    def test_responsibility_classification_does_not_change_arion_v2_score(self):
+    def test_invalid_incidents_are_excluded_from_arion_v2_score(self):
         ticket = self.make_ticket()
         before = RankingService.build(
             self.user, date_from=datetime(2026, 10, 1).date(), date_to=datetime(2026, 10, 24).date(),
@@ -530,7 +530,8 @@ class RankingsMirrorTests(TestCase):
         after = RankingService.build(
             self.user, date_from=datetime(2026, 10, 1).date(), date_to=datetime(2026, 10, 24).date(),
         )["providers"][0]["risk_score"]
-        self.assertEqual(before, after)
+        self.assertGreater(before, after)
+        self.assertEqual(after, 0)
 
     def test_pdf_and_xlsx_exports_preserve_data_scope_and_include_full_filtered_rows(self):
         from aplicativos.base_links.models import Operadora, Projeto

@@ -1,3 +1,4 @@
+import { mountGeoIntelligence } from "./geo-intelligence.js";
 (() => {
   const root = document.querySelector("[data-map-config]");
   const page = document.querySelector(".geo-page");
@@ -90,14 +91,17 @@
     panelOverview: $("[data-panel-overview]"), panelOverviewContext: $("[data-panel-overview-context]"), panelRecurrence: $("[data-panel-recurrence]"), panelTicketSearch: $("[data-panel-ticket-search]"), panelTicketSize: $("[data-panel-ticket-size]"), panelTicketPagination: $("[data-panel-ticket-pagination]"),
     openBase: $("[data-open-base]"), openCockpit: $("[data-open-cockpit]"), ufPrevious: $("[data-uf-previous]"), ufNext: $("[data-uf-next]"), announce: $("[data-map-announcement]"), legend: $("[data-legend]"),
   };
-  const state = { mode:"base", client:"all", project:"", provider:"", period:"this_month", reason:"", status:"", priority:"", arionStatus:"", assignee:"", dateFrom:"", dateTo:"", selectedUF:"", panelTab:"summary", ufTab:"overview", ticketPage:1, ticketPageSize:25, ticketSearch:"", distributionDimension:"status", collapsed:false };
+  const state = { mode:"base", client:"all", project:"", provider:"", period:root.dataset.defaultPeriod||"last_month", region:"", layer:"analysis", category:"", reason:"", status:"", priority:"", arionStatus:"", assignee:"", dateFrom:"", dateTo:"", selectedUF:"", panelTab:"summary", ufTab:"overview", ticketPage:1, ticketPageSize:25, ticketSearch:"", distributionDimension:"status", collapsed:false };
   const initialParams=new URLSearchParams(location.search);
-  [["mode","mode"],["client","client"],["project","project"],["provider","provider"],["period","period"],["reason","reason"],["status","status"],["priority","priority"],["arion_status","arionStatus"],["assignee","assignee"]].forEach(([param,key])=>{if(initialParams.has(param))state[key]=initialParams.get(param);});
+  [["region","region"],["layer","layer"],["category","category"],["mode","mode"],["client","client"],["project","project"],["provider","provider"],["period","period"],["reason","reason"],["status","status"],["priority","priority"],["arion_status","arionStatus"],["assignee","assignee"]].forEach(([param,key])=>{if(initialParams.has(param))state[key]=initialParams.get(param);});
   state.selectedUF=(initialParams.get("uf")||"").toUpperCase();
+  state.region=state.region.toUpperCase();
   if(/^\d{4}-(0[1-9]|1[0-2])$/.test(state.period)){const [year,month]=state.period.split("-").map(Number);state.dateFrom=`${state.period}-01`;state.dateTo=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);}
   state.dateFrom=initialParams.get("date_from")||state.dateFrom;state.dateTo=initialParams.get("date_to")||state.dateTo;
   if(!["base","projects","calls","repeat","motives"].includes(state.mode))state.mode="base";
-  if(!["all","Claro","Vivo","Algar","other"].includes(state.client))state.client="all";
+  if(!state.client)state.client="all";
+  const isPresentation=root.dataset.presentation==="true";
+  if(isPresentation){state.mode="calls";state.client=root.dataset.fixedClient;state.project=root.dataset.fixedProject;state.period=root.dataset.fixedPeriod;state.layer=initialParams.get("layer")||"calls";state.reason="";state.category="";}
   ui.period.disabled = true;
   ui.reasonWrap.hidden = true;
   let map = null, geojson = null, data = null, mapLoaded = false, requestSequence = 0, searchIndex = -1, periodHideTimer = 0, panelHideTimer = 0, panelSearchTimer = 0, moreFiltersTimer = 0, tooltipMoveFrame = 0;
@@ -114,9 +118,9 @@
     if(state.project)chips.push(["project","Projeto: "+displayProject(state.project)]);
     if(state.selectedUF)chips.push(["uf","UF: "+state.selectedUF]);
     if(state.provider)chips.push(["provider","Provedor: "+(data?.providers||[]).find(row=>String(row.id)===state.provider)?.name]);
-    if(state.mode==="motives"&&state.reason)chips.push(["reason","Motivo: "+reasonLabel()]);
+    if(state.reason)chips.push(["reason","Motivo: "+reasonLabel()]);
     if(["projects","calls","repeat","motives"].includes(state.mode)){
-      if(state.period!=="this_month")chips.push(["period","Per\u00edodo: "+(state.dateFrom&&state.dateTo?state.dateFrom+" a "+state.dateTo:state.period)]);
+      if(!/^\d{4}-\d{2}$/.test(state.period)&&state.period!=="this_month")chips.push(["period","Per\u00edodo: "+(state.dateFrom&&state.dateTo?state.dateFrom+" a "+state.dateTo:state.period)]);
       if(state.status)chips.push(["status","Status OTRS: "+(statusLabels[state.status]||state.status)]);
       if(state.priority)chips.push(["priority","Prioridade: "+state.priority]);
       if(state.arionStatus)chips.push(["arionStatus","Status ARION: "+((data?.arion_statuses||[]).find(row=>row.value===state.arionStatus)?.label||state.arionStatus)]);
@@ -188,6 +192,11 @@
   const showError = (detail, title = "Mapa indisponível") => { message.hidden = true; errorBox.hidden = false; $("[data-map-error-title]").textContent = title; $("[data-map-error-detail]").textContent = detail; };
   const metricValue = row => {
     if (!row) return 0;
+    if(state.layer==="rain")return row.climate?.precipitation_mm??0;
+    if(state.layer==="wind")return row.climate?.gust_max_kmh??0;
+    if(state.layer==="correlation")return row.climate?.coincident_days??0;
+    if(state.layer==="calls"||state.layer==="motives")return row.geo_ticket_count??row.ticket_count??0;
+    if(state.layer==="client")return row.total_links||0;
     if (state.mode === "calls") return row.ticket_count || 0;
     if (state.mode === "repeat") return row.recurrence_links || 0;
     if (state.mode === "motives") return state.reason ? (row.reason_counts?.[reasonLabel()] || 0) : Object.values(row.reason_counts || {}).reduce((a,b)=>a+b,0);
@@ -202,14 +211,17 @@
   };
   function urlFor(path, overrides = {}) {
     const url = new URL(path, window.location.origin);
-    const params = { mode:state.mode, client:state.client, project:state.project, provider:state.provider, reason:state.reason, period:state.period, date_from:state.dateFrom, date_to:state.dateTo, status:state.status, priority:state.priority, arion_status:state.arionStatus, assignee:state.assignee, ...overrides };
+    const params = { mode:state.mode, include_intelligence:"1", region:state.region, category:state.category, uf:state.selectedUF, client:state.client, project:state.project, provider:state.provider, reason:state.reason, period:state.period, date_from:state.dateFrom, date_to:state.dateTo, status:state.status, priority:state.priority, arion_status:state.arionStatus, assignee:state.assignee, ...overrides };
     Object.entries(params).forEach(([key,value]) => { if (value) url.searchParams.set(key,value); });
     return url;
   }
   function syncUrl(){
     const url=new URL(location.href);
-    ["mode","client","project","period","uf","reason","provider","date_from","date_to","status","priority","arion_status","assignee","provenance"].forEach(key=>url.searchParams.delete(key));
+    ["region","layer","category","mode","client","project","period","uf","reason","provider","date_from","date_to","status","priority","arion_status","assignee","provenance"].forEach(key=>url.searchParams.delete(key));
     url.searchParams.set("mode",state.mode);
+    if(state.region)url.searchParams.set("region",state.region);
+    if(state.layer!=="analysis")url.searchParams.set("layer",state.layer);
+    if(state.category)url.searchParams.set("category",state.category);
     if(state.client!=="all")url.searchParams.set("client",state.client);
     if(state.project)url.searchParams.set("project",state.project);
     if(state.provider)url.searchParams.set("provider",state.provider);
@@ -238,8 +250,8 @@
       }
     }
     ui.period.disabled=!temporal;
-    ui.dates.hidden=!(temporal&&(state.period==="custom"||/^\d{4}-(0[1-9]|1[0-2])$/.test(state.period)));
-    ui.reasonWrap.hidden=state.mode!=="motives";
+    ui.dates.hidden=!(temporal&&state.period==="custom");
+    ui.reasonWrap.hidden=state.mode==="base";
     ui.ticketFilters.hidden=!temporal;
     ui.status.value=temporal?state.status:"";
     ui.priority.value=temporal?state.priority:"";
@@ -247,9 +259,14 @@
     ui.assignee.value=temporal?state.assignee:"";
     page.querySelectorAll("[data-mode]").forEach(item=>{const selected=item.dataset.mode===state.mode;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});
     if(["this_month","last_month","last_30","last_90","custom"].includes(state.period))ui.period.value=state.period;
-    else ui.period.value="custom";
+    else if(/^\d{4}-\d{2}$/.test(state.period)){
+      let option=ui.period.querySelector('[data-month-option]');
+      if(!option){option=document.createElement("option");option.dataset.monthOption="true";ui.period.append(option);}
+      option.value=state.period;option.textContent=state.period;ui.period.value=state.period;
+    }else ui.period.value="custom";
     ui.dateFrom.value=state.dateFrom;ui.dateTo.value=state.dateTo;
     renderActiveFilters();
+    if(isPresentation)ui.activeFilters.hidden=true;
     const titlePeriod=state.period.match(/^\d{4}-(0[1-9]|1[0-2])$/)?periodLabel({date_from:`${state.period}-01`}):periodLabel({date_from:state.dateFrom||data?.period?.date_from});
     const heading=state.mode==="base"?"Base de links":state.mode==="projects"?((state.project?"Projeto \u00b7 "+displayProject(state.project):"Projetos")+" \u00b7 "+titlePeriod):state.mode==="motives"?((state.reason?reasonLabel():"Motivos")+" \u00b7 "+titlePeriod):["calls","repeat"].includes(state.mode)?((state.mode==="calls"?"Chamados":"Reincid\u00eancia")+" \u00b7 "+titlePeriod):"Base de links";
     $("#geo-title").textContent=heading;
@@ -274,9 +291,12 @@
       if (!payload.states || !Array.isArray(payload.projects) || !Array.isArray(payload.providers)) throw new Error("A API retornou um formato inesperado.");
       if (seq !== requestSequence) return false;
       data = payload;
+      if(!state.selectedUF){closePanel();ui.breadcrumb.hidden=true;updateMapLayout();}
       fillFilters();
       updateModeControls();syncUrl();
       renderMap(); renderLegend(); renderNational();
+      if(state.region&&!state.selectedUF)fitRegion();
+      geoController.update(payload.geo_intelligence);
       message.hidden = true;
       if (state.selectedUF) await loadState(state.selectedUF);
       return true;
@@ -300,7 +320,7 @@
   }
   function fillFilters() {
     ui.project.innerHTML = '<option value="">Todos os projetos</option>' + data.projects.map(value=>`<option value="${esc(value)}">${esc(displayProject(value))}</option>`).join("");
-    const selectedProject = data.selected_project || "";
+    const selectedProject = isPresentation ? root.dataset.fixedProject : data.selected_project || "";
     state.project = data.projects.includes(selectedProject) ? selectedProject : "";
     ui.project.value = state.project;
     ui.provider.innerHTML = '<option value="">Todos os provedores</option>' + data.providers.map(row=>`<option value="${esc(row.id)}">${esc(row.name)}</option>`).join("");
@@ -337,19 +357,20 @@
   function maxMetric() { return Math.max(1,...Object.values(data?.states || {}).map(metricValue)); }
   function featureCollection() {
     const maximum=maxMetric();
-    return { type:"FeatureCollection", features:geojson.features.map(feature=>{
+    return { type:"FeatureCollection", features:geojson.features.filter(feature=>!state.region||(data?.allowed_ufs||[]).includes(feature.properties.sigla)).map(feature=>{
       const code=feature.properties.sigla,row=data.states[code] || {};
-      return { ...feature, id:code, properties:{...feature.properties,value:metricValue(row),dominant:dominantClient(row),intensity:Math.sqrt(metricValue(row)/maximum),has_data:metricValue(row)>0,context_faded:Boolean(state.selectedUF&&state.selectedUF!==code)} };
+      return { ...feature, id:code, properties:{...feature.properties,value:metricValue(row),dominant:dominantClient(row),cause:Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]||"",intensity:Math.sqrt(metricValue(row)/maximum),has_data:["rain","wind","correlation"].includes(state.layer)?Number.isFinite(state.layer==="wind"?row.climate?.gust_max_kmh:row.climate?.precipitation_mm):metricValue(row)>0,context_faded:Boolean(state.selectedUF&&state.selectedUF!==code)} };
     })};
   }
   function labelCollection() {
-    return {type:"FeatureCollection",features:Object.entries(stateLabelCoordinates).map(([code,coordinates])=>({
+    return {type:"FeatureCollection",features:Object.entries(stateLabelCoordinates).filter(([code])=>!state.region||(data?.allowed_ufs||[]).includes(code)).map(([code,coordinates])=>({
       type:"Feature",geometry:{type:"Point",coordinates},properties:{sigla:code},
     }))};
   }
   function calloutCollection() {
     const features=[];
     Object.entries(smallStateCallouts).forEach(([code,positions])=>{
+      if(state.region&&!(data?.allowed_ufs||[]).includes(code))return;
       features.push({type:"Feature",id:code,geometry:{type:"LineString",coordinates:[positions.anchor,positions.label]},properties:{sigla:code}});
       features.push({type:"Feature",id:code,geometry:{type:"Point",coordinates:positions.label},properties:{sigla:code}});
     });
@@ -364,7 +385,13 @@
     }
     return ["match",["get","dominant"],"claro",colorRamp(colors.claro),"vivo",colorRamp(colors.vivo),"algar",colorRamp(colors.algar),"other",colorRamp(colors.other),colors.unidentified];
   }
+  const geoRamps={rain:{light:["#e3edf6","#85acd0","#315f98"],dark:["#25384b","#5888ba","#b0d6fa"]},wind:{light:["#eee9f7","#ad91c6","#67508f"],dark:["#352945","#9173b2","#d0b3ef"]},correlation:{light:["#f8eadf","#d4a07d","#a35e3f"],dark:["#45332a","#ba8b66","#f0bd91"]}};
+  const causeColors={"Massiva":"#8975b6","Rompimento":"#bc805d","Equipamento":"#5f8eae","Energia":"#b49755","Configuração":"#699b9a","Reset remoto":"#8c96ac","Pendência Financeira":"#a48296","Demais motivos técnicos":"#8a8f98","Sem classificação":"#777d83"};
   function fillExpression() {
+    if(state.layer==="motives")return ["case",["get","has_data"],["match",["get","cause"],...Object.entries(causeColors).flat(),"#777d83"],theme()==="light"?"#d5d8dc":"#363839"];
+    if(geoRamps[state.layer])return ["case",["get","has_data"],colorRamp(geoRamps[state.layer][theme()]),theme()==="light"?"#d5d8dc":"#363839"];
+    if(state.layer==="client")return ["case",["get","has_data"],state.project?colorRamp(getProjectPalette(state.project)[theme()]):baseColorExpression(),theme()==="light"?"#d5d8dc":"#363839"];
+    if(state.layer==="calls")return ["case",["get","has_data"],colorRamp(quantitative.calls[theme()]),theme()==="light"?"#d5d8dc":"#363839"];
     const colors=(state.mode==="projects"?getProjectPalette(state.project):quantitative[state.mode]||quantitative.calls)[theme()];
     const metricColors=state.mode==="base"?baseColorExpression():colorRamp(colors);
     return ["case",["boolean",["get","has_data"],false],metricColors,theme()==="light"?"#d5dcda":"#363839"];
@@ -385,6 +412,8 @@
   function renderMap() {
     if (!map || !geojson) return;
     if (map.getSource("arion-states")) map.getSource("arion-states").setData(featureCollection());
+    if(map.getSource("arion-state-label-points"))map.getSource("arion-state-label-points").setData(labelCollection());
+    if(map.getSource("arion-state-callouts"))map.getSource("arion-state-callouts").setData(calloutCollection());
     syncFeatureStates();
     closeTooltip();
     if (map.getLayer("arion-state-fill")) map.setPaintProperty("arion-state-fill","fill-color",fillExpression());
@@ -414,6 +443,23 @@
     $("[data-map-context]")?.replaceChildren();
   }
   function renderLegend() {
+    if(state.layer==="client"){
+      const colors=brandPalettes[theme()];
+      if(!state.project&&state.client==="all"){
+        ui.legend.innerHTML=[...Object.entries({claro:"Claro",vivo:"Vivo",algar:"Algar",other:"Outras"})].map(([key,label])=>`<span class="legend-item"><i class="legend-dot" style="background:${colors[key][2]}"></i>${label}</span>`).join("");
+      }else{
+        const palette=state.project?getProjectPalette(state.project)[theme()]:(colors[norm(state.client)]||colors.other);
+        ui.legend.innerHTML=`<span class="legend-scale-label">Links CMDB \u00b7 ${esc(state.project||state.client)}</span><span class="legend-scale" style="background:linear-gradient(90deg,${palette.join(",")})"></span><span class="legend-scale-label">0 \u2014 ${number.format(maxMetric())}</span>`;
+      }
+      return;
+    }
+    if(state.layer==="motives"){
+      ui.legend.innerHTML=Object.entries(causeColors).filter(([label])=>!isPresentation||label!=="Pendência Financeira").map(([label,color])=>`<span class="legend-item"><i class="legend-dot" style="background:${color}"></i>${esc(label)}</span>`).join("");return;
+    }
+    if(geoRamps[state.layer]||state.layer==="calls"){
+      const ramps=geoRamps[state.layer]||quantitative.calls,colors=ramps[theme()],labels={rain:"Chuva estimada · mm",wind:"Rajada máxima ? km/h",correlation:"Dias com chuva ≥ 1 mm e incidentes técnicos · sem causalidade",calls:"Incidentes v?lidos"};
+      ui.legend.innerHTML=`<span class="legend-scale-label">${esc(labels[state.layer])}</span><span class="legend-scale" style="background:linear-gradient(90deg,${colors.join(",")})"></span><span class="legend-scale-label">0 — ${number.format(maxMetric())} · Cinza: sem dados</span>`;return;
+    }
     if (state.mode === "base") {
       ui.legend.classList.remove("geo-legend--scale");
       const colors=brandPalettes[theme()];
@@ -436,6 +482,10 @@
     const total=selectedTotal();
     const baseCoverage=Number(data.client_coverage||0).toLocaleString("pt-BR",{maximumFractionDigits:1});
     const max=Math.max(1,...rows.map(row=>row.value));
+    if(isPresentation){
+      ui.nationalView.innerHTML=`<div class="geo-executive-summary"><h3>${esc(state.selectedUF||state.region||"Brasil")} \u00b7 ${esc(state.client)}</h3><div class="geo-executive-metrics"><div><strong>${number.format(data.filtered_source_total||0)}</strong><span>Links CMDB</span></div><div><strong>${number.format(data.ticket_count||0)}</strong><span>Incidentes v\u00e1lidos</span></div></div><div class="geo-reasons"><h3>Links por macrorregi\u00e3o</h3>${Object.entries(data.region_link_counts||{}).map(([name,count])=>`<p><span>${esc(name)}</span><b>${number.format(count)}</b></p>`).join("")}</div><h3>Incidentes por UF</h3>${rows.filter(row=>(row.row.ticket_count||0)>0).sort((a,b)=>b.row.ticket_count-a.row.ticket_count).slice(0,3).map(row=>`<button type="button" class="geo-executive-uf" data-ranking-code="${row.code}"><span>${esc(row.name)}</span><strong>${number.format(row.row.ticket_count)}</strong></button>`).join("")}</div>`;
+      return;
+    }
     if (state.panelTab==="summary") {
       const top=rows[0];
       const projects=new Set(),clients=new Set(),providers=new Set();
@@ -514,11 +564,20 @@
     if(!response.ok) throw new Error("N\u00e3o foi poss\u00edvel abrir os detalhes da UF ("+response.status+").");
     const detail=await response.json();
     if(sequence!==detailSequence||state.selectedUF!==code)return;
+    if(isPresentation){
+      ui.panelCode.textContent=code;ui.panelName.textContent=stateNames[code]||code;ui.panelFlag.src=flags[code]||"";
+      ui.panelTotal.textContent=number.format(row.ticket_count||0);ui.panelScope.textContent="Incidentes válidos \u00b7 "+periodLabel(data.period);
+      ui.panelContext.textContent=state.client+" \u00b7 "+number.format(row.total_links||0)+" links CMDB";
+      page.querySelectorAll("[data-panel-section]").forEach(section=>section.hidden=section.dataset.panelSection!=="overview");
+      ui.panelOverview.innerHTML=Object.entries(row.category_counts||{}).map(([label,amount])=>`<div class="panel-overview-kpi"><strong>${number.format(amount)}</strong><span>${esc(label)}</span></div>`).join("");
+      ui.panelOverviewContext.textContent="Classificações registradas. Distribuição projetada disponível no resumo mensal.";
+      openPanel();return;
+    }
     ui.panelCode.textContent=code; ui.panelName.textContent=stateNames[code]||code;
     ui.panelFlag.src=flags[code]||""; ui.panelFlag.alt="Bandeira de "+(stateNames[code]||code);
     const count=metricValue(row);
     ui.panelTotal.textContent=number.format(count);
-    ui.panelScope.textContent=modeLabels[state.mode]+" \u00b7 "+(state.mode==="base"?"Atual":periodLabel(data.period));
+    ui.panelScope.textContent=({rain:"Chuva estimada (mm)",wind:"Rajada amostrada (km/h)",correlation:"Dias de coincid\u00eancia temporal",client:"Links CMDB",calls:"Incidentes v\u00e1lidos",motives:"Incidentes por categoria"}[state.layer]||modeLabels[state.mode])+" \u00b7 "+(state.mode==="base"?"Atual":periodLabel(data.period));
     ui.panelContext.textContent=number.format(row.total_links||0)+" links CMDB \u00b7 "+number.format(row.ticket_count||0)+" tickets no per\u00edodo \u00b7 "+number.format(row.recurrence_links||0)+" links reincidentes.";
     page.querySelectorAll("[data-state-tab]").forEach(button=>{
       const selected=button.dataset.stateTab===tab;
@@ -617,8 +676,16 @@
   }
   function openPanel(){panel.hidden=false;panel.inert=false;panel.setAttribute("aria-hidden","false");panelBackdrop.classList.add("is-visible");updateMapLayout();requestAnimationFrame(()=>panel.classList.add("is-open"));}
   function closePanel(){detailSequence++;detailController?.abort();panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");updateMapLayout();setTimeout(()=>{if(!state.selectedUF)panel.hidden=true;},220);}
-  function selectState(code,zoom=true){if(!stateNames[code])return;closeTooltip();if(state.selectedUF!==code){state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";}state.selectedUF=code;syncUrl();ui.breadcrumb.hidden=false;ui.selectedName.textContent=stateNames[code];renderActiveFilters();updateMapLayout();renderMap();loadState(code).catch(error=>{if(error.name!=="AbortError")showError(error.message,"Detalhes indisponíveis");});if(zoom)fitSelectedState();}
-  function clearSelection(){closeTooltip();state.selectedUF="";state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";syncUrl();ui.breadcrumb.hidden=true;renderActiveFilters();closePanel();renderMap();fitBrazil();}
+  function selectState(code,zoom=true){
+    if(!stateNames[code]||!geoController.allowedUFs().includes(code))return;
+    closeTooltip();
+    if(state.selectedUF!==code){state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";}
+    state.selectedUF=code;syncUrl();ui.breadcrumb.hidden=false;ui.selectedName.textContent=stateNames[code];
+    renderActiveFilters();updateMapLayout();renderMap();
+    fetchData().catch(error=>showError(error.message));
+    if(zoom)fitSelectedState();
+  }
+  function clearSelection(){closeTooltip();state.selectedUF="";state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";syncUrl();ui.breadcrumb.hidden=true;renderActiveFilters();closePanel();renderMap();if(state.region)fitRegion();else fitBrazil();fetchData().catch(error=>showError(error.message));}
   function updateSearchActive() {
     const options=[...ui.results.querySelectorAll("[data-search-code]")];
     options.forEach((option,index)=>option.setAttribute("aria-selected",String(index===searchIndex)));
@@ -627,9 +694,10 @@
     else ui.search.removeAttribute("aria-activedescendant");
   }
   function searchResults(){
+    if(!geojson){closeSearch();return;}
     const query=norm(ui.search.value);
     if(!query){closeSearch();return;}
-    const found=geojson.features.filter(feature=>norm(stateNames[feature.properties.sigla]||feature.properties.nome).includes(query)||feature.properties.sigla.toLowerCase().startsWith(query)).slice(0,8);
+    const found=geojson.features.filter(feature=>(!state.region||(data?.allowed_ufs||[]).includes(feature.properties.sigla))&&(norm(stateNames[feature.properties.sigla]||feature.properties.nome).includes(query)||feature.properties.sigla.toLowerCase().startsWith(query))).slice(0,8);
     ui.results.innerHTML=found.map(feature=>{const code=feature.properties.sigla,name=stateNames[code]||code;return `<button id="state-search-option-${code}" type="button" class="state-search-option" role="option" aria-selected="false" data-search-code="${code}"><img src="${esc(flags[code]||"")}" alt="" width="22" height="15" loading="lazy"><span>${esc(name)}</span><small>${code}</small></button>`;}).join("");
     ui.results.hidden=!found.length;ui.search.setAttribute("aria-expanded",String(found.length>0));searchIndex=-1;page.classList.toggle("is-search-open",found.length>0);updateSearchActive();
   }
@@ -674,7 +742,7 @@
     $("[data-national-expand]").addEventListener("click",()=>setNationalCollapsed(false));
     page.querySelectorAll("[data-national-tab]").forEach(button=>button.addEventListener("click",()=>setPanelTab(button.dataset.nationalTab)));
     $("[data-brazil-link]").addEventListener("click",clearSelection);$("[data-panel-close]").addEventListener("click",clearSelection);
-    const moveState=step=>{const index=stateOrder.indexOf(state.selectedUF);if(index<0)return;selectState(stateOrder[(index+step+stateOrder.length)%stateOrder.length]);};
+    const moveState=step=>{const order=stateOrder.filter(code=>!state.region||(data?.allowed_ufs||[]).includes(code));const index=order.indexOf(state.selectedUF);if(index<0)return;selectState(order[(index+step+order.length)%order.length]);};
     ui.ufPrevious.addEventListener("click",()=>moveState(-1));ui.ufNext.addEventListener("click",()=>moveState(1));
     $("[data-map-retry]").addEventListener("click",initialize);
     window.addEventListener("arion:themechange",event=>{const next=event.detail?.theme||theme();if(map?.getLayer("arion-background"))map.setPaintProperty("arion-background","background-color",next==="light"?"#e5eae6":"#0c0d0d");renderMap();renderLegend();});
@@ -690,7 +758,7 @@
       const response=await fetch(root.dataset.geojsonUrl,{signal:AbortSignal.timeout(20000)});if(!response.ok)throw new Error("Não foi possível carregar as geometrias locais.");geojson=await response.json();
       if(geojson.type!=="FeatureCollection"||geojson.features.length!==27)throw new Error("A base geográfica precisa conter as 27 UFs.");
       await fetchData();window.mapboxgl.accessToken=root.dataset.token;
-      map=new window.mapboxgl.Map({container:mapElement,style:{version:8,glyphs:"mapbox://fonts/mapbox/{fontstack}/{range}.pbf",sources:{},layers:[{id:"arion-background",type:"background",paint:{"background-color":theme()==="light"?"#e5eae6":"#0c0d0d"}}]},bounds:[[-76,-37],[-32,8]],fitBoundsOptions:{padding:35},minZoom:2.5,maxZoom:8,renderWorldCopies:false,attributionControl:true,cooperativeGestures:false});
+      map=new window.mapboxgl.Map({container:mapElement,style:{version:8,glyphs:"mapbox://fonts/mapbox/{fontstack}/{range}.pbf",sources:{},layers:[{id:"arion-background",type:"background",paint:{"background-color":theme()==="light"?"#e5eae6":"#0c0d0d"}}]},bounds:[[-76,-37],[-32,8]],fitBoundsOptions:{padding:35},minZoom:1.3,maxZoom:8,renderWorldCopies:false,attributionControl:true,cooperativeGestures:false});
       map.addControl(new window.mapboxgl.NavigationControl({showCompass:false}),"top-right");map.dragRotate.disable();map.touchZoomRotate.disableRotation();
       map.on("load",()=>{try{
         map.addSource("arion-states",{type:"geojson",data:featureCollection(),promoteId:"sigla"});
@@ -799,6 +867,17 @@
     const code=codeOverride||event.features?.[0]?.properties?.sigla;if(!code){closeTooltip();return;}
     if(code===state.selectedUF){closeTooltip();return;}
     const row=data?.states?.[code]||{};
+    if(state.layer==="client"||state.layer==="motives"){
+      const cause=Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0];
+      const label=state.layer==="client"?"Links CMDB":(cause?.[0]||"Sem dados de categoria");
+      ui.hoverTooltip.innerHTML=`<div class="state-tooltip"><strong>${esc(stateNames[code])}</strong><p>${esc(label)} \u00b7 ${number.format(metricValue(row))}</p></div>`;
+      ui.hoverTooltip.hidden=false;positionTooltip(event.point);return;
+    }
+    if(["rain","wind","correlation"].includes(state.layer)){
+      const labels={rain:"Chuva estimada (mm)",wind:"Rajada máxima amostrada (km/h)",correlation:"Dias coincidentes · sem causalidade"};
+      ui.hoverTooltip.innerHTML=`<div class="state-tooltip"><strong>${esc(stateNames[code])}</strong><p>${esc(labels[state.layer])}: ${row.climate?number.format(metricValue(row)):"Indisponível"}</p></div>`;
+      ui.hoverTooltip.hidden=false;tooltipPoint=event.point;positionTooltip(tooltipPoint);return;
+    }
     const key=[code,state.mode,state.reason,state.project,metricValue(row)].join("|");
     if(key!==tooltipKey){ui.hoverTooltip.innerHTML=buildTooltip(code,row);tooltipKey=key;}
     ui.hoverTooltip.hidden=false;
@@ -806,7 +885,25 @@
     if(!tooltipMoveFrame)tooltipMoveFrame=requestAnimationFrame(()=>{tooltipMoveFrame=0;if(!ui.hoverTooltip.hidden)positionTooltip(tooltipPoint);});
   }
 
+  function fitRegion(){
+    if(!map||!geojson)return;
+    const features=geojson.features.filter(f=>!state.region||(data?.allowed_ufs||[]).includes(f.properties.sigla));
+    if(!features.length)return;
+    const bounds=new window.mapboxgl.LngLatBounds();
+    const walk=coords=>{if(typeof coords[0]==="number")bounds.extend(coords);else coords.forEach(walk);};
+    features.forEach(f=>walk(f.geometry.coordinates));
+    map.fitBounds(bounds,{padding:mapFitPadding(false),maxZoom:6,duration:window.matchMedia("(prefers-reduced-motion: reduce)").matches?0:650});
+  }
+  const geoController=mountGeoIntelligence({page,root,state,urlFor,refresh:fetchData,fitRegion:()=>setTimeout(fitRegion,100),selectUF:code=>code?selectState(code):clearSelection(),onWeather:payload=>{
+    if(!data)return;
+    Object.entries(data.states).forEach(([code,row])=>{row.climate=payload.weather[code];row.geo_ticket_count=payload.summary.states[code]?.ticket_count||0;row.geo_category_counts=payload.summary.states[code]?.category_counts||{};});
+    renderMap();renderLegend();
+  }});
   updateModeControls();
   page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client===state.client;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});
   bind();initialize();
+  if(window.ResizeObserver){
+    let layoutFrame=0;
+    new ResizeObserver(()=>{cancelAnimationFrame(layoutFrame);layoutFrame=requestAnimationFrame(()=>{if(map){map.resize();refitCurrentMap(0);}});}).observe(mapElement);
+  }
 })();

@@ -313,6 +313,7 @@ MIDDLEWARE = [
 
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "aplicativos.mapa.middleware.PresentationIsolationMiddleware",
     "config.middleware.PasswordPolicyMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -805,3 +806,8 @@ else:
     SECURE_HSTS_PRELOAD = False
 
     ARION_CSP_REPORT_ONLY = False
+
+# Presentation projections are aggregate estimates, never OTRS diagnoses.
+import json as _geo_json
+GEO_PRESENTATION_WEIGHTS = _geo_json.loads(os.getenv("GEO_PRESENTATION_WEIGHTS", '{"Massiva":40,"Rompimento":30,"Equipamento":30}'))
+GEO_PRESENTATION_WEIGHT_MODE = os.getenv("GEO_PRESENTATION_WEIGHT_MODE", "configured")

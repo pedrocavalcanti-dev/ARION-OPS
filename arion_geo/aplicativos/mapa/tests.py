@@ -210,7 +210,7 @@ class MapMirrorTests(TestCase):
             'if(state.selectedUF)url.searchParams.set("uf",state.selectedUF)',
             "if (state.selectedUF) await loadState(state.selectedUF)",
             'const temporal=["projects","calls","repeat","motives"].includes(state.mode);',
-            'ui.reasonWrap.hidden=state.mode!=="motives";',
+            'ui.reasonWrap.hidden=state.mode==="base";',
         ):
             self.assertIn(token, script)
         self.assertEqual(script.count("bind();initialize();"), 1)

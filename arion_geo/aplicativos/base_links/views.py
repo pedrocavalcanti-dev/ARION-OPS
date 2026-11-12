@@ -393,6 +393,10 @@ def map_aggregates(request):
 
     try:
         data = MapAnalyticsService.query(request.user, request.GET)
+        month = request.GET.get("period") or "last_month"
+        if request.GET.get("include_intelligence") == "1" and data["mode"] == "calls" and (month in {"last_month","this_month"} or len(month)==7):
+            from aplicativos.mapa.services.geo_intelligence import intelligence_payload
+            data["geo_intelligence"] = intelligence_payload(request.user,request.GET,summary={**data})
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
     return JsonResponse(data)
@@ -402,6 +406,7 @@ def map_aggregates(request):
 @access_required("view_map")
 @require_GET
 def map_state_detail(request):
+    from aplicativos.integracoes.services.incidents import IncidentRules
     from aplicativos.mapa.services.analytics import MapAnalyticsService, STATE_NAMES, STATE_NAMES_ACCENTED, VALID_PROCEDENCE, _bounds, _client_filter, _client_label_matches, _datetime_bounds, _uf, filter_tracking_relations
     from aplicativos.integracoes.services.link_business_identity import BusinessIdentityRules
     from aplicativos.integracoes.services.ticket_business_identity import TicketBusinessIdentityService
@@ -476,6 +481,7 @@ def map_state_detail(request):
         ).filter(business_statuses_query("ticket__business_status", statuses)).select_related(
             "ticket", "cmdb_link", "cmdb_link__operator",
         ).order_by("-ticket__source_created_at")
+        relations = IncidentRules.filter(IncidentRules.valid(relations, "ticket__"), params, "ticket__")
         if mode == "motives":
             relations = relations.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),

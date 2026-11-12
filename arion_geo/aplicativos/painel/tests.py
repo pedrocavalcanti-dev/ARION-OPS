@@ -508,7 +508,7 @@ class MirrorAnalyticsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.context["quality_pulse"])
-        self.assertContains(response, "Aging do backlog operacional")
+        self.assertContains(response, "Aging da fila operacional")
         self.assertNotContains(response, "Qualidade operacional")
 
     def test_dashboard_keeps_created_volume_and_official_closed_snapshot(self):
@@ -569,9 +569,9 @@ class MirrorAnalyticsTests(TestCase):
                 user=self.user, start=date(2026, 10, 1), end=date(2026, 10, 31),
             )
         self.assertLessEqual(len(queries), 20)
-        self.assertEqual(october["calls"], 6)  # Tickets NOC sem relação também entram no volume.
+        self.assertEqual(october["calls"], 4)  # Tickets NOC sem relação também entram no volume.
         self.assertEqual(october["repeat"], 1)  # Somente o Link com dois Tickets distintos.
-        self.assertEqual(october["monthly"][0]["calls"], 6)
+        self.assertEqual(october["monthly"][0]["calls"], 4)
         self.assertEqual(october["monthly"][0]["repeat"], 1)
         self.assertEqual(october["business_open"], 3)
         self.assertEqual(october["aging"]["open_count"], 3)
@@ -722,9 +722,9 @@ class MirrorAnalyticsTests(TestCase):
         }, user=self.user)
         self.assertEqual(result["options"]["service"], ["Internet"])
         self.assertEqual(result["options"]["sla"], ["Resposta NOC"])
-        self.assertEqual(result["options"]["source_state"], [{"value": "em atendimento", "label": "Em atendimento"}])
+        self.assertEqual(result["options"]["source_state"], [{"value": "OPEN", "label": "Em atendimento"}])
         self.assertEqual(result["options"]["status"], [{"value": "OPEN", "label": "Em atendimento"}])
-        self.assertEqual(result["breakdown"][0], {"key": "em atendimento", "dimension": "Em atendimento", "value": 1, "share": 100.0})
+        self.assertEqual(result["breakdown"][0], {"key": "OPEN", "dimension": "Em atendimento", "value": 1, "share": 100.0})
         self.assertEqual(result["value"], 1)
 
     def test_cockpit_cancellation_scope_classifies_stages_and_filters_the_stage(self):
@@ -1039,7 +1039,7 @@ class MirrorAnalyticsTests(TestCase):
 
         result = AnalyticsQueryService().query({
             "scope": "support", "metric": "tickets", "start": "2026-10-05",
-            "end": "2026-10-10", "filters": {},
+            "end": "2026-10-10", "filters": {}, "include_cancelled": True,
         }, user=self.user)["operational"]
         self.assertIsNone(result["period"]["backlog_initial"])
         self.assertEqual(result["period"]["closed"], 0)
@@ -1539,6 +1539,7 @@ class MirrorAnalyticsTests(TestCase):
             "metric": "closed_tickets", "start": "2026-07-01", "end": "2026-09-30",
             "group_by": "termination_reason", "filters": {},
         }
+        payload.update(include_cancelled=True, include_improcedente=True)
         result = AnalyticsQueryService().query(payload, user=self.user)
         reason_options = result["options"]["termination_reason"]
         self.assertEqual(len(reason_options), len({item["value"] for item in reason_options}))
@@ -1680,7 +1681,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual(unknown["value"], 0)
         self.assertEqual(unknown["detail"], [])
         status_options = {row["value"]: row["label"] for row in result["options"]["status"]}
-        self.assertEqual(status_options, {"OPEN": "Em atendimento", "PENDING": "Pendente", "SCHEDULED": "Agendado", "RESOLVED": "Resolvido", "CANCELED": "Cancelado"})
+        self.assertEqual(status_options, {"OPEN": "Em atendimento", "PENDING": "Pendente", "SCHEDULED": "Agendado", "RESOLVED": "Resolvido"})
         for export_format in ("csv", "xlsx"):
             with self.subTest(export_format=export_format):
                 response = self.client.post(
@@ -1961,7 +1962,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn("Incluir improcedentes", manager_text)
         self.assertIn("Evolu\u00e7\u00e3o operacional e backlog", manager_text)
         self.assertIn("Aging do estoque atual", manager_text)
-        self.assertIn("Snapshot atual", manager_text)
+        self.assertIn("Backlog atual", manager_text)
         self.assertIn("Exibindo 2 de 2 tickets", manager_text)
         from reportlab.pdfbase import pdfmetrics
         self.assertGreater(pdfmetrics.stringWidth("Período · Pendência Financeira · Criação · Não identificado · Página", "ArionVera", 8), 0)
@@ -2235,7 +2236,7 @@ class MirrorAnalyticsTests(TestCase):
             link = CMDBLinkMirror.objects.create(source_config_item_id=f"export-link-{index}", operator=provider, state="SP")
             ticket = self._ticket(900 + index, "CANCELED" if index == 26 else "OPEN", index != 26, 5)
             OTRSTicketConfigItem.objects.create(ticket=ticket, config_item_id=link.source_config_item_id, cmdb_link=link, relation_type=f"Export-{index}", relation_state="Valid")
-        base = {"metric": "tickets", "group_by": "provider", "period_from": "2026-10", "period_to": "2026-10", "period": "2026-10", "detail_page": 2, "filters": {}}
+        base = {"metric": "tickets", "group_by": "provider", "period_from": "2026-10", "period_to": "2026-10", "period": "2026-10", "detail_page": 2, "filters": {}, "include_cancelled": True, "include_improcedente": True}
         expected = AnalyticsQueryService().query(base, user=self.user)
         csv_response = self.client.post(reverse("analytics-export"), data=json.dumps({**base, "format": "csv"}), content_type="application/json")
         csv_text = csv_response.content.decode("utf-8-sig")
@@ -2360,7 +2361,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertIn('filters: { responsibility: "PROCEDENTE" }', script)
         self.assertIn('filters: { age_bucket: "OVER_24H" }', script)
         self.assertIn('filters: { responsible: "unassigned" }', script)
-        self.assertIn('include_cancelled: true, include_improcedente: true', script)
+        self.assertIn('include_cancelled: false, include_improcedente: false', script)
         self.assertIn('if (key === "improper") queryState.include_improcedente = true', script)
         self.assertIn('if (!queryState.include_cancelled) params.set("include_cancelled", "0")', script)
         self.assertIn('if (!queryState.include_improcedente) params.set("include_improcedente", "0")', script)
@@ -2388,12 +2389,12 @@ class MirrorAnalyticsTests(TestCase):
         expanded = service.query({**base, "include_cancelled": True, "include_improcedente": True},
                                  user=self.user, include_all_rows=True)
 
-        self.assertEqual(default["value"], 3)
-        self.assertEqual(default["ticket_result_total"], 3)
-        self.assertTrue(default["normalized_query"]["include_cancelled"])
-        self.assertTrue(default["normalized_query"]["include_improcedente"])
-        self.assertEqual(default["operational"]["period"]["entries"], 3)
-        self.assertEqual(default["operational"]["period"]["canceled"], 1)
+        self.assertEqual(default["value"], 1)
+        self.assertEqual(default["ticket_result_total"], 1)
+        self.assertFalse(default["normalized_query"]["include_cancelled"])
+        self.assertFalse(default["normalized_query"]["include_improcedente"])
+        self.assertEqual(default["operational"]["period"]["entries"], 1)
+        self.assertEqual(default["operational"]["period"]["canceled"], 0)
         self.assertEqual(default["operational"]["current"]["total"], 1)
         self.assertEqual(expanded["value"], 3)
         self.assertEqual(expanded["ticket_result_total"], 3)
@@ -2442,7 +2443,7 @@ class MirrorAnalyticsTests(TestCase):
         self.assertEqual({row["id"] for row in assigned_filter["tickets"]}, {assigned.pk})
         self.assertIn({"value": "assigned", "label": "Atribu\u00eddo"}, assigned_filter["options"]["responsible"])
         self.assertEqual({row["id"] for row in aged["tickets"]}, {assigned.pk})
-        self.assertEqual(queue["value"], 2)
+        self.assertEqual(queue["value"], 1)
         self.assertIn("NOC - ATACADO", queue["options"]["queue"])
         self.assertEqual(aged["normalized_query"]["filters"]["age_bucket"], "OVER_24H")
 

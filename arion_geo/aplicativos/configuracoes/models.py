@@ -41,6 +41,7 @@ class GroupDataScope(models.Model):
             ("view_cockpit", "Can view the analytics cockpit"),
             ("save_analytics_views", "Can save analytics views"),
             ("view_map", "Can view the operational map"),
+            ("present_geo", "Can present client GEO Intelligence"),
             ("view_rankings", "Can view provider rankings"),
             ("view_base", "Can view the CMDB base"),
               ("view_operational_tickets", "Can view operational tickets"),

@@ -358,7 +358,8 @@ class RankingService:
             Q(resolved_at__gte=history_start_at, resolved_at__lt=end_exclusive)
             | Q(resolved_at__isnull=True, terminal_state_at__gte=history_start_at, terminal_state_at__lt=end_exclusive)
         )
-        relevant_tickets = TicketQueryService.noc_tickets().filter(
+        from aplicativos.integracoes.services.incidents import IncidentRules
+        relevant_tickets = IncidentRules.valid(TicketQueryService.noc_tickets()).filter(
             business_statuses_query("business_status", VALID_STATES),
         ).filter(
             Q(source_created_at__gte=history_start_at, source_created_at__lt=end_exclusive)
