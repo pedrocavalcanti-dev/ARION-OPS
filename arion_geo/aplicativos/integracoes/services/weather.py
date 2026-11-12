@@ -17,9 +17,47 @@ from .external_apis import decrypt_external_api_secret
 from .geography import STATE_BY_UF
 from .sync_lock import Lease
 
-VARIABLES = {"precipitation_sum": "mm", "wind_speed_10m_max": "km/h", "wind_gusts_10m_max": "km/h"}
-METHOD = "area-grid-v1"
+VARIABLES = {"precipitation_sum": "mm", "wind_speed_10m_max": "km/h", "wind_gusts_10m_max": "km/h",
+             "temperature_2m_mean": "°C", "temperature_2m_min": "°C", "temperature_2m_max": "°C",
+             "wind_direction_10m_dominant": "°"}
+METHOD = "area-grid-v2"
 MODEL = "era5"
+
+
+def collection_readiness(integration=None):
+    """Safe configuration state. No network, secrets or implicit activation."""
+    integration = integration or ExternalAPIIntegration.objects.filter(provider="open_meteo").first()
+    if not integration or not integration.enabled:
+        return {"status":"disabled", "message":"Integração climática desabilitada. Configure e habilite na Central de Integrações."}
+    cfg = integration.config or {}
+    mode = cfg.get("mode", "evaluation")
+    if mode not in ARCHIVE_ENDPOINTS or cfg.get("endpoint", ARCHIVE_ENDPOINTS.get(mode)) != ARCHIVE_ENDPOINTS.get(mode):
+        return {"status":"incompatible", "message":"Modalidade ou destino incompatível com a integração climática."}
+    if mode == "evaluation" and getattr(settings,"ARION_PRODUCTION",False):
+        return {"status":"incompatible", "message":"Avaliação gratuita indisponível em produção. Configure a modalidade comercial licenciada."}
+    if mode == "evaluation" and not cfg.get("evaluation_authorized"):
+        return {"status":"unauthorized", "message":"Avaliação sem autorização administrativa de homologação não comercial."}
+    if mode == "commercial" and (not cfg.get("license_confirmed") or not integration.secret_ciphertext):
+        return {"status":"incomplete", "message":"Configuração incompleta: licença de histórico e chave comercial pendentes."}
+    return {"status":"ready", "message":"Integração configurada; coleta executada pelo worker."}
+
+
+def circular_mean(values):
+    if not values:
+        return None
+    x=sum(math.cos(math.radians(v))*w for v,w in values)
+    y=sum(math.sin(math.radians(v))*w for v,w in values)
+    return math.degrees(math.atan2(y,x)) % 360 if math.hypot(x,y)>1e-8*sum(w for _,w in values) else None
+
+
+def spatial_value(variable, present):
+    if not present:
+        return None
+    if variable == "wind_direction_10m_dominant":
+        return circular_mean(present)
+    if variable in {"precipitation_sum", "temperature_2m_mean"}:
+        return sum(v*w for v,w in present)/sum(w for _,w in present)
+    return (min if variable == "temperature_2m_min" else max)(v for v,_ in present)
 
 
 def month_bounds(value=None):
@@ -124,7 +162,9 @@ def parse_daily(payload, start, end):
             if units[variable] != unit or len(daily[variable]) != days:
                 raise ValueError
             for value in daily[variable]:
-                if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value < 0):
+                if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value)
+                                          or (value < 0 and not variable.startswith("temperature_"))
+                                          or (variable == "wind_direction_10m_dominant" and value > 360)):
                     raise ValueError
         lat, lon = float(payload["latitude"]), float(payload["longitude"])
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -146,13 +186,19 @@ def summarize(samples):
         for variable in VARIABLES:
             present = [(p["daily"][variable][i], p["area_km2"]) for p in samples if p["daily"][variable][i] is not None]
             valid_values += len(present)
-            row[variable] = (sum(v*w for v,w in present)/sum(w for _,w in present) if variable == "precipitation_sum" else max(v for v,_ in present)) if present else None
+            row[variable] = spatial_value(variable, present)
         row["rain_coverage"] = sum(p["area_km2"] for p in samples if p["daily"]["precipitation_sum"][i] is not None)/area
         daily.append(row)
     rain = [r["precipitation_sum"] for r in daily if r["precipitation_sum"] is not None]
     winds = [r["wind_speed_10m_max"] for r in daily if r["wind_speed_10m_max"] is not None]
     gusts = [r["wind_gusts_10m_max"] for r in daily if r["wind_gusts_10m_max"] is not None]
-    return {"precipitation_mm": round(sum(rain),2) if rain else None,
+    temperatures = [r["temperature_2m_mean"] for r in daily if r["temperature_2m_mean"] is not None]
+    low = [r["temperature_2m_min"] for r in daily if r["temperature_2m_min"] is not None]
+    high = [r["temperature_2m_max"] for r in daily if r["temperature_2m_max"] is not None]
+    return {"temperature_mean_c":sum(temperatures)/len(temperatures) if temperatures else None,
+            "temperature_min_c":min(low) if low else None, "temperature_max_c":max(high) if high else None,
+            "wind_direction_deg":circular_mean([(r["wind_direction_10m_dominant"],1) for r in daily if r["wind_direction_10m_dominant"] is not None]),
+            "variables":list(VARIABLES), "precipitation_mm": round(sum(rain),2) if rain else None,
             "rainy_days": sum(v>=1 for v in rain) if rain else None,
             "rainy_days_percent": round(sum(v>=1 for v in rain)/len(rain)*100,1) if rain else None,
             "wind_max_kmh": max(winds) if winds else None, "gust_max_kmh": max(gusts) if gusts else None,
@@ -240,7 +286,7 @@ def request_collection(ufs, period, user):
             if cached:
                 continue
             job, created = WeatherCollectionJob.objects.get_or_create(uf=uf, period=start, defaults={"requested_by":user})
-            if not created and job.status in {"error","success"} and job.updated_at < now-timedelta(minutes=5):
+            if not created and (job.status == "success" or (job.status == "error" and job.updated_at < now-timedelta(minutes=5))):
                 job.status, job.attempts, job.next_attempt_at, job.last_error = "pending",0,now,""
                 job.requested_by = user
                 job.save()
@@ -254,8 +300,8 @@ def cached_weather(ufs, period):
     mode = (integration.config or {}).get("mode","evaluation") if integration else "evaluation"
     if getattr(settings,"ARION_PRODUCTION",False) and mode!="commercial":
         return {}
-    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source="open_meteo_"+mode,model=MODEL,method=METHOD)
-    return {row.uf:{**row.summary, "source":row.source, "model":row.model, "method":row.method, "collected_at":row.collected_at.isoformat(), "stale":row.expires_at<=timezone.now()} for row in rows}
+    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source="open_meteo_"+mode,model=MODEL,method__in=("area-grid-v1",METHOD)).order_by("uf","method")
+    return {row.uf:{**row.summary, "source":row.source, "model":row.model, "method":row.method, "collected_at":row.collected_at.isoformat(), "stale":row.expires_at<=timezone.now() or row.method!=METHOD} for row in rows}
 
 
 def worker_tick():

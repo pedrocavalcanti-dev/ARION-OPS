@@ -22,14 +22,51 @@ def ibge_client():
 
 
 def weather_response(start=date(2026,10,1),days=31,rain=2):
-    return {"latitude":-23.5,"longitude":-46.5,"daily_units":{"precipitation_sum":"mm","wind_speed_10m_max":"km/h","wind_gusts_10m_max":"km/h"},
-            "daily":{"time":[(start+timedelta(days=i)).isoformat() for i in range(days)],"precipitation_sum":[rain]*days,"wind_speed_10m_max":[20]*days,"wind_gusts_10m_max":[50]*days}}
+    return {"latitude":-23.5,"longitude":-46.5,"daily_units":{"precipitation_sum":"mm","wind_speed_10m_max":"km/h","wind_gusts_10m_max":"km/h","temperature_2m_mean":"°C","temperature_2m_min":"°C","temperature_2m_max":"°C","wind_direction_10m_dominant":"°"},
+            "daily":{"time":[(start+timedelta(days=i)).isoformat() for i in range(days)],"precipitation_sum":[rain]*days,"wind_speed_10m_max":[20]*days,"wind_gusts_10m_max":[50]*days,"temperature_2m_mean":[22]*days,"temperature_2m_min":[15]*days,"temperature_2m_max":[30]*days,"wind_direction_10m_dominant":[350]*days}}
 
 
 class GeographyWeatherTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_superuser("geo-admin","geo@example.invalid","strong-test-password")
         self.integration = ExternalAPIIntegration.objects.create(provider="open_meteo",name="Weather",enabled=True,config={"mode":"evaluation","evaluation_authorized":True,"daily_budget":250})
+
+    def test_temperature_extremes_and_circular_direction_keep_correct_units(self):
+        a=weather_response(days=2);b=weather_response(days=2)
+        a["daily"].update(temperature_2m_mean=[-4,0],temperature_2m_min=[-10,-5],temperature_2m_max=[3,5],wind_direction_10m_dominant=[350,350])
+        b["daily"].update(temperature_2m_mean=[4,8],temperature_2m_min=[0,2],temperature_2m_max=[12,15],wind_direction_10m_dominant=[10,10])
+        samples=[parse_daily(row,date(2026,10,1),date(2026,10,2)) for row in (a,b)]
+        for sample in samples:sample["area_km2"]=1
+        result=summarize(samples)
+        self.assertEqual(result["temperature_mean_c"],2)
+        self.assertEqual(result["temperature_min_c"],-10)
+        self.assertEqual(result["temperature_max_c"],15)
+        direction=result["wind_direction_deg"]
+        self.assertLess(min(direction,360-direction),.01)
+        a["daily_units"]["temperature_2m_mean"]="°F"
+        with self.assertRaises(PublicDataError):parse_daily(a,date(2026,10,1),date(2026,10,2))
+
+    def test_readiness_distinguishes_license_states_without_network_or_secret(self):
+        from .services.weather import collection_readiness
+        self.integration.enabled=False
+        self.assertEqual(collection_readiness(self.integration)["status"],"disabled")
+        self.integration.enabled=True
+        self.integration.config={"mode":"commercial"}
+        self.assertEqual(collection_readiness(self.integration)["status"],"incomplete")
+        self.integration.config={"mode":"evaluation"}
+        self.assertEqual(collection_readiness(self.integration)["status"],"unauthorized")
+        self.integration.config={"mode":"evaluation","evaluation_authorized":True}
+        with override_settings(ARION_PRODUCTION=True):
+            self.assertEqual(collection_readiness(self.integration)["status"],"incompatible")
+
+    def test_successful_job_without_current_method_cache_is_rescheduled_once(self):
+        job=WeatherCollectionJob.objects.create(uf="SP",period=date(2026,10,1),status="success",attempts=1)
+        self.assertEqual(request_collection(["SP"],"2026-10",self.user),[job.pk])
+        job.refresh_from_db()
+        self.assertEqual(job.status,"pending")
+        self.assertEqual(job.attempts,0)
+        self.assertEqual(request_collection(["SP"],"2026-10",self.user),[job.pk])
+        self.assertEqual(WeatherCollectionJob.objects.count(),1)
 
     def test_offline_catalog_complete_and_southeast_exact(self):
         self.assertEqual(len(catalog()["regions"]),5)
