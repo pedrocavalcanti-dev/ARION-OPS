@@ -4,7 +4,7 @@ Esta entrega não altera a versão registrada nem a tag `v1.4.0`. Nenhum deploy 
 
 ## Preparação
 
-Registre o commit atualmente implantado (`git rev-parse HEAD`) e o estado das tarefas/supervisores. A base local anterior a esta entrega era `b961b18`. Preserve `.env`, configuração de banco e identidade Windows que protege as credenciais. A coleta Open-Meteo não inicia habilitada e não exige nova variável secreta no `.env`.
+Registre o commit atualmente implantado (`git rev-parse HEAD`) e o estado das tarefas/supervisores. A base local anterior a esta entrega era `b961b18`. Preserve `.env`, configuração de banco e identidade Windows que protege as credenciais. Novos cadastros GEO são inicializados habilitados pelo bootstrap idempotente, com fonte pública, sem chave e sem agendamento/coleta automática. Configurações existentes são preservadas.
 
 No MySQL DEV, confirmar nome do schema e executar `migrate`, `check`, `makemigrations --check` e testes focados descritos na documentação funcional. Nunca apontar testes para `arion_geo` de produção nem para OTRS. Esta etapa está pendente por ausência de configuração DEV MySQL neste checkout.
 
@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Migration falhou.' }
 
 Node 24 é o requisito já declarado em `package.json`. Nenhuma dependência nova de aplicação foi introduzida. Migrations: `configuracoes.0012_alter_groupdatascope_options` e `integracoes.0017_geographycatalog_and_more`, ambas aditivas/metadata.
 
-Na Central: habilitar IBGE, testar e solicitar sincronização; verificar 5 regiões/27 UFs e sucesso do worker. Para clima corporativo, configurar modalidade comercial, licença compatível, endpoint permitido e chave pela própria Central sob a identidade Windows apropriada. Testar o contrato, solicitar uma UF/mês autorizada e acompanhar o cache/saúde. Não interpretar “configurado” como integração ativa já homologada. A opção de atualização periódica é explícita e somente comercial.
+Na Central, conferir os cadastros GEO criados pelo bootstrap e as configurações preservadas. Testar IBGE e solicitar sincronização; verificar cinco regiões/27 UFs. Open-Meteo admite fonte pública sem chave, comercial com chave real ou self-hosted HTTPS. A funcionalidade não impõe bloqueio por ambiente nem confirmação administrativa de licença; as condições do fornecedor continuam aplicáveis. Testar o contrato e solicitar uma única UF/mês, conferindo Worker e cache. Agendamento exige ativação e seleção explícita das UFs. Ver [procedimento atual e evidência real SP/2026-10](../06-integracoes-e-dados/open-meteo-homologacao.md).
 
 Conceder `configuracoes.present_geo` apenas aos grupos autorizados. Validar Mapa Brasil/Sudeste/SP, troca de mês, tema claro/escuro, apresentação/encerramento, bloqueio de APIs internas durante a apresentação e os dois fluxos de Cancelamentos. Conferir as páginas autenticadas usuais e os logs sanitizados do worker.
 
@@ -66,7 +66,7 @@ Conceder `configuracoes.present_geo` apenas aos grupos autorizados. Validar Mapa
 
 Ao reaplicar a correção, retornar à `main` validada por fast-forward conforme o processo da equipe, sem force push e sem alterar `v1.4.0`.
 
-## Evidência DEV em 12/11/2026
+## Evidência da entrega GEO anterior — 12/11/2026
 
 - `check`: sem problemas. `makemigrations --check --dry-run`: sem alterações pendentes. As duas migrations foram aplicadas com sucesso no SQLite local.
 - Bateria focada: **300 testes passaram**, cobrindo Mapa, GEO/clima, motivos, worker, APIs externas, Cancelamentos, Rankings e `MirrorAnalyticsTests` de Dashboard/Cockpit. O runner local usou um hasher rápido somente durante testes; a configuração de senhas da aplicação permaneceu intacta.
@@ -74,7 +74,7 @@ Ao reaplicar a correção, retornar à `main` validada por fast-forward conforme
 - Leitura real IBGE: cinco regiões e 27 UFs, com tratamento de resposta gzip. A leitura de diagnóstico não habilitou a integração nem simulou uma sincronização aplicada.
 - Build de produção: 34 bundles e Service Worker gerados; sintaxe dos três arquivos JavaScript afetados validada por Node 24. Artefatos gerados permanecem fora do Git, conforme o projeto.
 - Chromium/Playwright em snapshot SQLite isolado: 1920×1080, 1440×900, 1366×768 e 1024×768 sem overflow horizontal; Sudeste com ES/MG/RJ/SP, seleção de SP, apresentação/saída e temas claro/escuro verificados, sem erros JavaScript. O Mapa e os indicadores permaneceram disponíveis sem cache meteorológico.
-- Open-Meteo: parser, unidades, ausência de dados, cache, limite/licenciamento e falhas foram validados com respostas controladas. **Não houve coleta real/comercial nem validação de chave/plano neste ambiente.**
+- Naquela entrega, Open-Meteo teve parser, unidades, ausência de dados, cache, limite/licenciamento e falhas validados com respostas controladas, sem coleta real/comercial ou validação de chave/plano. A coleta pública real posterior está registrada no [estado atual da candidata](v1.4.1-candidata.md).
 - **MySQL DEV pendente:** nenhuma configuração válida de `arion_geo_dev` estava disponível. A validação principal MySQL deverá ocorrer antes do deploy; nenhuma conexão de produção/OTRS foi usada como substituto.
 
 Para reproduzir a bateria focada com o runner padrão no DEV, a partir da raiz:
@@ -85,7 +85,7 @@ Para reproduzir a bateria focada com o runner padrão no DEV, a partir da raiz:
 
 Commits funcionais: `54af248` (integrações), `f2743b4` (GEO/apresentação/indicadores) e `57ee53f` (Cancelamentos). A documentação é entregue em commit separado. Não houve deploy no Windows Server.
 
-## Validação da candidata 1.4.1
+## Validação da candidata 1.4.1 — etapa anterior à simplificação
 
 Ver o [changelog e diagnóstico da candidata](v1.4.1-candidata.md). A versão anunciada/tag 1.4.0 permanece intacta. A candidata não acrescenta migrations e não foi implantada em produção.
 
@@ -96,7 +96,7 @@ Ver o [changelog e diagnóstico da candidata](v1.4.1-candidata.md). A versão an
 - Teste de interface com clima sintético, apenas no snapshot: zero versus ausente, timeline/reprodução sem novas consultas, temperatura em °C. A imagem está identificada como teste controlado. O cache sintético foi removido antes das imagens finais do Mapa interno/apresentação.
 - Cancelamentos em navegador: link OTRS com TicketID e nova aba; backdrop/Escape mantêm formulário, fechamento sujo exige confirmação e erro de submissão controlado mantém valores. Permissões, validações e auditoria foram cobertas pelos testes Django.
 - Reconciliação real do mirror DEV: 436 incidentes, 434 classificados, dois sem classificação, 426 com UF e dez sem localização; 341 links afetados e 65 reincidentes. As 427 ocorrências estaduais não substituem o total distinto. Veja as definições no changelog.
-- Open-Meteo permanece sem cadastro/modalidade/chave/licença/cache/job no DEV principal. Nenhum Worker ativo foi encontrado e os leases eram antigos. Nenhuma coleta real foi feita. MySQL DEV continua pendente; produção e OTRS não foram utilizados como substituto.
+- Naquela etapa, Open-Meteo estava sem cadastro/cache/job, sem Worker ativo e sem coleta real. Esta limitação foi superada no SQLite DEV pela simplificação descrita no [estado atual da candidata](v1.4.1-candidata.md). MySQL DEV continua pendente; produção e OTRS não foram utilizados como substituto.
 
 Comando da bateria focada desta candidata, com o runner Django padrão:
 

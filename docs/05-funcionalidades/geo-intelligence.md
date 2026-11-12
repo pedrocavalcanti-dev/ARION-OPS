@@ -27,26 +27,27 @@ O teste é leitura explícita. A sincronização manual enfileira o pedido em `I
 
 Referência: [API de localidades do IBGE](https://servicodados.ibge.gov.br/api/docs/localidades).
 
-## Open-Meteo e licenciamento
+## Open-Meteo — fontes e operação
 
-Central → Integrações → GEO Intelligence → Open-Meteo — Clima e Histórico.
+Central → Integrações → GEO Intelligence → Open-Meteo — Clima e Histórico. IBGE e Open-Meteo usam os cards existentes da Central, com saúde, Worker, cache, consumo e datas reais. As páginas possuem Visão geral, Estado operacional, Configurações, Coletas e sincronização e Histórico de operações, com suporte a temas e mobile.
 
-A integração inicia sem coleta habilitada. Avaliação requer autorização administrativa de uso não comercial/homologação e ambiente fora de produção. Não executa atualização periódica. A política se aplica tanto ao teste quanto ao worker; trocar o ambiente para produção bloqueia jobs gratuitos anteriormente enfileirados.
+O bootstrap idempotente executa após `migrate` e é reutilizado pelos serviços GEO quando falta cadastro. Novos registros ficam habilitados, com fonte pública, agendamento desligado e nenhuma UF agendada. Registros existentes, credenciais e desabilitações explícitas são preservados. Habilitar a funcionalidade não dispara coleta externa, não concede licença comercial e não depende de `ARION_ENV`.
 
-Uso corporativo regular exige modalidade comercial, chave protegida e confirmação de licença compatível com histórico, Professional ou superior conforme a [matriz do fornecedor](https://open-meteo.com/en/pricing). Confirmar um checkbox registra configuração, não comprova contratação, acesso ao plano ou sucesso da API.
+- Pública: `https://archive-api.open-meteo.com/v1/archive`, sem chave.
+- Comercial: `https://customer-archive-api.open-meteo.com/v1/archive`, com chave real protegida pelo DPAPI existente.
+- Self-hosted: endpoint HTTPS configurável e compatível com o contrato diário Open-Meteo. Chave opcional fica vinculada ao destino; uma chave comercial não acompanha uma troca arbitrária de host.
 
-Destinos fixos:
+Os checkboxes de modalidade/licença anteriores foram removidos. Fonte, atribuição, endpoint sem segredo e condições de utilização acompanham o cache. A fonte pública permanece sujeita às [condições do fornecedor](https://open-meteo.com/en/terms); disponibilizar o conector não declara licença comercial. Instâncias próprias preservam as condições do software e dos dados de origem.
 
-- Avaliação: `https://archive-api.open-meteo.com/v1/archive`.
-- Comercial: `https://customer-archive-api.open-meteo.com/v1/archive`.
+TLS continua validado, redirects são recusados e URLs não aceitam credenciais, query ou fragmento. Self-hosted resolve e fixa os endereços na conexão, preservando SNI/certificado e recusando redes privadas por padrão. Destinos internos deliberados podem ser declarados em `GEO_WEATHER_ALLOWED_HOSTS` (hosts separados por vírgula); isso não desativa TLS. Endpoints público/comercial são validados contra os destinos correspondentes.
 
-TLS é validado. Redirects e destinos arbitrários são recusados. Timeout entre 2 e 30 segundos, no máximo duas novas tentativas com backoff, limite diário configurável incluindo tentativas e resposta/descompactação limitadas a 4 MB. Credencial fica em `secret_ciphertext` pelo protetor DPAPI existente. O frontend recebe apenas o estado de configuração. Falhas não armazenam URL, resposta externa ou exceção bruta.
+Mantidos timeout de 2–30 s, até duas tentativas adicionais para falhas transitórias, orçamento diário incluindo tentativas e limite de 4 MB por resposta/descompactação. HTTP 429 interrompe repetições imediatas, respeita `Retry-After` na fila e não troca silenciosamente para outra fonte. Falhas não armazenam segredo, URL com chave, corpo externo ou exceção bruta.
 
-O teste valida uma célula e o contrato diário no último mês completo; essa célula não é persistida como estimativa estadual. Coletas estaduais são solicitadas pelo recorte autorizado do Mapa e executadas no worker, uma UF/mês por vez sob lease global. Repetir o pedido reutiliza job/cache. Uma requisição de abertura do Mapa nunca inicia chamadas meteorológicas externas.
+Testar conectividade valida uma célula do último mês completo e não a grava como estimativa estadual. A Central solicita uma UF/mês dentro do Data Scope, com `run_integrations`, `view_map` e CSRF; o Mapa mantém seu recorte autorizado existente. O Worker processa as mesmas filas/caches territoriais `area-grid-v2`, uma UF por vez sob lease. GETs do Mapa não consultam a API meteorológica.
 
-O worker reavalia a licença ao executar cada job, recupera jobs interrompidos e limita a três tentativas por job com backoff. Erros ficam no job e no histórico de saúde. Cache anterior permanece legível e é sinalizado quando vencido. Atualização automática comercial, quando habilitada, agenda as UFs para o último mês completo; não varre todo o histórico.
+Agendamento é opcional em qualquer fonte e exige seleção explícita de UFs. Somente esses recortes são atualizados para o último mês completo; não há coleta nacional implícita. Jobs antigos configurados para atualização mas sem UFs ficam sem agendamento até selecionar os recortes. Para ensaio isolado: `integration_worker --geo-only --once` executa somente GEO e encerra, sem sincronizar outros módulos. O Worker normal mantém sua operação existente.
 
-Referência de parâmetros, unidades e prefixo comercial: [Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api).
+Caches públicos legados `open_meteo_evaluation` continuam legíveis em DEV/produção. Cache comercial permanece separado; cada endpoint self-hosted possui identidade própria. O Worker recupera jobs interrompidos e aplica backoff, preservando o cache anterior. Ver [procedimento e coleta real SP/2026-10](../06-integracoes-e-dados/open-meteo-homologacao.md).
 
 ## Método climático `area-grid-v2`
 
@@ -89,11 +90,11 @@ Configuração opcional:
 | `/mapa/apresentacao/<chave>/` | GET | Página executiva vinculada à sessão |
 | `…/dados/`, `…/detalhes/`, `…/intelligence/` | GET | Mesmo escopo fixo; agregados sanitizados |
 | `…/encerrar/` | POST | view_map + sessão correspondente + CSRF |
-| `/configuracoes/integracoes/geo/ibge/` | GET | view_integrations; catálogo, configuração e saúde |
-| `/configuracoes/integracoes/geo/open_meteo/` | GET | view_integrations; licença/configuração, consumo e saúde |
+| `/configuracoes/administracao/integracoes/geo/ibge/` | GET | view_integrations; catálogo, configuração e saúde |
+| `/configuracoes/administracao/integracoes/geo/open_meteo/` | GET | view_integrations; fonte, configuração, consumo e saúde |
 | `…/salvar/` | POST | manage_integrations + CSRF |
 | `…/testar/` | POST | run_integrations + CSRF; lease e intervalo mínimo entre testes |
-| `…/sincronizar/` (IBGE) | POST | run_integrations + CSRF; pedido ao worker |
+| `…/sincronizar/` | POST | run_integrations + CSRF; IBGE ou uma UF/mês climática, esta também com view_map + Data Scope |
 
 Os endpoints existentes de agregados e detalhes do Mapa também aceitam `region` e `category`. Filtros mensais usam `period=AAAA-MM`.
 
@@ -103,7 +104,7 @@ Temperatura média e agregação diária foram conferidas no [registro oficial d
 
 ## Diagnóstico e reconciliação
 
-A coleta usa estados `disabled`, `incomplete`, `incompatible`, `unauthorized`, `awaiting_collection`, `queued`, `running`, `completed`, `failed`, `unavailable` e `invalid`. Cadastro ausente mantém POST `409 / disabled` com `configuration_status=not_configured`. A leitura mensal informa configuração, possibilidade de coleta e disponibilidade de cache separadamente. Administradores autorizados recebem a ação Configurar integração; o botão de coleta depende de configuração apta e UF elegível. Fila/processamento têm acompanhamento por leitura local a cada 15 segundos. Falhas locais são explicadas antes de qualquer chamada externa. Abertura do Mapa apenas lê configuração/cache/jobs; permissão e CSRF seguem obrigatórios na solicitação. No DEV inspecionado, o antigo HTTP 400 vinha de integração inexistente, sem job/cache, e não da API Open-Meteo. O [ensaio pela aplicação](../06-integracoes-e-dados/open-meteo-homologacao.md) documenta o procedimento e os bloqueios reais.
+A coleta usa estados `disabled`, `incomplete`, `incompatible`, `unauthorized`, `awaiting_collection`, `queued`, `running`, `completed`, `failed`, `unavailable` e `invalid`. Cadastro ausente recebe bootstrap público; HTTP 409 / `disabled` se aplica à desabilitação explícita. A leitura mensal separa configuração, Worker, possibilidade de coleta e disponibilidade de cache. A ação Configurar integração é restrita aos administradores apropriados; permissão e CSRF continuam obrigatórios na coleta. Fila/processamento são acompanhados por leitura local a cada 15 segundos. Cache disponível mantém o Mapa útil mesmo com Worker parado ou fornecedor indisponível. O antigo HTTP 400 por cadastro ausente é apenas diagnóstico histórico, não o comportamento atual.
 
 O resumo interno inclui `reconciliation`: incidentes distintos, classificados/não classificados, com/sem UF, links afetados/reincidentes distintos e ocorrências estaduais. Tickets de links sem UF confiável permanecem no total e nas séries, sem receber localização inventada. Esse diagnóstico não é enviado à apresentação como campo interno.
 

@@ -1,68 +1,96 @@
-# Open-Meteo — configuração e ensaio GEO pela aplicação
+# Open-Meteo — configuração e homologação GEO
 
-Estado verificado em 12/11/2026 neste checkout DEV: SQLite, sem cadastro `open_meteo`, modalidade, autorização de avaliação, licença ou chave cadastradas. Zero jobs e zero caches meteorológicos. Supervisor: `worker: stopped`; nenhum processo `integration_worker` encontrado; leases `worker` e `geo-climate` vencidos, sem heartbeat. Bootstrap de banco inexistente, sem candidato MySQL ou `DATABASE_URL`; `arion_geo_dev` não disponível. Nenhum serviço de produção ou OTRS foi utilizado para esta validação.
+## Estado validado em 12/11/2026
 
-**O fluxo real SP / outubro de 2026 ainda não foi homologado.** O impedimento ocorre antes do acesso externo: falta cadastrar uma modalidade autorizada e iniciar o Worker no ambiente de homologação. Uma resposta HTTP obtida diretamente para a capital não comprova coleta territorial, fila ou persistência pela aplicação.
+O fluxo **Central → teste real → solicitação de uma UF → Worker → cache → GEO Intelligence → Mapa** foi executado com sucesso no **SQLite DEV disponível**. Não foi usado MySQL de produção, banco OTRS ou dado meteorológico fictício.
 
-## 1. Cadastrar e habilitar a integração
-
-Com `configuracoes.view_integrations` e `configuracoes.manage_integrations`, abrir Central de Configurações → Integrações → Open-Meteo, em `/configuracoes/integracoes/geo/open_meteo/`. O formulário já permite criar o cadastro; não é necessário inserir registros pelo shell ou pelo Django admin.
-
-Escolher a modalidade conforme a autorização do responsável:
-
-| Modalidade implementada | Condições exigidas pela aplicação |
+| Evidência SP / outubro de 2026 | Resultado |
 |---|---|
-| Avaliação / homologação | Ambiente fora de produção, uso não comercial autorizado e confirmação explícita no campo de avaliação. Endpoint `https://archive-api.open-meteo.com/v1/archive`. Atualização automática desmarcada. |
-| Comercial licenciada | Contrato real com acesso ao histórico compatível com o requisito do formulário, confirmação da licença e chave válida. Endpoint `https://customer-archive-api.open-meteo.com/v1/archive`. Validar a elegibilidade contratual com o fornecedor. |
+| Fonte | Pública · `https://archive-api.open-meteo.com/v1/archive` |
+| Chave comercial | Não utilizada; não exigida para a fonte pública |
+| Teste pela Central | Sucesso, contrato de 31 dias em uma célula |
+| Fila | Somente SP / 2026-10; um job |
+| Worker | `integration_worker --geo-only --once`, sucesso na primeira tentativa |
+| Cache persistido | `open_meteo_public` / `era5` / `area-grid-v2` |
+| Cobertura | 13 células territoriais; 31 dias; completude 100% |
+| Chuva mensal estimada | 178,46 mm |
+| Temperatura média territorial/mensal | Aproximadamente 22,01 °C |
+| Vento / rajada máximos amostrados | 24,5 / 67,7 km/h |
+| Requisições HTTP registradas | 14: uma de diagnóstico e 13 da coleta |
+| Persistência | 12/11/2026, 16:20, America/Sao_Paulo |
+| Retorno ao Mapa | `climate.available=true`, `collection.status=completed`; camadas, indicadores e reprodução conferidos |
 
-Para a primeira coleta, manter atualização automática desmarcada, configurar orçamento HTTP suficiente para a amostragem territorial de SP e suas tentativas, marcar **Habilitar integração** e salvar. Campos numéricos possuem valores iniciais e limites no formulário. Não marcar autorizações/licença como forma de eliminar uma mensagem de erro.
+Após a rodada única, o Worker encerrou e liberou seu lease: **está parado**, com cache real disponível. Não foi instalado um serviço contínuo por esta tarefa. Esses valores são evidência datada da estimativa territorial, não medição única da capital nem valores fixos do produto.
 
-Chaves comerciais são protegidas por DPAPI. A identidade Windows que salva a chave deve ser compatível com a identidade do serviço Web/Worker que irá descriptografá-la. O frontend exibe apenas o estado da credencial. Nenhum segredo precisa ser publicado em documentação ou Git.
+**MySQL DEV continua pendente.** O diagnóstico encontrou banco ativo SQLite, sem bootstrap de banco, candidato MySQL ou `DATABASE_URL` configurados. O trecho do fluxo que exige persistência e execução em `arion_geo_dev` precisa ser repetido nesse ambiente antes da implantação. O sucesso em SQLite não comprova MySQL.
 
-## 2. Verificar o Worker e o contrato real
+## Disponibilização automática
 
-No ambiente DEV autorizado, com a mesma configuração de banco usada pela Web:
+`bootstrap_geo_integrations` é conectado a `post_migrate` e reutilizado pelos serviços GEO quando falta o cadastro. Cria IBGE/Open-Meteo habilitados, com fonte pública e valores seguros de timeout/cache/orçamento. **Não substitui configurações existentes, chaves ou desabilitações explícitas.** Não consulta fornecedores, não cria jobs e não inicia o Worker.
+
+O agendamento nasce desligado, com lista de UFs vazia. Não há coleta nacional implícita. A funcionalidade é disponibilizada em DEV/produção sem condicionar fonte pública a `ARION_ENV`, chave ou confirmação administrativa de licença. Usar o conector continua sujeito às [condições da Open-Meteo](https://open-meteo.com/en/terms); o cadastro público não constitui licença comercial.
+
+## Fonte e configurações
+
+Com `view_integrations`, abrir Central de Configurações → Integrações → GEO Intelligence → Open-Meteo. A rota é `/configuracoes/administracao/integracoes/geo/open_meteo/`. A página reúne Visão geral, Estado operacional, Configurações, Coletas e sincronização e Histórico de operações. Alterações exigem `manage_integrations` e CSRF.
+
+| Fonte selecionável | Endpoint / credencial |
+|---|---|
+| Pública | `https://archive-api.open-meteo.com/v1/archive`; sem chave. |
+| Comercial | `https://customer-archive-api.open-meteo.com/v1/archive`; chave real com acesso ao histórico. Nenhum checkbox de licença é exigido ou apresentado como prova de contratação. |
+| Self-hosted | URL HTTPS da instância própria, compatível com as variáveis/unidades da API histórica Open-Meteo. Chave opcional, vinculada ao destino. |
+
+O seletor preenche o endpoint padrão público/comercial. A configuração normal não requer editar `.env` ou código. Uma chave comercial existente é preservada e nunca enviada ao endpoint público ou a outro destino após a troca de fonte. Chaves permanecem protegidas por DPAPI e não são renderizadas no frontend.
+
+Para self-hosted em rede privada, declarar os hosts deliberadamente confiáveis em `GEO_WEATHER_ALLOWED_HOSTS`, separados por vírgula. Sem essa configuração, somente endereços globais são aceitos. A resolução é fixada durante a conexão; TLS/SNI/certificado continuam validados, inclusive para hosts internos. Não são aceitos HTTP, redirects, credenciais embutidas, query ou fragmento na URL. Instalar uma cadeia de confiança válida para o serviço próprio; não desabilitar TLS.
+
+Agendamento é opcional em qualquer fonte: habilitar, escolher explicitamente as UFs autorizadas e definir intervalo. Configurações antigas de atualização sem lista de UFs não geram coleta nacional; precisam selecionar os recortes. Limites avançados mantêm timeout 2–30 s, até duas tentativas adicionais, validade do cache e orçamento diário de requisições HTTP, incluindo retries.
+
+## Testar e coletar uma UF
+
+1. Conferir a fonte e usar **Testar conectividade** com `run_integrations`. O teste valida uma célula do último mês completo, não a persiste como estimativa estadual e respeita um minuto entre testes. Repetir durante esse intervalo não altera a saúde do último teste válido.
+2. Em **Coletas e sincronização**, selecionar **SP / outubro de 2026** e usar **Solicitar coleta ao Worker**. Exige `run_integrations`, `view_map`, CSRF e UF presente no Data Scope. Não selecionar Brasil nem agendar outras UFs para esse ensaio.
+3. Alternativamente, o botão de coleta do Mapa reaproveita o recorte autorizado e a mesma fila.
+4. Conferir o estado do Worker e a fila na Central. Solicitar uma coleta com Worker parado apenas a deixa pendente; não executa chamadas na requisição da página.
+
+Diagnóstico do supervisor existente:
 
 ```powershell
 .venv\Scripts\python.exe deploy\windows\run_process.py --status worker
 ```
 
-Se estiver parado, o operador autorizado inicia pelo supervisor existente:
+Para reproduzir **somente uma rodada GEO no DEV**, sem acionar OTRS/CMDB, backlog ou Cancelamentos:
 
 ```powershell
-.\deploy\windows\start-arion.ps1 -Role worker
-.venv\Scripts\python.exe deploy\windows\run_process.py --status worker
+.venv\Scripts\python.exe arion_geo\gerenciar.py integration_worker --geo-only --once
 ```
 
-Esse Worker também agenda outras integrações; conferir a configuração DEV antes de iniciá-lo. Esta tarefa **não iniciou o Worker**. Na Central, usar **Testar conectividade** com `configuracoes.run_integrations`. O teste consulta uma célula territorial de SP para o último mês completo e valida as variáveis e unidades; não salva essa célula como estimativa estadual. Respeitar o intervalo mínimo de um minuto entre testes. Registrar sucesso e latência no histórico de saúde. Em falha, corrigir autorização, plano, endpoint, chave/DPAPI ou conectividade antes de continuar.
+Não iniciar outro Worker se já existir lease ativo. A execução contínua usa o supervisor já existente sob a identidade Windows correta; esta tarefa não fez deploy nem alterou os serviços de produção.
 
-## 3. Solicitar somente SP / 2026-10
+## Confirmar persistência e exibição
 
-No Mapa interno, escolher Clima, mês **outubro de 2026**, UF **SP** e cliente/projeto autorizados que possuam links em SP. Aplicar e abrir **Análises**. Conferir os chips de UF/mês e então usar **Coletar clima do recorte**. A ação exige `view_map`, `run_integrations`, sessão e CSRF; o backend determina as UFs elegíveis após Data Scope e filtros. Selecionar SP antes da solicitação evita enfileirar o Brasil inteiro.
-
-Sem configuração válida, a tela oferece **Configurar integração** apenas a administradores com acesso à configuração. O POST mantém HTTP 409 / `disabled` para cadastro ausente, acompanhado de `configuration_status=not_configured`. Não há bypass de licença nem inserção de cache fictício.
-
-## 4. Confirmar fila, persistência e retorno ao Mapa
-
-Na Central, acompanhar SP / 10/2026 em **Coletas recentes / pendentes**: pendente → coletando → sucesso. Jobs concluídos saem da lista de pendências. O Mapa acompanha fila/processamento a cada 15 segundos, lendo somente o banco. Sem lease ativo, informa que o Worker precisa ser verificado. Falhas conservam cache anterior e usam tentativas com backoff; consultar a saúde da integração.
-
-Para confirmação técnica somente de leitura, no banco DEV correto:
+Confirmar job concluído, cache da fonte selecionada, método `area-grid-v2`, modelo ERA5, coleta e completude coerentes. Leitura técnica no banco DEV correto:
 
 ```powershell
 .venv\Scripts\python.exe arion_geo\gerenciar.py shell -c "from aplicativos.integracoes.models import WeatherCollectionJob, WeatherMonth; print(list(WeatherCollectionJob.objects.filter(uf='SP',period='2026-10-01').values('uf','period','status','attempts','updated_at'))); print(list(WeatherMonth.objects.filter(uf='SP',period='2026-10-01',method='area-grid-v2').values('uf','period','source','model','method','completeness','collected_at','expires_at')))"
 ```
 
-Exigir `status=success`, cache do método `area-grid-v2`, fonte correspondente à modalidade, modelo ERA5, datas e cobertura coerentes. Reabrir/atualizar as análises e confirmar chuva em mm, temperatura em °C e vento/rajada em km/h. Alternar camadas, selecionar SP, expandir a série mensal e reproduzir dias. Zero observado deve permanecer diferente de ausência; a reprodução reutiliza séries locais, sem chamadas externas por frame. Coincidência usa apenas classificações técnicas conhecidas e não declara causalidade.
+No Mapa, selecionar Clima/SP/2026-10 e alternar chuva, temperatura, vento/rajada. Expandir a série mensal e reproduzir os dias. As séries locais alimentam cores e indicadores sem novas consultas meteorológicas por frame. Zero observado continua distinto de ausência; falta de clima não interrompe a análise OTRS/CMDB. Coincidência permanece factual, sem causalidade automática ou uso de projeções.
 
-## Checklist de aceite externo pendente
+HTTP 429 interrompe retries imediatos e conserva `Retry-After` no próximo processamento. Novas solicitações não antecipam o job pendente. Autenticação, quotas ou indisponibilidade não provocam troca automática de fonte. Erros são sanitizados; o cache anterior é preservado. O cache grava fonte, endpoint sem segredo, atribuição e condições de utilização. Caches `open_meteo_evaluation` anteriores continuam legíveis como fonte pública; fontes comerciais e instâncias próprias ficam separadas.
 
-- [ ] MySQL DEV `arion_geo_dev` configurado e validado, sem conexão com produção.
-- [ ] Modalidade permitida e autorização/contrato confirmados pelo responsável.
-- [ ] Chave e identidade DPAPI verificadas, quando comerciais.
-- [ ] Teste real pela Central aprovado.
-- [ ] Worker ativo e heartbeat atual no mesmo DEV da Web.
-- [ ] Uma solicitação SP / 2026-10 processada com sucesso.
-- [ ] Cache `v2` persistido e indicadores reais visíveis no Mapa.
-- [ ] Chuva, temperatura, vento/rajada e reprodução diária conferidos com o cache real.
+## Aceite
 
-Os testes automatizados usam contratos controlados em banco de testes. A revisão visual usa snapshot SQLite isolado; não comprova conexão meteorológica real. Ver [candidata 1.4.1](../08-releases/v1.4.1-candidata.md) e [procedimento de implantação](../08-releases/geo-intelligence-implantacao-windows.md).
+- [x] Bootstrap idempotente, sem rede ou jobs automáticos; configuração existente preservada.
+- [x] Pública sem chave em DEV/produção nos testes de contrato; comercial e self-hosted configuráveis.
+- [x] Teste real pela Central e coleta real somente de SP/2026-10.
+- [x] Worker GEO executado, sucesso na primeira tentativa e cache real persistido no SQLite DEV.
+- [x] Indicadores, camadas e timeline no Mapa com os dados reais.
+- [x] Interface em temas claro/escuro e desktop/notebook/mobile, sem overflow horizontal.
+- [ ] Repetir persistência/Worker/cache no MySQL DEV `arion_geo_dev`.
+- [ ] Homologar credencial/DPAPI comercial ou instância self-hosted real, se essas fontes forem utilizadas.
+- [ ] Configurar e confirmar execução contínua do Worker no ambiente de destino.
+
+Evidências locais em `var/geo-simple/`: Central, páginas Open-Meteo/IBGE em 1440/1024/390 pixels, chuva/temperatura reais de SP no Mapa. Diagnóstico de coleta em `var/geo-simple-real-result.json`, fora do Git. Nenhuma credencial, cookie ou banco deve ser publicado.
+
+Ver [candidata 1.4.1](../08-releases/v1.4.1-candidata.md) e [implantação Windows](../08-releases/geo-intelligence-implantacao-windows.md). Rollback para código anterior à simplificação pode indisponibilizar as novas fontes; preservar os caches e restaurar somente configuração prévia compatível e autorizada, sem converter fonte pública em comercial nem reverter migrations destrutivamente.
