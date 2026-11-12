@@ -2,7 +2,7 @@
 
 Revisão em 12/11/2026 (código 1.4.0). A matriz descreve capacidades **IMPLEMENTADAS**, separadas do que permanece **PLANEJADO** no [Roadmap](roadmap.md). Contagens DEV de Cancelamentos são evidência datada de validação, não valores fixos da aplicação.
 
-Versão registrada em `docs/08-releases/releases.json`: **1.4.0**, com tag anotada `v1.4.0` preservada. A evolução GEO Intelligence está implementada em DEV, sem anunciar nova versão de produto. O [Dashboard Gerencial de Cancelamentos](../05-funcionalidades/cancelamentos-dashboard.md) está implementado. **Publicação não comprova implantação.** O servidor conhecido usa Windows Server/MySQL, domínio público e Web/Worker; não foi acessado nesta revisão. Atualização e carga histórica dependem do [checklist próprio](../08-releases/v1.4.0-implantacao-windows.md).
+Versão registrada em `docs/08-releases/releases.json`: **1.4.0**, com tag anotada `v1.4.0` preservada. A evolução GEO Intelligence está implementada em DEV, com refinamento [candidato à 1.4.1](../08-releases/v1.4.1-candidata.md), sem alterar a versão anunciada antes da homologação. O [Dashboard Gerencial de Cancelamentos](../05-funcionalidades/cancelamentos-dashboard.md) está implementado. **Publicação não comprova implantação.** O servidor conhecido usa Windows Server/MySQL, domínio público e Web/Worker; não foi acessado nesta revisão. Atualização e carga histórica dependem do [checklist próprio](../08-releases/v1.4.0-implantacao-windows.md).
 
 ## Matriz de módulos (IMPLEMENTADO)
 

@@ -84,3 +84,24 @@ Para reproduzir a bateria focada com o runner padrão no DEV, a partir da raiz:
 ```
 
 Commits funcionais: `54af248` (integrações), `f2743b4` (GEO/apresentação/indicadores) e `57ee53f` (Cancelamentos). A documentação é entregue em commit separado. Não houve deploy no Windows Server.
+
+## Validação da candidata 1.4.1
+
+Ver o [changelog e diagnóstico da candidata](v1.4.1-candidata.md). A versão anunciada/tag 1.4.0 permanece intacta. A candidata não acrescenta migrations e não foi implantada em produção.
+
+- Bateria de **232 testes focados passou**, cobrindo Mapa/GEO, clima, Cancelamentos, Dashboard/Cockpit e tratamento de erros/segurança das APIs. Após a revisão de cache, os **16 testes climáticos passaram** novamente, incluindo um teste adicional de reagendamento de job concluído sem cache do método atual: **233 casos distintos validados**. O runner usa MD5 somente sob `override_settings` durante os testes; nenhum hasher da aplicação foi alterado.
+- `check`: sem problemas. `makemigrations --check --dry-run`: nenhuma alteração. Build de produção: 34 bundles mais Service Worker, sem dependência nova.
+- Chromium em snapshot SQLite isolado: quatro viewports (1920×1080, 1440×900, 1366×768 e 1024×768), sem overflow horizontal; Brasil/Nordeste/BA, painel expansível, preservação da câmera manual no resize, temas, todos os modos de apresentação, tela cheia e encerramento, sem erros JavaScript.
+- POST real no navegador: `409`, JSON `status=disabled` com mensagem da configuração ausente. O antigo `400` foi reproduzido antes da mudança. Nem API Open-Meteo nem falha de CSRF explicavam a recusa original.
+- Teste de interface com clima sintético, apenas no snapshot: zero versus ausente, timeline/reprodução sem novas consultas, temperatura em °C. A imagem está identificada como teste controlado. O cache sintético foi removido antes das imagens finais do Mapa interno/apresentação.
+- Cancelamentos em navegador: link OTRS com TicketID e nova aba; backdrop/Escape mantêm formulário, fechamento sujo exige confirmação e erro de submissão controlado mantém valores. Permissões, validações e auditoria foram cobertas pelos testes Django.
+- Reconciliação real do mirror DEV: 436 incidentes, 434 classificados, dois sem classificação, 426 com UF e dez sem localização; 341 links afetados e 65 reincidentes. As 427 ocorrências estaduais não substituem o total distinto. Veja as definições no changelog.
+- Open-Meteo permanece sem cadastro/modalidade/chave/licença/cache/job no DEV principal. Nenhum Worker ativo foi encontrado e os leases eram antigos. Nenhuma coleta real foi feita. MySQL DEV continua pendente; produção e OTRS não foram utilizados como substituto.
+
+Comando da bateria focada desta candidata, com o runner Django padrão:
+
+```powershell
+.venv\Scripts\python.exe arion_geo\gerenciar.py test aplicativos.mapa aplicativos.integracoes.test_geo_intelligence aplicativos.cancelamentos.tests aplicativos.cancelamentos.test_refinements aplicativos.painel.tests.MirrorAnalyticsTests aplicativos.configuracoes.test_errors config.test_security --noinput
+```
+
+Para rollback de um refinamento 1.4.1, usar o hash efetivamente registrado antes do rollout; `b7704d7` é a referência somente quando o servidor estiver exatamente na entrega GEO anterior. Os passos de parada, backup, build, collectstatic e retomada acima continuam válidos. Caches `v1`/`v2` são aditivos e não exigem remoção de tabelas ou dados operacionais.
