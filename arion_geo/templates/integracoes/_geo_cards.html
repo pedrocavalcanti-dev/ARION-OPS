@@ -1,0 +1,22 @@
+<section class="integration-home-section geo-integrations-section" aria-labelledby="geo-integrations-title">
+  <header class="integration-section-heading"><div><p class="integration-eyebrow">CONTEXTO GEOGRÁFICO</p><h2 id="geo-integrations-title">GEO Intelligence</h2></div><p>Catálogo territorial e histórico climático. Coletas sob demanda ou por agendamento explícito.</p></header>
+  <div class="integration-cards integration-cards--portal integration-cards--geo">
+    <a class="integration-card integration-card--portal" data-integration-card href="{% url 'configuracoes:integracoes:geo-detail' 'ibge' %}">
+      <div class="integration-card-top"><span class="integration-icon" aria-hidden="true">◎</span><span class="integration-source-badge">DADOS PÚBLICOS</span><span class="integration-status integration-status--{{ geo_ibge.health }}"><i></i>{% if geo_ibge.enabled %}Habilitada{% else %}Desabilitada{% endif %}</span></div>
+      <h3>IBGE — Regiões e Estados</h3><p class="integration-kind">Catálogo oficial · regiões e unidades federativas</p>
+      <dl class="integration-facts integration-facts--compact">
+        <div><dt>Regiões disponíveis</dt><dd>{{ geo_regions_count }}</dd></div><div><dt>UFs disponíveis</dt><dd>{{ geo_states_count }}</dd></div>
+        <div><dt>Última sincronização</dt><dd>{{ geo_catalog_synced_at|date:"d/m/Y H:i"|default:"Catálogo de referência local" }}</dd></div><div><dt>Saúde da conexão</dt><dd>{{ geo_ibge.get_health_display }}</dd></div>
+      </dl><span class="integration-link">Configuração e sincronização <span aria-hidden="true">→</span></span>
+    </a>
+    <a class="integration-card integration-card--portal" data-integration-card href="{% url 'configuracoes:integracoes:geo-detail' 'open_meteo' %}">
+      <div class="integration-card-top"><span class="integration-icon" aria-hidden="true">☁</span><span class="integration-source-badge">METEOROLOGIA</span><span class="integration-status integration-status--{{ geo_weather.health }}"><i></i>{% if not geo_weather.enabled %}Desabilitada{% elif geo_readiness.status == 'ready' %}Configurada{% else %}Revisar configuração{% endif %}</span></div>
+      <h3>Open-Meteo — Clima e Histórico</h3><p class="integration-kind">Chuva, temperatura e vento · estimativa territorial</p>
+      <dl class="integration-facts integration-facts--compact">
+        <div><dt>Worker</dt><dd>{{ geo_worker.label }}{% if geo_pending %} · {{ geo_pending }} na fila{% endif %}</dd></div><div><dt>Última coleta</dt><dd>{{ geo_last_weather.collected_at|date:"d/m/Y H:i"|default:"Nenhuma coleta" }}</dd></div>
+        <div><dt>Recortes em cache</dt><dd>{{ geo_cache_count }} UF / mês</dd></div><div><dt>Requisições neste mês</dt><dd>{{ geo_requests }}</dd></div>
+        <div><dt>Último teste</dt><dd>{{ geo_weather.last_test_at|date:"d/m/Y H:i"|default:"Ainda não testada" }}</dd></div><div><dt>Saúde da conexão</dt><dd>{{ geo_weather.get_health_display }}</dd></div>
+      </dl><span class="integration-link">Configuração e monitoramento <span aria-hidden="true">→</span></span>
+    </a>
+  </div>
+</section>

@@ -1,0 +1,8 @@
+<div class="geo-configuration-field{% if field.name == 'scheduled_ufs' %} geo-configuration-field--ufs{% endif %}" {% if field.name == 'api_key' %}data-weather-secret {% if api_form.mode.value == 'public' %}hidden{% endif %}{% endif %}>
+  {% if field.field.widget.input_type == 'checkbox' and field.name != 'scheduled_ufs' %}
+    <label class="geo-config-toggle" for="{{ field.id_for_label }}">{{ field }}<span class="geo-config-toggle-track" aria-hidden="true"></span><span>{{ field.label }}</span></label>
+  {% else %}
+    <label for="{{ field.id_for_label }}">{{ field.label }}</label><div class="integration-control{% if field.name == 'scheduled_ufs' %} geo-uf-choices{% endif %}">{{ field }}</div>
+  {% endif %}
+  {{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+</div>

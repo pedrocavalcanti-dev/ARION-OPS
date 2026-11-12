@@ -89,6 +89,8 @@
   </div>
 </section>
 
+{% include "integracoes/_geo_cards.html" %}
+
 <section class="integration-home-section integration-diagnostics" aria-labelledby="integration-diagnostics-title">
   <header class="integration-section-heading"><div><p class="integration-eyebrow">DIAGNÓSTICO OPERACIONAL</p><h2 id="integration-diagnostics-title">Espelhos operacionais locais e sincronização</h2></div><a class="integration-link" href="{% url 'configuracoes:integracoes:runs' %}">Abrir histórico de operações <span aria-hidden="true">→</span></a></header>
   <div class="integration-diagnostic-list">
@@ -124,9 +126,5 @@
   </div>
 </section>
 
-<section class="integration-section"><h2>GEO Intelligence</h2><div class="integration-grid">
-<a class="integration-card" href="{% url 'configuracoes:integracoes:geo-detail' 'ibge' %}"><h3>IBGE — Regiões e Estados</h3><p>Geografia / Dados Públicos</p><span class="integration-link">Catálogo oficial, cache e sincronização →</span></a>
-<a class="integration-card" href="{% url 'configuracoes:integracoes:geo-detail' 'open_meteo' %}"><h3>Open-Meteo — Clima e Histórico</h3><p>Meteorologia / GEO Intelligence</p><span class="integration-link">Licença, coleta mensal e saúde →</span></a>
-</div></section>
 <p class="integration-search-empty" hidden>Nenhuma integração corresponde à busca.</p>
 {% endblock %}
