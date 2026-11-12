@@ -1,9 +1,11 @@
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 import unicodedata
+import re
 
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.utils import timezone
+from django.conf import settings
 
 from aplicativos.chamados.models import TicketTracking
 from aplicativos.integracoes.models import OTRSTicket, OTRSTicketConfigItem, OTRSStateMapping
@@ -209,9 +211,15 @@ class MapAnalyticsService:
         if mode == "climate":
             mode = "calls"
         start, end = _bounds(params)
+        if not start or not end or start>end or end>timezone.localdate() or (end-start).days>366:
+            raise ValueError("Selecione um intervalo histórico válido de até 366 dias, sem datas futuras.")
         client = (params.get("client") or "all").strip()
         project = canonical_project_name(params.get("project"))
         provider = (params.get("provider") or "").strip()
+        if mode in {"base","projects"}:
+            params = dict(params.items())
+            for name in ("category","reason","status","priority","arion_status","assignee","provenance"):
+                params.pop(name,None)
         reason_filter = ClosingReasonCanonicalizer.key(params.get("reason")) if params.get("reason") else ""
         status_filter = normalize_business_status(params.get("status")) if params.get("status") else ""
         priority_filter = (params.get("priority") or "").strip()
@@ -261,14 +269,14 @@ class MapAnalyticsService:
             ticket_candidates = ticket_candidates.filter(state_q)
 
         project_scope = _client_filter(scoped, client)
-        if provider:
-            project_scope = project_scope.filter(operator__pk=int(provider), operator__is_present_in_source=True)
         project_groups = project_alias_groups(
             project_scope.order_by().exclude(business_project="").values_list(
                 "business_project", flat=True,
             ).distinct()
         )
         project_options = sorted(project_groups, key=lambda value: (value.casefold(), value))
+        if project and project not in project_groups:
+            raise ValueError("Projeto incompatível com o cliente e o recorte autorizado.")
         if project:
             raw_projects = project_groups.get(project, ())
             filtered = filtered.filter(business_project__in=raw_projects) if raw_projects else filtered.none()
@@ -277,8 +285,11 @@ class MapAnalyticsService:
 
         clients = list(scoped.exclude(contracting_client="").exclude(contracting_client="TELMEX").values_list(
             "contracting_client", flat=True).distinct().order_by("contracting_client"))
-        providers = list(project_scope.filter(operator__is_present_in_source=True).values(
+        provider_scope = project_scope.filter(business_project__in=project_groups.get(project,())) if project else project_scope
+        providers = list(provider_scope.filter(operator__is_present_in_source=True).values(
             "operator_id", "operator__name").distinct().order_by("operator__name"))
+        if provider and int(provider) not in {row["operator_id"] for row in providers}:
+            raise ValueError("ISP incompatível com o projeto e o recorte autorizado.")
 
         start, end = (None, None) if mode == "base" else (start, end)
         start_at, end_exclusive = _datetime_bounds(start, end)
@@ -369,6 +380,7 @@ class MapAnalyticsService:
         global_recurrence_ticket_ids = set()
         global_ticket_contexts = {}
         global_ticket_dates, global_ticket_categories = {}, {}
+        weather_events = []
         ticket_identity_cache = {}
         def identity_for(ticket):
             if ticket.pk not in ticket_identity_cache:
@@ -424,6 +436,10 @@ class MapAnalyticsService:
                     not project or canonical_project_name(ticket_project) == project
                 )
             tickets = {rel.ticket_id: rel.ticket for rel in period_rows if context_matches(rel.ticket)}
+            for ticket in tickets.values():
+                category = IncidentRules.category(ticket.closing_code_raw)
+                if category not in {None,"financeiro","sem_classificacao"}:
+                    weather_events.append({"uf":uf,"city":link.city.strip(),"link":link.pk,"ticket":ticket.pk,"at":ticket.source_created_at,"category":category})
             active = {rel.ticket_id for rel in active_rows if context_matches(rel.ticket)}
             terminal = {rel.ticket_id: rel.ticket for rel in terminal_rows if context_matches(rel.ticket)}
             global_tickets.update(tickets)
@@ -574,7 +590,12 @@ class MapAnalyticsService:
             _inc(category_counts, IncidentRules.LABELS[category])
         incident_total = len(global_tickets) + (unlinked_ticket_count if mode == "calls" or monthly_motives else 0)
         unclassified = category_counts.get(IncidentRules.LABELS["sem_classificacao"],0)
+        from .weather_context import correlate
+        correlation = {}
+        if mode in {"calls","motives","repeat"}:
+            correlation = correlate(weather_events,start,end,sum(c not in {None,"financeiro","sem_classificacao"} for c in global_ticket_categories.values()))
         return {
+            "correlation":correlation,
             "reconciliation":{"incidents":incident_total,"classified":sum(category_counts.values())-unclassified,
                               "unclassified":unclassified,"with_uf":len(located_ticket_ids),
                               "without_uf":incident_total-len(located_ticket_ids),
@@ -609,6 +630,7 @@ class MapAnalyticsService:
             "assignees": cls._assignee_options(user, scoped),
             "provenance_options": [{"value": value, "label": value.title()} for value in VALID_PROCEDENCE],
             "clients": clients, "projects": project_options,
+            "project_colors":{name:color for name,color in getattr(settings,"GEO_PROJECT_COLORS",{}).items() if name in project_options and re.fullmatch(r"#[0-9a-fA-F]{6}",str(color))},
             "selected_project": project if project in project_options else "",
             "providers": [{"id": row["operator_id"], "name": row["operator__name"]} for row in providers],
             "reasons": reasons, "reason_options": [

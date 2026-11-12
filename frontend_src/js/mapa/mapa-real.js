@@ -1,4 +1,5 @@
 import { mountGeoIntelligence } from "./geo-intelligence.js";
+import { mountWeatherIcons } from "./weather-icons.js";
 (() => {
   const root = document.querySelector("[data-map-config]");
   const page = document.querySelector(".geo-page");
@@ -27,7 +28,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     default:quantitative.projects,
     diversos:quantitative.projects,
     bradesco:{dark:["#4a252c","#a44750","#e08087"],light:["#f4e1e3","#d46670","#8e2030"]},
-    banco_do_brasil:{dark:["#3c4b69","#8c7941","#e7c447"],light:["#f3ecd2","#d5b342","#264a88"]},
+    banco_do_brasil:{dark:["#423d24","#9b8536","#e7c447"],light:["#f7f0d2","#dbc559","#b09524"]},
     correios:{dark:["#324258","#3f7fb7","#eac249"],light:["#f3ecd2","#d5b342","#234c87"]},
     arcos_dourados:{dark:["#5c4323","#d98628","#c83138"],light:["#fff0c9","#e89c2e","#c21f32"]},
     caixa_economica_federal:{dark:["#293951","#4578ab","#eb913d"],light:["#e7eef8","#6489bb","#c05b29"]},
@@ -55,6 +56,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     RJ:{anchor:[-42.2,-22.6],label:[-39,-22.3]}, DF:{anchor:[-47.9,-15.8],label:[-46.1,-15.8]},
   };
   const stateOrder = Object.keys(stateNames).sort((a,b)=>stateNames[a].localeCompare(stateNames[b],"pt-BR"));
+  let weatherIcons=null,lastWeatherPayload=null;
   const required = [
     "#brazil-map", "#geo-title", "#state-flags-data", "[data-source-badge]", "[data-breadcrumb]", "[data-selected-name]",
     "[data-map-message]", "[data-map-error]", "[data-map-error-title]", "[data-map-error-detail]", "[data-map-retry]",
@@ -115,17 +117,18 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     if(!ui.activeFilters)return;
     const chips=[];
     if(!isPresentation&&state.client!=="all")chips.push(["client","Cliente: "+state.client]);
-    if(state.region)chips.push(["region","Região: "+state.region]);if(state.category)chips.push(["category","Categoria: "+state.category]);
+    const incidents=["calls","repeat","motives","climate"].includes(state.mode);
+    if(state.region)chips.push(["region","Região: "+state.region]);if(incidents&&state.category)chips.push(["category","Categoria: "+state.category]);
     if(state.project)chips.push(["project","Projeto: "+displayProject(state.project)]);
     if(state.selectedUF)chips.push(["uf","UF: "+state.selectedUF]);
     if(state.provider)chips.push(["provider","Provedor: "+(data?.providers||[]).find(row=>String(row.id)===state.provider)?.name]);
-    if(state.reason)chips.push(["reason","Motivo: "+reasonLabel()]);
+    if(incidents&&state.reason)chips.push(["reason","Motivo: "+reasonLabel()]);
     if(["projects","calls","repeat","motives","climate"].includes(state.mode)){
       if(!/^\d{4}-\d{2}$/.test(state.period)&&state.period!=="this_month")chips.push(["period","Per\u00edodo: "+(state.dateFrom&&state.dateTo?state.dateFrom+" a "+state.dateTo:state.period)]);
-      if(state.status)chips.push(["status","Status OTRS: "+(statusLabels[state.status]||state.status)]);
-      if(state.priority)chips.push(["priority","Prioridade: "+state.priority]);
-      if(state.arionStatus)chips.push(["arionStatus","Status ARION: "+((data?.arion_statuses||[]).find(row=>row.value===state.arionStatus)?.label||state.arionStatus)]);
-      if(state.assignee)chips.push(["assignee","Respons\u00e1vel: "+(state.assignee==="unassigned"?"Sem respons\u00e1vel":(data?.assignees||[]).find(row=>String(row.id)===state.assignee)?.name||"Selecionado")]);
+      if(incidents&&state.status)chips.push(["status","Status OTRS: "+(statusLabels[state.status]||state.status)]);
+      if(incidents&&state.priority)chips.push(["priority","Prioridade: "+state.priority]);
+      if(incidents&&state.arionStatus)chips.push(["arionStatus","Status ARION: "+((data?.arion_statuses||[]).find(row=>row.value===state.arionStatus)?.label||state.arionStatus)]);
+      if(incidents&&state.assignee)chips.push(["assignee","Respons\u00e1vel: "+(state.assignee==="unassigned"?"Sem respons\u00e1vel":(data?.assignees||[]).find(row=>String(row.id)===state.assignee)?.name||"Selecionado")]);
     }
     $("[data-filter-count]").textContent=String(chips.length);
     ui.activeFilters.hidden=!chips.length;
@@ -154,8 +157,14 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   const theme = () => document.documentElement.dataset.theme === "light" ? "light" : "dark";
   function getProjectPalette(value){
     const key=norm(value).replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"");
-    return projectPalettes[projectPaletteAliases[key]||key]||projectPalettes.default;
+    const configured=data?.project_colors?.[value];
+    if(configured)return {light:[configured,configured,configured],dark:[configured,configured,configured]};
+    if(projectPalettes[projectPaletteAliases[key]||key])return projectPalettes[projectPaletteAliases[key]||key];
+    let hash=0;for(const ch of key)hash=(hash*31+ch.charCodeAt(0))>>>0;
+    const hue=hash%360;
+    return {light:[`hsl(${hue},30%,91%)`,`hsl(${hue},37%,64%)`,`hsl(${hue},44%,39%)`],dark:[`hsl(${hue},22%,21%)`,`hsl(${hue},32%,43%)`,`hsl(${hue},45%,70%)`]};
   }
+  const dominantProject=row=>Object.entries(row?.project_counts||{}).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"pt-BR"))[0];
   function closeTooltip(){
     clearTimeout(tooltipCloseTimer);cancelAnimationFrame(tooltipMoveFrame);tooltipMoveFrame=0;
     tooltipPoint=null;ui.hoverTooltip.hidden=true;ui.hoverTooltip.innerHTML="";tooltipKey="";
@@ -251,8 +260,10 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     }
     ui.period.disabled=!temporal;
     ui.dates.hidden=!(temporal&&state.period==="custom");
-    ui.reasonWrap.hidden=state.mode==="base";
-    ui.ticketFilters.hidden=!temporal;
+    const incidents=["calls","repeat","motives","climate"].includes(state.mode);
+    ui.reasonWrap.hidden=!incidents;
+    const category=page.querySelector("[data-category-filter]");if(category){category.disabled=!incidents;category.title=incidents?"":"Suspenso: inventário CMDB não utiliza motivos OTRS.";}
+    ui.ticketFilters.hidden=!incidents;
     ui.status.value=temporal?state.status:"";
     ui.priority.value=temporal?state.priority:"";
     ui.arionStatus.value=temporal?state.arionStatus:"";
@@ -286,7 +297,15 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     syncUrl();
     try {
       const response = await fetch(urlFor(root.dataset.apiUrl), { headers:{"X-Requested-With":"XMLHttpRequest"}, signal:controller.signal });
-      if (!response.ok) {const error=await response.json().catch(()=>({}));throw new Error(error.error||error.message||`A consulta do Mapa respondeu HTTP ${response.status}.`);}
+      if (!response.ok) {
+        const error=await response.json().catch(()=>({})),message=error.error||error.message||`A consulta do Mapa respondeu HTTP ${response.status}.`;
+        if(response.status===400&&typeof message==="string"&&/^(Projeto|ISP) incompatível/.test(message)&&seq===requestSequence){
+          if(message.startsWith("Projeto"))state.project="";state.provider="";
+          $("[data-filter-notice]").textContent=message+" A seleção incompatível foi removida.";
+          return await fetchData();
+        }
+        throw new Error(message);
+      }
       const payload = await response.json();
       if (!payload.states || !Array.isArray(payload.projects) || !Array.isArray(payload.providers)) throw new Error("A API retornou um formato inesperado.");
       if (seq !== requestSequence) return false;
@@ -327,15 +346,15 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     ui.priority.innerHTML='<option value="">Todas</option>'+(data.priority_options||[]).map(value=>`<option value="${esc(value)}">${esc(value)}</option>`).join("");
     ui.arionStatus.innerHTML='<option value="">Todos</option>'+(data.arion_statuses||[]).map(row=>`<option value="${esc(row.value)}">${esc(row.label)}</option>`).join("");
     ui.assignee.innerHTML='<option value="">Todos</option><option value="unassigned">Sem responsável</option>'+(data.assignees||[]).map(row=>`<option value="${esc(row.id)}">${esc(row.name)}</option>`).join("");
-    ui.provider.value = data.providers.some(row=>String(row.id)===state.provider) ? state.provider : "";
+    state.provider = data.providers.some(row=>String(row.id)===state.provider) ? state.provider : "";ui.provider.value=state.provider;
     ui.arionStatus.value=(data.arion_statuses||[]).some(row=>row.value===state.arionStatus)?state.arionStatus:"";
     ui.assignee.value=state.assignee==="unassigned"||((data.assignees||[]).some(row=>String(row.id)===state.assignee))?state.assignee:"";
     const oldReason = state.reason;
     const reasonOptions = data.reason_options || (data.reasons || []).map(label => ({value:label,label,raw_values:[label]}));
     ui.reason.innerHTML = '<option value="">Todos os motivos</option>' + reasonOptions.map(option=>`<option value="${esc(option.value)}">${esc(option.label)}</option>`).join("");
     const selectedReason = reasonOptions.find(option => option.value === oldReason || option.label === oldReason || (option.raw_values || []).includes(oldReason));
-    state.reason = selectedReason?.value || "";
-    ui.reason.value = state.reason;
+    if(!["base","projects"].includes(state.mode))state.reason=selectedReason?.value||"";
+    ui.reason.value=selectedReason?.value||"";
   }
   function dominantClient(row) {
     const counts=row?.client_counts || {};
@@ -359,7 +378,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     const maximum=maxMetric();
     return { type:"FeatureCollection", features:geojson.features.filter(feature=>!state.region||(data?.allowed_ufs||[]).includes(feature.properties.sigla)).map(feature=>{
       const code=feature.properties.sigla,row=data.states[code] || {};
-      return { ...feature, id:code, properties:{...feature.properties,value:metricValue(row),dominant:dominantClient(row),cause:Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]||"",intensity:state.layer==="direction"?.45:climateKeys[state.layer]?Math.max(0,Math.min(1,state.layer.startsWith("temperature")?(metricValue(row)+15)/60:metricValue(row)/maximum)):Math.sqrt(metricValue(row)/maximum),has_data:climateKeys[state.layer]?Number.isFinite(climateValue(row)):Boolean(row.total_links||metricValue(row)>0),context_faded:Boolean(state.selectedUF&&state.selectedUF!==code)} };
+      return { ...feature, id:code, properties:{...feature.properties,value:metricValue(row),dominant:dominantClient(row),project_color:getProjectPalette(dominantProject(row)?.[0]||"")[theme()][2],cause:Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]||"",intensity:state.layer==="direction"?.45:climateKeys[state.layer]?Math.max(0,Math.min(1,state.layer.startsWith("temperature")?(metricValue(row)+15)/60:metricValue(row)/maximum)):Math.sqrt(metricValue(row)/maximum),has_data:climateKeys[state.layer]?Number.isFinite(climateValue(row)):Boolean(row.total_links||metricValue(row)>0),context_faded:Boolean(state.selectedUF&&state.selectedUF!==code)} };
     })};
   }
   function labelCollection() {
@@ -393,6 +412,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   ["temperature_min","temperature_max"].forEach(k=>geoRamps[k]=geoRamps.temperature);geoRamps.wind_speed=geoRamps.wind;geoRamps.direction=geoRamps.wind;
   const causeColors={"Massiva":"#8975b6","Rompimento":"#bc805d","Equipamento":"#5f8eae","Energia":"#b49755","Configuração":"#699b9a","Reset remoto":"#8c96ac","Pendência Financeira":"#a48296","Demais motivos técnicos":"#8a8f98","Sem classificação":"#777d83"};
   function fillExpression() {
+    if(state.mode==="projects"&&!state.project&&state.layer==="analysis")return ["case",["get","has_data"],["get","project_color"],theme()==="light"?"#d5d8dc":"#363839"];
     if(state.layer==="motives")return ["case",["get","has_data"],["match",["get","cause"],...Object.entries(causeColors).flat(),"#777d83"],theme()==="light"?"#d5d8dc":"#363839"];
     if(geoRamps[state.layer])return ["case",["get","has_data"],colorRamp(geoRamps[state.layer][theme()]),theme()==="light"?"#d5d8dc":"#363839"];
     if(state.layer==="client")return ["case",["get","has_data"],state.project?colorRamp(getProjectPalette(state.project)[theme()]):baseColorExpression(),theme()==="light"?"#d5d8dc":"#363839"];
@@ -452,6 +472,10 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     $("[data-map-context]")?.replaceChildren();
   }
   function renderLegend() {
+    if(state.mode==="projects"&&!state.project&&state.layer==="analysis"){
+      const names=[...new Set(Object.values(data?.states||{}).map(row=>dominantProject(row)?.[0]).filter(Boolean))].sort();
+      ui.legend.innerHTML='<span class="legend-scale-label">Projeto predominante · links distintos</span>'+names.map(name=>`<span class="legend-item"><i class="legend-dot" style="background:${getProjectPalette(name)[theme()][2]}"></i>${esc(displayProject(name))}</span>`).join("");return;
+    }
     if(state.layer==="direction"){
       ui.legend.innerHTML='<span class="legend-scale-label">Setas: direção aproximada de origem · graus · Cinza: sem dados</span>';
       return;
@@ -494,7 +518,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     if(state.mode==="climate"){
       const c=data.geo_climate||{};
       const value=v=>v==null?"Indisponível":number.format(v);
-      ui.nationalView.innerHTML=`<div class="national-kpis"><div><strong>${value(state.day?c.rain_mm:c.precipitation_mm)}</strong><span>Chuva estimada · mm</span></div><div><strong>${value(c.temperature_mean_c)}</strong><span>Temperatura média · °C</span></div><div><strong>${value(c.wind_max_kmh)}</strong><span>Vento máximo · km/h</span></div><div><strong>${value(c.gust_max_kmh)}</strong><span>Rajada máxima · km/h</span></div></div><p class="panel-empty">${esc(state.day||state.period)} · Estimativa territorial. Cinza indica ausência; zero observado é válido. Coincidência temporal não confirma causalidade.</p>`;
+      ui.nationalView.innerHTML=`<div class="national-kpis"><div><strong>${value(state.day?c.rain_mm:c.precipitation_mm)}</strong><span>Chuva estimada · mm</span></div><div><strong>${value(c.temperature_mean_c)}</strong><span>Temperatura média · °C</span></div><div><strong>${value(c.wind_max_kmh)}</strong><span>Vento máximo · km/h</span></div><div><strong>${value(c.gust_max_kmh)}</strong><span>Rajada máxima · km/h</span></div></div><p class="panel-empty">${esc(state.day||state.period)} · ${esc(c?.coverage_label||"")} · Estimativa do recorte coberto. Cinza indica ausência; zero observado é válido. Coincidência temporal não confirma causalidade.</p>`;
       return;
     }
     const unlinkedCount=Number(data.unlinked_ticket_count||0);
@@ -582,9 +606,15 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     detailController=controller;
     const row=data.states[code]||{};
     const url=urlFor(root.dataset.detailUrl,{uf:code,tab:tab,ticket_page:state.ticketPage,ticket_page_size:state.ticketPageSize,ticket_search:state.ticketSearch});
-    const response=await fetch(url,{headers:{"X-Requested-With":"XMLHttpRequest"},signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});
-    if(!response.ok) throw new Error("N\u00e3o foi poss\u00edvel abrir os detalhes da UF ("+response.status+").");
-    const detail=await response.json();
+    let detail;
+    try{
+      const response=await fetch(url,{headers:{"X-Requested-With":"XMLHttpRequest"},signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});
+      if(!response.ok)throw new Error("Não foi possível abrir os detalhes da UF ("+response.status+").");
+      detail=await response.json();
+    }catch(error){
+      if(controller.signal.aborted||sequence!==detailSequence||state.selectedUF!==code)return;
+      throw error;
+    }
     if(sequence!==detailSequence||state.selectedUF!==code)return;
     if(isPresentation){
       if(tab==="tickets")tab="overview";
@@ -687,11 +717,12 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
       padding={top:24,right:24,bottom:drawerHeight+24,left:24};
     }else{
       const left=ui.moreFilters.open?ui.moreFilters.querySelector(".geo-toolbar").getBoundingClientRect().width+36:state.collapsed?28:panelWidth(national,300)+28;
-      const right=focused?panelWidth(panel,356)+28:28;
+      const analyticsExpanded=page.classList.contains("has-analytics-drawer");
+      const right=analyticsExpanded?page.querySelector("[data-geo-intelligence]").getBoundingClientRect().width+28:focused?panelWidth(panel,356)+28:28;
       const maxOccupied=Math.max(0,stageWidth*.62),occupied=left+right;
       const factor=occupied>maxOccupied&&occupied?maxOccupied/occupied:1;
       const analytics=page.querySelector("[data-geo-intelligence]");
-      const analyticsHeight=analytics.dataset.panelState==="collapsed"?0:analytics.getBoundingClientRect().height;
+      const analyticsHeight=analytics.dataset.panelState==="summary"?analytics.getBoundingClientRect().height:0;
       const bottom=analyticsHeight+(page.classList.contains("has-timeline")?92:52);
       padding={top:96,right:right*factor,bottom:Math.min(bottom,stageHeight*.52),left:left*factor};
     }
@@ -721,7 +752,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   function closePanel(){detailSequence++;detailController?.abort();panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");updateMapLayout();setTimeout(()=>{if(!state.selectedUF)panel.hidden=true;},220);}
   function selectState(code,zoom=true){
     if(!stateNames[code]||!geoController.allowedUFs().includes(code))return;
-    manualCamera=false;closeTooltip();
+    manualCamera=false;page.dispatchEvent(new CustomEvent("geo:details"));closeTooltip();
     if(state.selectedUF!==code){state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";}
     state.selectedUF=code;syncUrl();ui.breadcrumb.hidden=false;ui.selectedName.textContent=stateNames[code];
     renderActiveFilters();updateMapLayout();renderMap();
@@ -747,11 +778,13 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   function chooseSearchResult(code){closeSearch(true);closeTooltip();selectState(code);}
 
   function bind(){
-    page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";if(!["projects","calls","repeat","motives","climate"].includes(state.mode)){state.status="";state.priority="";state.arionStatus="";state.assignee="";}state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
-    page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
-    ui.project.addEventListener("change",()=>{state.project=ui.project.value;fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
+    page.addEventListener("geo:analysis",event=>{if(event.detail.expanded){panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");}else if(state.selectedUF)openPanel();});
+    page.addEventListener("geo:details",()=>geoController.collapse());
+    page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
+    page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;state.provider="";$("[data-filter-notice]").textContent="Projeto e ISP revalidados para o cliente selecionado.";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
+    ui.project.addEventListener("change",()=>{state.project=ui.project.value;state.provider="";$("[data-filter-notice]").textContent="ISP revalidado para o projeto selecionado.";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
     ui.provider.addEventListener("change",()=>{state.provider=ui.provider.value;fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
-    ui.period.addEventListener("change",()=>{state.period=ui.period.value;state.dateFrom="";state.dateTo="";ui.dates.hidden=state.period!=="custom";if(state.period!=="custom")fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
+    ui.period.addEventListener("change",()=>{state.period=ui.period.value;if(state.period==="custom"){ui.moreFilters.open=true;syncMoreFiltersOpen();}state.dateFrom="";state.dateTo="";ui.dates.hidden=state.period!=="custom";if(state.period!=="custom")fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
     $("[data-apply-period]").addEventListener("click",()=>{state.dateFrom=ui.dateFrom.value;state.dateTo=ui.dateTo.value;if(state.dateFrom&&state.dateTo&&state.dateFrom>state.dateTo){ui.dateTo.setCustomValidity("A data final deve ser igual ou posterior à inicial.");ui.dateTo.reportValidity();return;}ui.dateTo.setCustomValidity("");fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
     ui.reason.addEventListener("change",()=>{state.reason=ui.reason.value;fetchData().catch(()=>showError("Não foi possível filtrar os motivos."));});
     ui.status.addEventListener("change",()=>{state.status=ui.status.value;fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel filtrar o status."));});
@@ -824,7 +857,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
         map.addLayer({id:"arion-state-callout-labels",type:"symbol",source:"arion-state-callouts",filter:["==",["geometry-type"],"Point"],layout:{"text-field":["get","sigla"],"text-font":["Open Sans Semibold","Arial Unicode MS Regular"],"text-size":["interpolate",["linear"],["zoom"],2,11,5.8,14],"text-allow-overlap":false,"text-ignore-placement":true,"text-optional":true,"symbol-placement":"point","text-padding":5},paint:{"text-color":theme()==="light"?"#31463a":"#e5ece6","text-halo-color":theme()==="light"?"#f2f5f1":"#151b18","text-halo-width":3,"text-halo-blur":.15,"text-opacity":1}});
         const selectableLayers=["arion-state-fill","arion-state-labels","arion-state-callout-labels"];
         selectableLayers.forEach(layer=>{
-          map.on("click",layer,event=>{const code=event.features?.[0]?.properties?.sigla;if(code)selectState(code);});
+          map.on("click",layer,event=>{if(map.getLayer("arion-weather-icon-points")&&map.queryRenderedFeatures(event.point,{layers:["arion-weather-icon-points","arion-weather-icon-clusters"]}).length)return;const code=event.features?.[0]?.properties?.sigla;if(code)selectState(code);});
           map.on("mouseenter",layer,()=>map.getCanvas().style.cursor="pointer");
           map.on("mousemove",layer,event=>{const code=event.features?.[0]?.properties?.sigla||"";if(code!==hoveredUF){if(hoveredUF)setFeatureState(hoveredUF,"hover",false);hoveredUF=code;if(code)setFeatureState(code,"hover",true);}showTooltip(event,code);});
           map.on("mouseleave",layer,()=>{map.getCanvas().style.cursor="";if(hoveredUF)setFeatureState(hoveredUF,"hover",false);hoveredUF="";deferCloseTooltip();});
@@ -834,6 +867,8 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
         map.on("mousemove","arion-state-callout-lines",event=>{const code=event.features?.[0]?.properties?.sigla||"";if(code!==hoveredUF){if(hoveredUF)setFeatureState(hoveredUF,"hover",false);hoveredUF=code;if(code)setFeatureState(code,"hover",true);}showTooltip(event,code);});
         map.on("mouseleave","arion-state-callout-lines",()=>{map.getCanvas().style.cursor="";if(hoveredUF)setFeatureState(hoveredUF,"hover",false);hoveredUF="";deferCloseTooltip();});
         map.on("dragstart",e=>{if(e.originalEvent)manualCamera=true;});map.on("zoomstart",e=>{if(e.originalEvent)manualCamera=true;});
+        weatherIcons=mountWeatherIcons({map,page,state,onOpen:closeTooltip,positions:{...stateLabelCoordinates,...Object.fromEntries(Object.entries(smallStateCallouts).map(([uf,p])=>[uf,p.anchor]))},regionForUF:uf=>({1:"N",2:"NE",3:"SE",4:"S",5:"CO"}[lastWeatherPayload?.catalog.states.find(row=>row.sigla===uf)?.region_id]||"SE")});
+        if(lastWeatherPayload)weatherIcons.update(lastWeatherPayload,state.day);
         mapLoaded=true;message.hidden=true;renderMap();updateMapLayout();if(state.selectedUF)selectState(state.selectedUF);else refitCurrentMap();
       }catch(_error){showError("Não foi possível preparar as unidades do mapa.");}});
       map.on("error",()=>{if(!mapLoaded)showError("Confira a configuração pública e a conexão do Mapbox.");});
@@ -889,6 +924,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
       const projectName=state.project?displayProject(state.project):project?displayProject(project[0]):"";
       rows+=tooltipLine("Projetos na UF",number.format(projectTotal));
       if (projectName) rows+=tooltipLine("Projeto",projectName);
+      if(project)rows+=tooltipLine("Participação",`${(100*project[1]/Math.max(1,row.total_links)).toFixed(1)}% dos links da UF`);
       rows+=tooltipLine("Links",number.format(row.total_links||0));
       rows+=tooltipLine("Tickets no período",number.format(row.ticket_count||0));
       if (amount) rows+=tooltipLine("Cliente predominante",dominantClientLabel(row));
@@ -916,6 +952,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     return `<div class="state-tooltip"><div class="tooltip-heading"><img src="${esc(flag)}" alt="" width="28" height="19" decoding="async"><div><strong>${esc(title)}</strong><span>${esc(code)} &#183; Brasil</span></div></div><div class="tooltip-primary-metric"><strong>${quantity}</strong><span>${esc(state.mode==="motives"&&state.reason?reasonLabel():metricLabel)}</span></div>${rows?`<div class="tooltip-details">${rows}</div>`:""}</div>`;
   }
   function showTooltip(event,codeOverride=""){
+    if(page.querySelector(".mapboxgl-popup")||map?.getLayer("arion-weather-icon-points")&&event.point&&map.queryRenderedFeatures(event.point,{layers:["arion-weather-icon-points","arion-weather-icon-clusters"]}).length){closeTooltip();return;}
     clearTimeout(tooltipCloseTimer);
     const code=codeOverride||event.features?.[0]?.properties?.sigla;if(!code){closeTooltip();return;}
     if(code===state.selectedUF){closeTooltip();return;}
@@ -950,10 +987,12 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     map.fitBounds(bounds,{padding:mapFitPadding(false),maxZoom:6,duration:window.matchMedia("(prefers-reduced-motion: reduce)").matches?0:duration});
   }
   const geoController=mountGeoIntelligence({page,root,state,urlFor,refresh:fetchData,fitRegion:()=>setTimeout(fitRegion,100),selectUF:code=>code?selectState(code):clearSelection(),onWeather:(payload,day)=>{
+    lastWeatherPayload=payload;weatherIcons?.update(payload,day);
     state.day=day||"";
     if(!data)return;
     data.geo_daily_counts=payload.summary.daily_counts;
     data.geo_climate=day?payload.daily.find(r=>r.date===day):payload.climate;
+    for(const code of Object.keys(payload.weather))if(!data.states[code])data.states[code]={total_links:0,ticket_count:0};
     if(["base","projects"].includes(state.mode)){data.ticket_count=payload.summary.ticket_count;data.affected_link_count=payload.summary.affected_link_count;}
     Object.entries(data.states).forEach(([code,row])=>{row.climate=payload.weather[code];row.geo_ticket_count=payload.summary.states[code]?.ticket_count||0;row.geo_category_counts=payload.summary.states[code]?.category_counts||{};row.geo_daily_counts=payload.summary.states[code]?.daily_counts||{};if(["base","projects"].includes(state.mode))row.ticket_count=row.geo_ticket_count;});
     renderMap();renderLegend();renderNational();

@@ -19,7 +19,7 @@ function dailyChart(series, layer="rain"){
   const x=i=>left+(i+.5)*step,yRain=v=>top+plot*(1-v/rainMax),yTicket=v=>top+plot*(1-v/ticketMax);
   const bars=series.map((r,i)=>r.rain_mm==null?"":`<rect class="rain-bar" x="${x(i)-step*.32}" y="${yRain(r.rain_mm)}" width="${step*.64}" height="${plot*r.rain_mm/rainMax}"><title>${escape(r.date)}: ${escape(label)} ${quantity(r.rain_mm+low,unit)}; ${r.tickets} incidentes</title></rect>`).join("");
   const line=series.map((r,i)=>`${x(i)},${yTicket(r.tickets)}`).join(" ");
-  const ticks=[0,Math.floor((series.length-1)/2),series.length-1].map(i=>`<text x="${x(i)}" y="${height-3}" text-anchor="middle">${series[i].date.slice(-2)}</text>`).join("");
+  const ticks=[0,Math.floor((series.length-1)/2),series.length-1].map(i=>`<text x="${x(i)}" y="${height-3}" text-anchor="middle">${series.length>31?series[i].date.slice(8)+"/"+series[i].date.slice(5,7):series[i].date.slice(-2)}</text>`).join("");
   return `<div class="geo-chart-legend"><b>${hasClimate?escape(label)+" · "+unit+" (esquerda)":"Clima indisponível · sem simulação"}</b><b>Incidentes · quantidade (direita)</b></div><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${hasClimate?escape(label)+' em '+unit+' e incidentes diários':'Incidentes diários; clima indisponível'}"><text x="0" y="${top+5}">${hasClimate?fmt.format(high):""}</text><text x="${width-right+5}" y="${top+5}">${fmt.format(ticketMax)}</text><text x="15" y="${top+plot}">${hasClimate?fmt.format(low):""}</text><text x="${width-right+5}" y="${top+plot}">0</text>${bars}<polyline class="ticket-line" points="${line}"/>${ticks}</svg>`;
 }
 
@@ -28,12 +28,22 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
   if(!panel)return {update(){},syncMode(){},allowedUFs:()=>allUF};
   const $=s=>page.querySelector(s),region=$("[data-region-filter]"),uf=$("[data-geo-uf]"),month=$("[data-geo-month]"),category=$("[data-category-filter]"),layer=$("[data-geo-layer]");
   let controller=null,sequence=0,pollTimer=0,timelineTimer=0,current=null;
+  let pendingPlanToken="";
   const dayInput=$("[data-timeline-day]"),dayLabel=$("[data-timeline-label]"),play=$("[data-timeline-play]");
   const categoryKeys={Massiva:"massiva",Rompimento:"rompimento",Equipamento:"equipamento",Energia:"energia","Configuração":"configuracao","Reset remoto":"reset_remoto","Demais motivos técnicos":"demais","Sem classificação":"sem_classificacao","Pendência Financeira":"financeiro"};
   const status=$("[data-weather-status]");
   const timeline=$("[data-geo-timeline]");
+  const periodControl=$("[data-period-control]"),periodMedia=window.matchMedia("(max-width:1100px)");
+  function placePeriod(){
+    if(!periodControl)return;
+    if(periodMedia.matches)month?.closest(".geo-filter-fields")?.prepend(periodControl);
+    else page.querySelector(".geo-analysis-controls")?.insertBefore(periodControl,page.querySelector(".geo-search-wrap"));
+  }
+  periodMedia.addEventListener("change",placePeriod);placePeriod();
   function setPanelState(value){
     panel.dataset.panelState=value;
+    page.classList.toggle("has-analytics-drawer",value==="expanded");
+    page.dispatchEvent(new CustomEvent("geo:analysis",{detail:{expanded:value==="expanded"}}));
     const open=value!=="collapsed",expanded=value==="expanded";
     $("#geo-analysis-body").hidden=!open;
     $("#geo-intelligence-content").hidden=!expanded;
@@ -61,6 +71,8 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
     layer.value=state.layer;
   }
   async function update(preloaded){
+    pendingPlanToken="";
+    const collectButton=$("[data-weather-collect]");if(collectButton)collectButton.textContent="Coletar clima do recorte";
     syncControls();
     const own=++sequence;
     controller?.abort();controller=new AbortController();
@@ -88,7 +100,7 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       const distinct=field=>new Set(Object.values(summary.states).flatMap(r=>Object.keys(r[field]||{})).filter(v=>!v.includes("não identificado"))).size;
       const stateRanking=Object.entries(summary.states).filter(([,r])=>r.ticket_count>0).sort((a,b)=>b[1].ticket_count-a[1].ticket_count);
       const peak=payload.daily.reduce((best,r)=>r.tickets>(best?.tickets||0)?r:best,null);
-      const metrics=state.mode==="climate"?[["Chuva estimada",state.day?climate.rain_mm:climate.precipitation_mm,"mm"],[state.day?"Incidentes no dia":"Dias chuvosos",state.day?incidents:climate.rainy_days,""],["Temperatura média",climate.temperature_mean_c,"°C"],["Rajada máxima",climate.gust_max_kmh,"km/h"]]:["base","projects"].includes(state.mode)?[["Links CMDB",summary.filtered_source_total,""],["UFs com links",Object.values(summary.states).filter(r=>r.total_links>0).length,""],["Projetos",distinct("project_counts"),""],["Provedores",distinct("provider_counts"),""]]:state.mode==="motives"?[["Categoria predominante",reasons[0]?.[0]||"Sem classificação",""],["UF com mais incidentes",stateRanking[0]?.[0]||"Sem dados",""],["Dia de maior concentração",peak?peak.date.slice(8)+"/"+peak.date.slice(5,7):"Sem dados",""],["Dias coincidentes com chuva",payload.climate.coincident_days," dias"]]:[[state.day?"Incidentes no dia":"Incidentes válidos",incidents,""],["Links afetados no mês",summary.affected_link_count,""],["Links reincidentes no mês",summary.recurrence_link_count,""],["Motivo predominante",reasons[0]?.[0]||"Sem classificação",""]];
+      const metrics=state.mode==="climate"?[[payload.climate.partial?"Chuva · recorte coberto":"Chuva estimada",state.day?climate.rain_mm:climate.precipitation_mm,"mm"],[state.day?"Incidentes no dia":"Dias chuvosos",state.day?incidents:climate.rainy_days,""],["Temperatura média",climate.temperature_mean_c,"°C"],["Rajada máxima",climate.gust_max_kmh,"km/h"]]:["base","projects"].includes(state.mode)?[["Links CMDB",summary.filtered_source_total,""],["UFs com links",Object.values(summary.states).filter(r=>r.total_links>0).length,""],["Projetos",distinct("project_counts"),""],["Provedores",distinct("provider_counts"),""]]:state.mode==="motives"?[["Categoria predominante",reasons[0]?.[0]||"Sem classificação",""],["UF com mais incidentes",stateRanking[0]?.[0]||"Sem dados",""],["Dia de maior concentração",peak?peak.date.slice(8)+"/"+peak.date.slice(5,7):"Sem dados",""],["Dias coincidentes com chuva",payload.climate.coincident_days," dias"]]:[[state.day?"Incidentes no dia":"Incidentes válidos",incidents,""],["Links afetados no mês",summary.affected_link_count,""],["Links reincidentes no mês",summary.recurrence_link_count,""],["Motivo predominante",reasons[0]?.[0]||"Sem classificação",""]];
       $("[data-weather-metrics]").innerHTML=metrics.map(([label,value,unit])=>`<div><strong>${quantity(value,unit)}</strong><span>${escape(label)}${label==="Dias chuvosos"&&climate.rainy_days!=null?" · "+climate.rainy_days+" dias":""}</span></div>`).join("");
       $("[data-weather-chart]").innerHTML=dailyChart(payload.daily,state.layer);
       const projected=Object.entries(summary.distribution_projected||{}).filter(([,v])=>v>0);
@@ -103,9 +115,14 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
         $("[data-geo-reasons]").insertAdjacentHTML("beforeend",'<h3>Incidentes por UF · mês</h3>'+stateRanking.slice(0,5).map(([code,r])=>`<p><span>${code}</span><b>${fmt.format(r.ticket_count)}</b></p>`).join(""));
       }
       const notes=[];
-      if(payload.climate.available){const climate=payload.climate;notes.push(`${climate.covered_ufs} UF(s) com cache · ${climate.points} células · completude ${quantity(climate.completeness*100,"%")}`);if(climate.stale)notes.push("Cache vencido");if(climate.partial)notes.push("Cobertura temporal parcial");}
+      if(payload.climate.coverage_label)notes.push(`${payload.climate.coverage_label} · área amostrada coberta ${quantity(payload.climate.territorial_percent,"%")}`);
+      if(payload.climate.available){const climate=payload.climate;notes.push(`${climate.covered_ufs} UF(s) com cache · ${climate.points} células · completude ${quantity(climate.completeness*100,"%")}`);if(climate.stale)notes.push("Cache vencido");if(climate.temporal_partial)notes.push("Cobertura temporal parcial");}
       if(payload.collection?.message)notes.push(payload.collection.message);
       else if(!payload.climate.available)notes.push("Dados climáticos indisponíveis.");
+      if(payload.collection?.requests_today!=null)notes.push(`${payload.collection.requests_today}/${payload.collection.daily_budget} requisições climáticas hoje`);
+      if(payload.collection?.checkpoint_cells)notes.push(`${payload.collection.checkpoint_cells} células em progresso`);
+      if(payload.collection?.jobs){const jobs=payload.collection.jobs;notes.push(`${jobs.pending} pendentes · ${jobs.running} em processamento · ${jobs.error} com erro · ${jobs.paused} pausadas`);}
+      if(payload.climate.available&&payload.climate.last_update)notes.push(`${payload.climate.method} · atualização ${new Date(payload.climate.last_update).toLocaleString("pt-BR")}`);
       if(payload.missing_ufs.length&&payload.climate.available)notes.push(`${payload.missing_ufs.length} UF(s) sem cache`);
       status.textContent=notes.join(" · ");
       status.dataset.state=payload.collection?.configuration_status==="not_configured"?"not_configured":payload.collection?.status||"unavailable";
@@ -119,9 +136,50 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       if(payload.missing_ufs.length)$("[data-geo-quality]").append(document.createTextNode(" Sem clima: "+payload.missing_ufs.join(", ")+"."));
       if(payload.climate.available){const c=payload.climate;$("[data-geo-quality]").append(document.createTextNode(` Chuva elevada: ${quantity(c.heavy_rain_days)} dias com média territorial ≥ 20 mm. Coincidência: ${quantity(c.coincident_days)} dias com chuva ≥ 1 mm e incidentes técnicos; não confirma causa. Temperatura: ${quantity(c.temperature_min_c,"°C")} a ${quantity(c.temperature_max_c,"°C")}. Vento máximo: ${quantity(c.wind_max_kmh,"km/h")}; direção média aproximada: ${quantity(c.wind_direction_deg,"°")}.`));}
       onWeather(payload,state.day);
+      renderClimateExtras(payload);
+      const fields={rain:"precipitation_sum",temperature:"temperature_2m_mean",temperature_min:"temperature_2m_min",temperature_max:"temperature_2m_max",wind:"wind_gusts_10m_max",wind_speed:"wind_speed_10m_max",direction:"wind_direction_10m_dominant",correlation:"precipitation_sum"};
+      for(const option of layer.options){const field=fields[option.value];if(!field)continue;option.disabled=!Object.values(payload.weather).some(row=>row.daily.some(day=>Number.isFinite(day[field])));option.title=option.disabled?"Variável sem observações neste recorte; ausência não equivale a zero.":"";}
   }
+  function renderClimateExtras(payload){
+    const ranking=$("[data-weather-ranking]"),select=$("[data-climate-ranking]"),context=$("[data-weather-correlation]"),localities=$("[data-weather-localities]");
+    const rows=payload.rankings?.[select.value]||[];
+    ranking.innerHTML='<p class="geo-status">Somente UFs com cobertura completa e cache vigente no período; posições entre os recortes disponíveis.</p>'+rows.slice(0,27).map((row,i)=>`<button class="geo-analysis-row" type="button" data-climate-uf="${row.uf}"><span>${i+1}. ${row.uf}</span><b>${quantity(row.value)}</b></button>`).join("")+(!rows.length?'<p class="geo-status">Sem recortes comparáveis neste intervalo.</p>':"");
+    const c=payload.correlation||{};
+    context.innerHTML=`<p class="geo-status">${c.eligible_tickets??0} tickets técnicos elegíveis · ${c.located_tickets??0} com município CMDB · ${c.covered_tickets??0} com cobertura horária local · ${c.daily_covered??0} com cobertura diária municipal. ${c.insufficient??0} sem dados suficientes.</p>`+
+      [["Chamados técnicos em dias chuvosos",c.rain_days],["Chamados em janela chuvosa",c.rain],["Rompimentos com chuva",c.ruptures_rain],["Massivas com precipitação",c.massive_rain],["Equipamento / energia durante evento",c.equipment_weather],["Links com vento intenso",c.wind_links],["Localidades com chuva e incidentes",c.rain_localities],["Coincidência temporal e geográfica",c.coincidence],["Evidência contextual relevante",c.contextual],["Sem coincidência identificada",c.none]].map(([name,n])=>`<p class="geo-analysis-row"><span>${name}</span><b>${quantity(n)}</b></p>`).join("")+`<p class="geo-status">${escape(c.definition||payload.notice)} ${escape(c.time_basis||"")}</p>`;
+    const regions=c.region_rain_incidents||[];
+    context.insertAdjacentHTML("beforeend",regions.sort((a,b)=>b.tickets-a.tickets).map(row=>`<p class="geo-analysis-row"><span>${escape(payload.catalog.regions.find(r=>r.id===row.region_id)?.nome)} · incidentes em janela chuvosa</span><b>${row.tickets}</b></p>`).join(""));
+    const available=c.localities||[];
+    const cities=new Map(available.map(row=>[row.uf+":"+row.city.toLocaleLowerCase("pt-BR"),row]));
+    if(state.selectedUF&&!root.dataset.presentation?.includes("true")){
+      const counts=payload.summary.states[state.selectedUF]?.city_counts||{};
+      Object.entries(counts).forEach(([key,value])=>{const city=typeof value==="object"?Object.keys(value.variants||{})[0]||key:key;const id=state.selectedUF+":"+city.toLocaleLowerCase("pt-BR");if(!cities.has(id))cities.set(id,{city,uf:state.selectedUF,incidents:0,available:false});});
+    }
+    const list=[...cities.values()].filter(row=>!state.selectedUF||row.uf===state.selectedUF).sort((a,b)=>(b.rain_incidents||0)-(a.rain_incidents||0)||b.incidents-a.incidents);
+    localities.innerHTML='<h3>Localidades · cache sob demanda</h3>'+list.slice(0,80).map(row=>`<div class="geo-locality-row"><span>${escape(row.city)} / ${row.uf}<small>${row.incidents} incidentes técnicos · ${row.available?"cache municipal disponível":"sem cache municipal"}</small></span>${panel.dataset.localUrl?`<button type="button" class="geo-text-action" data-local-city="${escape(row.city)}" data-local-uf="${row.uf}" data-local-action="${row.available?"view":"collect"}">${row.available?"Investigar":"Coletar local"}</button>`:""}</div>`).join("")+(!list.length?'<p class="geo-status">Selecione uma UF para explorar os municípios da CMDB. Sem localização municipal não há coincidência local.</p>':"");
+    for(const item of [ranking.closest("details"),context.closest("details")])item.hidden=state.mode!=="climate";
+  }
+  $("[data-climate-ranking]")?.addEventListener("change",()=>current&&renderClimateExtras(current));
+  $("[data-weather-ranking]")?.addEventListener("click",event=>{const row=event.target.closest("[data-climate-uf]");if(row)selectUF(row.dataset.climateUf);});
+  let localContext=null;
+  async function localRequest(city,uf,collect=false,ticket=""){
+    const result=$("[data-local-weather-result]");result.textContent=collect?"Solicitando coleta municipal ao Worker…":"Consultando cache municipal…";
+    if(!/^\d{4}-\d{2}$/.test(current?.period.month||"")){result.textContent="Selecione um mês para investigar a localidade.";return;}
+    const url=urlFor(panel.dataset.localUrl,{city,uf,period:current.period.month,ticket});
+    const csrf=page.querySelector("[name=csrfmiddlewaretoken]")?.value;
+    try{
+      const response=await fetch(url,{method:collect?"POST":"GET",...(collect?{body:new URLSearchParams(url.searchParams),headers:{"X-CSRFToken":csrf||""}}:{})});
+      const data=await response.json();if(!response.ok)throw new Error(data.error?.message||data.error||"Consulta local indisponível.");
+      localContext={city,uf};
+      result.innerHTML=`<h3>${escape(city)} / ${uf}</h3><p class="geo-status">${escape(({success:"Concluído",pending:"Na fila",running:"Processando",error:"Falhou",unavailable:"Sem cache"})[data.status]||data.status)} · ${escape(data.precision)} ${escape(data.last_error||"")}</p>`;
+      if(data.weather){result.insertAdjacentHTML("beforeend",`<p class="geo-status">${quantity(data.weather.precipitation_mm,"mm")} · ${quantity(data.weather.temperature_mean_c,"°C")} · rajada ${quantity(data.weather.gust_max_kmh,"km/h")}. ${escape(data.source)} · IBGE ${escape(data.ibge_code)}.</p><form data-local-window-form><label>TicketID OTRS <input inputmode="numeric" pattern="[0-9]+" name="ticket" required aria-label="TicketID real para investigar janela horária"></label><button class="geo-text-action">Investigar janela horária</button></form>`);}
+      if(data.window){result.insertAdjacentHTML("beforeend",`<p class="geo-status">${escape(({insufficient:"Sem dados suficientes",none:"Sem coincidência identificada",coincidence:"Coincidência temporal e geográfica",contextual:"Evidência contextual relevante"})[data.window.state]||data.window.state)} · ${escape(data.window.time_basis)} Coincidência não confirma causa.</p>`+data.window.hourly.map(row=>`<p class="geo-analysis-row"><span>${escape(row.at.slice(0,16))} UTC</span><b>${quantity(row.precipitation,"mm")} · ${quantity(row.wind_gusts_10m,"km/h")}</b></p>`).join(""));}
+    }catch(error){result.textContent=error.message;}
+  }
+  $("[data-weather-localities]")?.addEventListener("click",event=>{const b=event.target.closest("[data-local-city]");if(b)localRequest(b.dataset.localCity,b.dataset.localUf,b.dataset.localAction==="collect");});
+  $("[data-local-weather-result]")?.addEventListener("submit",event=>{if(!event.target.matches("[data-local-window-form]")||!localContext)return;event.preventDefault();localRequest(localContext.city,localContext.uf,false,new FormData(event.target).get("ticket"));});
   const changed=()=>refresh().catch(()=>{status.textContent="Não foi possível atualizar este recorte.";});
-  region.addEventListener("change",()=>{state.region=region.value;state.selectedUF="";syncControls();changed();});
+  region.addEventListener("change",()=>{state.region=region.value;if(state.selectedUF&&!(regions[state.region]||allUF).includes(state.selectedUF)){state.selectedUF="";$("[data-filter-notice]").textContent="A UF anterior foi removida porque não pertence à região selecionada.";}syncControls();changed();});
   uf.addEventListener("change",()=>selectUF(uf.value));
   month?.addEventListener("change",()=>{if(!month.value||!month.reportValidity())return;state.period=month.value;state.dateFrom="";state.dateTo="";changed();});
   category?.addEventListener("change",()=>{state.category=category.value;changed();});
@@ -135,6 +193,9 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
   $("[data-geo-reasons]").addEventListener("click",event=>{const button=event.target.closest("[data-explore-category]");if(!button)return;state.category=button.dataset.exploreCategory;state.mode="calls";state.layer="calls";changed();});
   const pause=()=>{clearInterval(timelineTimer);timelineTimer=0;play.textContent="▶";play.setAttribute("aria-label","Reproduzir dias");};
   function syncMode(){
+    if(month){month.disabled=state.mode==="base";month.title=month.disabled?"Base representa o inventário CMDB atual; período não altera os links.":"";}
+    const icons=$("[data-weather-icons]"),iconType=$("[data-weather-icon-type]");
+    for(const control of [icons,iconType])if(control){control.disabled=state.mode!=="climate";control.title=state.mode==="climate"?"":"Disponível no modo Clima.";}
     timeline.hidden=!["calls","motives","climate"].includes(state.mode);
     page.classList.toggle("has-timeline",!timeline.hidden);
     if(timeline.hidden){pause();state.day="";}
@@ -151,14 +212,16 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
     try{
       const form=event.currentTarget,body=new URLSearchParams(urlFor(panel.dataset.url).searchParams),csrf=form.querySelector("[name=csrfmiddlewaretoken]").value;
       body.set("csrfmiddlewaretoken",csrf);
+      if(pendingPlanToken)body.set("preview_token",pendingPlanToken);
       const response=await fetch(panel.dataset.collectUrl,{method:"POST",body,headers:{"X-CSRFToken":csrf}});
       const result=await response.json().catch(()=>({message:response.status===403?"Sem autorização ou sessão CSRF expirada. Recarregue a página.":"Resposta indisponível. Consulte a integração."}));
       status.dataset.state=result.status||"unavailable";
       if(!response.ok)throw new Error(result.message||result.error?.message||result.error||"Não foi possível solicitar a coleta.");
       status.textContent=result.message;
+      if(result.status==="preview"){pendingPlanToken=result.preview_token;button.textContent=`Autorizar lote · ${result.estimated_requests} requisições`;return;}
       await update();
     }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
   });
   syncControls();
-  return {update,syncMode,allowedUFs:()=>regions[state.region]||allUF};
+  return {update,syncMode,collapse:()=>{if(panel.dataset.panelState==="expanded")setPanelState("summary");},allowedUFs:()=>regions[state.region]||allUF};
 }

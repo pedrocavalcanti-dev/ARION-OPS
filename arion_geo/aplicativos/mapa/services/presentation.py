@@ -55,6 +55,8 @@ def presentation_payload(user,params):
                            "distribution_projected":estimated,"client_counts":{params["client"]:row["total_links"]}})
     # Explicit allowlist: no original motives, titles, tickets, accounts or financial data.
     return {"mode":params.get("mode","calls"),"states":states,"period":source["period"],"region_link_counts":region_links,
+            "correlation":source.get("correlation",{}),
+            "project_colors":source.get("project_colors",{}),
             "region":source["region"],"allowed_ufs":source["allowed_ufs"],"projects":source["projects"],
             "selected_project":params.get("project",""),"providers":source["providers"],"clients":[params["client"]],"priority_options":source.get("priority_options",[]),
             "filtered_source_total":source["filtered_source_total"],"source_total":source["filtered_source_total"],

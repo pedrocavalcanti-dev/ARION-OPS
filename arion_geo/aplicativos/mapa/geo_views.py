@@ -20,7 +20,7 @@ from aplicativos.integracoes.services.project_names import canonical_project_nam
 from aplicativos.integracoes.services.weather import month_bounds, request_collection, collection_readiness
 from aplicativos.integracoes.models import WeatherCollectionJob
 from aplicativos.integracoes.services.incidents import IncidentRules
-from .services.analytics import STATE_NAMES, MapAnalyticsService, _client_filter
+from .services.analytics import STATE_NAMES, MapAnalyticsService, _client_filter, _bounds
 from .services.geo_intelligence import intelligence_payload
 from .services.presentation import presentation_payload
 
@@ -47,7 +47,9 @@ def _fixed_params(request, key):
     params = {name:values.get(name,"") for name in ("region","uf","provider","category","reason","status","priority")}
     params["client"] = session["client"]
     params["project"] = canonical_project_name(values.get("project",session.get("project","")))
-    params["period"] = month_bounds(values.get("period",session.get("period")))[0].strftime("%Y-%m")
+    params["period"] = values.get("period",session.get("period"))
+    params["date_from"],params["date_to"] = values.get("date_from",""),values.get("date_to","")
+    _bounds(params)
     params["mode"] = values.get("mode","calls")
     params["cohort"] = "created"
     if params["mode"] not in MapAnalyticsService.MODES:
@@ -90,14 +92,66 @@ def collect(request):
             return geo_json(readiness,status=409)
         if not payload["eligible_ufs"]:
             return geo_json({"status":"unavailable","message":"Sem UFs vinculadas no recorte autorizado."},status=422)
+        from aplicativos.integracoes.services.weather_coverage import collection_plan, plan_token, verify_plan
+        period=payload["period"]["month"]
+        if len(payload["eligible_ufs"])>1 and not verify_plan(request.POST.get("preview_token",""),request.user,payload["eligible_ufs"],period):
+            plan=collection_plan(payload["eligible_ufs"],period)
+            return geo_json({"status":"preview","message":f"{plan['estimated_requests']} requisições previstas antes de retries; {plan['remaining_today']} disponíveis hoje. Autorize o lote para enfileirar.","preview_token":plan_token(request.user,payload["eligible_ufs"],period),"estimated_requests":plan["estimated_requests"]})
         jobs = request_collection(payload["eligible_ufs"],request.POST.get("period"),request.user)
     except ValueError as error:
         return geo_json({"status":"invalid","message":str(error),"error":str(error)},status=400)
     AuditService.record(request=request,category="integration",action="weather.collection_requested",description="Coleta climática do recorte autorizado solicitada.",metadata={"jobs":len(jobs),"period":payload["period"]["month"]})
     states = set(WeatherCollectionJob.objects.filter(pk__in=jobs).values_list("status",flat=True))
-    status = "running" if "running" in states else "queued" if "pending" in states else "unavailable" if "error" in states else "completed"
+    status = "running" if "running" in states else "queued" if "pending" in states else "unavailable" if "error" in states else "paused" if "paused" in states else "cancelled" if "cancelled" in states else "completed"
     messages={"running":"Coleta em andamento no worker.","queued":"Coleta agendada no worker.","completed":"Coleta concluída; cache válido disponível.","unavailable":"Dados indisponíveis após falha de coleta. Consulte a saúde da integração."}
+    messages.update(paused="Fila pausada. Retome na Central de Integrações.",cancelled="Pendências canceladas; retome explicitamente na Central.")
     return geo_json({"status":status,"message":messages[status],"jobs":len(jobs)},status=202 if status in {"queued","running"} else 200)
+
+
+@login_required
+@access_required("view_map")
+@require_http_methods(["GET","POST"])
+def local_weather(request):
+    from aplicativos.integracoes.models import WeatherLocalCache
+    from aplicativos.integracoes.services.weather_local import normalize_city, locality_key, request_local, incident_window
+    from aplicativos.integracoes.services.geo_configuration import get_geo_integration, weather_configuration, weather_sources
+    from aplicativos.integracoes.services.geography import state_query
+    from aplicativos.integracoes.services.analytics import TicketQueryService
+    values = request.POST if request.method=="POST" else request.GET
+    uf,city = values.get("uf",""),values.get("city","")
+    if uf not in STATE_NAMES or not city:
+        return geo_json({"error":"Selecione cidade e UF."},status=400)
+    links = _client_filter(LinkQueryService.base(request.user),values.get("client","all")).filter(state_query([uf]))
+    if values.get("project"):
+        aliases = project_alias_groups(links.values_list("business_project",flat=True).distinct()).get(canonical_project_name(values["project"]),())
+        links=links.filter(business_project__in=aliases)
+    if values.get("provider"):
+        if not values["provider"].isdigit(): return geo_json({"error":"ISP inválido."},status=400)
+        links=links.filter(operator_id=int(values["provider"]))
+    cities = [name for name in links.exclude(city="").values_list("city",flat=True).distinct() if normalize_city(name)==normalize_city(city)]
+    if not cities:
+        raise PermissionDenied("Localidade fora do recorte autorizado.")
+    links=links.filter(city__in=cities)
+    try:
+        first,_ = month_bounds(values.get("period"))
+        cfg = weather_configuration(get_geo_integration("open_meteo"))
+        if request.method=="POST":
+            if not request.user.has_perm("configuracoes.run_integrations"): raise PermissionDenied
+            row=request_local(cities[0],uf,first.strftime("%Y-%m"),request.user)
+            AuditService.record(request=request,category="integration",action="weather.local_requested",description="Coleta meteorológica municipal solicitada.",metadata={"uf":uf,"period":first.strftime("%Y-%m")})
+        else:
+            row=WeatherLocalCache.objects.filter(location_key=locality_key(city,uf),period=first,source__in=weather_sources(cfg)).order_by("collected_at").last()
+        data={"city":city,"uf":uf,"status":row.status if row else "unavailable","precision":"Estimativa municipal IBGE; não representa o trajeto físico do link.","weather":row.payload.get("summary") if row and row.status=="success" else None,
+              "resolution":row.payload.get("resolution") if row else None,"timezone":row.payload.get("timezone") if row else None,
+              "last_error":row.last_error if row else "","source":row.source if row else None,"ibge_code":row.ibge_code if row else None}
+        if row and row.status=="success" and values.get("ticket"):
+            if not values["ticket"].isdigit(): raise ValueError("TicketID inválido.")
+            ticket=IncidentRules.valid(TicketQueryService.base(request.user,links=links)).filter(external_id=int(values["ticket"]),config_items__cmdb_link__in=links,config_items__is_present_in_source=True).first()
+            if not ticket or IncidentRules.category(ticket.closing_code_raw) in {None,"financeiro","sem_classificacao"}: raise PermissionDenied
+            data["window"]=incident_window(row,ticket.source_created_at)
+        return geo_json(data,status=202 if request.method=="POST" and row.status in {"pending","running"} else 200)
+    except ValueError as error:
+        return geo_json({"error":str(error)},status=400)
 
 
 class PresentationForm(forms.Form):

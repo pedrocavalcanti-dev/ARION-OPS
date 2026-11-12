@@ -3,6 +3,7 @@
   <summary aria-controls="map-more-filters-panel">Filtros <span data-filter-count>0</span><span aria-hidden="true">⌄</span></summary>
   <div class="geo-toolbar geo-toolbar--map" id="map-more-filters-panel">
     <header class="geo-filter-header"><strong>Filtros do Mapa</strong><button type="button" class="geo-text-action" data-filters-close aria-label="Fechar filtros">Fechar</button></header>
+    <p class="geo-status geo-filter-notice" data-filter-notice role="status"></p>
     <div class="geo-heading" hidden><h1 id="geo-title">Base de links</h1><span data-source-badge></span></div>
     <div class="map-more-filters-content" data-more-filters-content>
       <details class="geo-filter-section" open><summary>Cliente e projeto</summary><div class="geo-filter-fields">
@@ -34,6 +35,7 @@
         <button class="mode-chip" type="button" data-mode="motives" aria-pressed="false">Motivos</button>
         <button class="mode-chip" type="button" data-mode="climate" aria-pressed="false">Clima</button>
       </div></div>
+  <label data-period-control hidden><span>Intervalo</span><select data-period-filter><option value="this_month">Este mês</option><option value="last_month">Mês anterior</option><option value="last_30">Últimos 30 dias</option><option value="last_90">Últimos 90 dias</option><option value="custom">Personalizado</option></select></label>
     <div class="geo-search-wrap"><label class="map-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8"/><path d="m13.2 13.2 4 4"/></svg><input type="search" data-state-search placeholder="Buscar UF..." autocomplete="off" aria-label="Buscar estado por nome ou sigla" role="combobox" aria-expanded="false" aria-controls="state-search-results" aria-autocomplete="list"><kbd>UF</kbd></label><div id="state-search-results" class="state-search-results" data-state-search-results role="listbox" aria-label="Estados correspondentes" hidden></div></div>
   </div>
   <div class="map-active-filters" data-active-filters role="group" aria-label="Filtros aplicados" hidden></div>

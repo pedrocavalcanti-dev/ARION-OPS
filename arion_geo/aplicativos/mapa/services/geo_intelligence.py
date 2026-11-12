@@ -1,12 +1,42 @@
 """Operational/monthly climate comparison, using only cached external data."""
 from datetime import timedelta
 from django.utils import timezone
+from django.conf import settings
 
 from aplicativos.integracoes.services.geography import REGIONS, STATES, region_states
-from aplicativos.integracoes.services.weather import cached_weather, month_bounds, collection_readiness, spatial_value, VARIABLES, circular_mean
-from aplicativos.integracoes.models import WeatherCollectionJob, IntegrationLease
-from .analytics import MapAnalyticsService
-from aplicativos.integracoes.services.geo_operations import worker_state
+from aplicativos.integracoes.services.weather import cached_weather, collection_readiness, spatial_value, VARIABLES, circular_mean, summarize, sampling_points
+from aplicativos.integracoes.models import WeatherCollectionJob, IntegrationSyncState
+from .analytics import MapAnalyticsService, _bounds
+from aplicativos.integracoes.services.geo_operations import worker_state, allowed_weather_ufs
+
+
+def weather_range(ufs, first, end):
+    month = first.replace(day=1)
+    grouped = {}
+    while month<=end:
+        for uf,row in cached_weather(ufs,month.strftime("%Y-%m")).items():
+            grouped.setdefault(uf,[]).append(row)
+        month = (month.replace(day=28)+timedelta(days=4)).replace(day=1)
+    result = {}
+    for uf,rows in grouped.items():
+        days = {d["date"]:d for row in rows for d in row["daily"] if first.isoformat()<=d["date"]<=end.isoformat()}
+        series = [days[d] for d in sorted(days)]
+        if not series: continue
+        area = rows[-1]["area_km2"]
+        sample = {"area_km2":area,"daily":{"time":[d["date"] for d in series],**{key:[d.get(key) for d in series] for key in VARIABLES}}}
+        summary = summarize([sample])
+        summary.update(points=max(row["points"] for row in rows),source=rows[-1]["source"],model=rows[-1]["model"],method=rows[-1]["method"],
+            collected_at=max(row["collected_at"] for row in rows),stale=any(row["stale"] for row in rows),
+            completeness=min(row["completeness"] for row in rows)*len(series)/((end-first).days+1),
+            partial=len(series)<(end-first).days+1,source_info=rows[-1].get("source_info",{}))
+        result[uf]=summary
+    return result
+
+
+def climate_rankings(weather):
+    complete = {uf:row for uf,row in weather.items() if row.get("completeness",0)>=.99 and not row.get("partial") and not row.get("stale")}
+    keys = {"precipitation_mm":False,"rainy_days":False,"gust_max_kmh":False,"temperature_max_c":False,"temperature_min_c":True}
+    return {key:[{"uf":uf,"value":row[key]} for uf,row in sorted(complete.items(),key=lambda pair:((pair[1].get(key) if ascending else -(pair[1].get(key) or 0)) if pair[1].get(key) is not None else float('inf'),pair[0])) if row.get(key) is not None] for key,ascending in keys.items()}
 
 
 def aggregate_weather(rows):
@@ -48,8 +78,7 @@ def aggregate_weather(rows):
 def intelligence_payload(user,params,*,presentation=False,summary=None):
     selected = dict(params.items())
     selected["mode"] = "calls"
-    first,end = month_bounds(selected.get("period"))
-    selected["period"] = first.strftime("%Y-%m")
+    first,end = _bounds(selected)
     if summary is not None:
         pass
     elif presentation:
@@ -57,15 +86,26 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
         summary = presentation_payload(user,selected)
     else:
         summary = MapAnalyticsService.query(user,selected)
-    ufs = [uf for uf,row in summary["states"].items() if row.get("total_links") or row.get("ticket_count")]
-    weather = cached_weather(ufs,first.strftime("%Y-%m"))
+    authorized_ufs=set(allowed_weather_ufs(user))
+    ufs = [uf for uf in region_states(selected.get("region","")) if uf in authorized_ufs]
+    if selected.get("uf"):
+        ufs=[uf for uf in ufs if uf==selected["uf"]]
+    if presentation or selected.get("client") not in {None,"","all"} or selected.get("project"):
+        ufs=[uf for uf in ufs if summary["states"].get(uf,{}).get("total_links") or summary["states"].get(uf,{}).get("ticket_count")]
+    weather = weather_range(ufs,first,end)
     regional = aggregate_weather(weather)
+    total_area = sum(sum(p["area_km2"] for p in sampling_points(uf)) for uf in ufs)
+    covered_area = sum(row["area_km2"]*row["completeness"] for row in weather.values())
+    complete_ufs = sum(row["completeness"]>=.99 and not row["partial"] and not row["stale"] for row in weather.values())
+    regional.update(temporal_partial=any(row.get("partial") for row in weather.values()),expected_ufs=len(ufs),complete_ufs=complete_ufs,territorial_percent=round(100*covered_area/total_area,2) if total_area else 0,
+        coverage_label=f"Cobertura {'completa' if complete_ufs==len(ufs) and ufs else 'parcial'}: {complete_ufs} de {len(ufs)} UFs",
+        partial=complete_ufs<len(ufs),estimate_scope="Recorte coberto; não representa todo o território enquanto a cobertura for parcial.")
     # Daily ticket observations are deduplicated; no projection enters coincidence.
     operational = summary["technical_daily_counts"]
-    regional["coincident_days"] = sum(1 for day in regional["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and operational.get(day["date"],0)>0) if any(day["precipitation_sum"] is not None for day in regional["daily"]) else None
     for uf,row in weather.items():
         daily = summary["states"].get(uf,{}).get("technical_daily_counts",{})
         row["coincident_days"] = sum(1 for day in row["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and daily.get(day["date"],0)>0) if any(day["precipitation_sum"] is not None for day in row["daily"]) else None
+    regional["coincident_days"] = len({day["date"] for uf,row in weather.items() for day in row["daily"] if day.get("precipitation_sum") is not None and day["precipitation_sum"]>=1 and summary["states"].get(uf,{}).get("technical_daily_counts",{}).get(day["date"],0)>0}) if weather else None
     series = []
     for i in range((end-first).days+1):
         day = (first+timedelta(days=i)).isoformat()
@@ -74,25 +114,45 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
                        "temperature_mean_c":climate.get("temperature_2m_mean"),"temperature_min_c":climate.get("temperature_2m_min"),"temperature_max_c":climate.get("temperature_2m_max"),
                        "wind_max_kmh":climate.get("wind_speed_10m_max"),"gust_max_kmh":climate.get("wind_gusts_10m_max"),"wind_direction_deg":climate.get("wind_direction_10m_dominant")})
     readiness = collection_readiness()
-    jobs = list(WeatherCollectionJob.objects.filter(uf__in=ufs,period=first).values("uf","status"))
+    worker=worker_state()
+    jobs = list(WeatherCollectionJob.objects.filter(uf__in=ufs,period__range=(first.replace(day=1),end)).values("uf","status"))
     can_collect = readiness["status"] == "ready"
     configuration_status = readiness.get("configuration_status", readiness["status"])
     if readiness["status"] == "ready":
         statuses={j["status"] for j in jobs}
-        state = "running" if "running" in statuses else "queued" if "pending" in statuses else "failed" if "error" in statuses else "completed" if weather and not any(r["stale"] for r in weather.values()) and len(weather)==len(ufs) else "awaiting_collection"
+        state = "running" if "running" in statuses else "queued" if "pending" in statuses else "failed" if "error" in statuses else "paused" if "paused" in statuses else "cancelled" if "cancelled" in statuses else "completed" if weather and not any(r["stale"] for r in weather.values()) and len(weather)==len(ufs) else "awaiting_collection"
         messages={"running":"Processando coleta no worker.","queued":"Na fila de coleta do worker.","completed":"Concluído · cache climático disponível.","failed":"Falha na coleta. Consulte a saúde da integração antes de tentar novamente.","awaiting_collection":"Aguardando coleta para todo ou parte do recorte."}
+        messages.update(paused="Fila pausada pelo operador. Retome na Central de Integrações.",cancelled="Pendências canceladas pelo operador; cache preservado.")
         readiness={"status":state,"message":messages[state]}
-        if state == "queued" and not IntegrationLease.objects.filter(key="worker",expires_at__gt=timezone.now()).exists():
+        if state == "queued" and not worker["active"]:
             readiness["message"] = "Coleta agendada. Worker sem lease ativo; verifique o serviço na Central."
-    readiness.update(configuration_status=configuration_status, can_collect=can_collect and bool(ufs), cache_available=bool(weather),worker=worker_state())
+        cooldown=IntegrationSyncState.objects.filter(key="weather-cooldown",change_cursor__gt=timezone.now()).first()
+        if state=="queued" and cooldown:
+            readiness["message"]=f"Aguardando orçamento ou liberação da fonte até {timezone.localtime(cooldown.change_cursor):%d/%m %H:%M}. Worker {worker['label'].lower()}."
+    readiness.update(configuration_status=configuration_status, can_collect=can_collect and bool(ufs) and first.replace(day=1)==end.replace(day=1), cache_available=bool(weather),worker=worker,
+        jobs={s:sum(j["status"]==s for j in jobs) for s in ("pending","running","error","paused","cancelled")})
+    from aplicativos.integracoes.services.geo_configuration import get_geo_integration, weather_configuration
+    from aplicativos.integracoes.clients.public_data import PublicDataError
+    try:
+        cfg=weather_configuration(get_geo_integration("open_meteo"))
+        readiness["daily_budget"]=int(cfg["daily_budget"])
+        readiness["requests_today"]=IntegrationSyncState.objects.filter(key="meteo-"+timezone.localdate().isoformat()).values_list("records_count",flat=True).first() or 0
+    except PublicDataError:
+        pass
+    readiness["checkpoint_cells"]=sum(len(p.get("samples",{})) for p in WeatherCollectionJob.objects.filter(uf__in=ufs,period__range=(first.replace(day=1),end),status__in=("running","pending","paused","error")).values_list("progress",flat=True))
+    regional["last_update"]=max((row["collected_at"] for row in weather.values()),default=None)
     if presentation:
         readiness={"status":"completed" if weather else "unavailable","message":"Contexto climático disponível." if weather else "Contexto climático indisponível neste recorte."}
     if presentation:
+        for row in weather.values():
+            info=row.get("source_info",{})
+            row["source_info"]={key:info[key] for key in ("type","attribution","conditions","terms_url") if key in info}
         # Option catalogs belong to /dados/, never to the local daily series.
         summary={key:value for key,value in summary.items() if key not in {"projects","providers","clients","priority_options","reasons","reason_options"}}
-    return {"summary":summary,"weather":weather,"climate":regional,"daily":series,
+    return {"summary":summary,"weather":weather,"climate":regional,"daily":series,"rankings":climate_rankings(weather),"correlation":summary.get("correlation",{}),
+            "icon_thresholds":getattr(settings,"GEO_WEATHER_THRESHOLDS",{"rain":1,"heavy_rain":20,"heat":35,"cold":{"N":18,"NE":16,"CO":12,"SE":10,"S":5},"wind":40}),
             "collection":readiness,
-            "period":{"month":first.strftime("%Y-%m"),"partial":first==timezone.localdate().replace(day=1)},
+            "period":{"month":first.strftime("%Y-%m") if first.replace(day=1)==end.replace(day=1) else f"{first:%d/%m/%Y} – {end:%d/%m/%Y}","date_from":first.isoformat(),"date_to":end.isoformat(),"partial":end>=timezone.localdate()-timedelta(days=5)},
             "missing_ufs":[uf for uf in ufs if uf not in weather],"eligible_ufs":ufs,
             "notice":"Coincidência temporal é contexto; não confirma causa meteorológica. Chuva representa estimativa territorial, não medição única da UF.",
             "catalog":{"regions":list(REGIONS),"states":[s for s in STATES if s["sigla"] in region_states(params.get("region",""))]}}
