@@ -64,3 +64,7 @@ Os dois testes e alterações passam pelo RBAC e pela auditoria central. Apenas 
 A pagina Brevo possui um teste de roteamento administrativo separado do teste SMTP de autenticacao e do envio de TQ. Configure um destinatario controlado; a acao exige confirmacao individual, usa somente To e nao altera a validacao OTRS. O destinatario operacional exige autorizacao administrativa previa especifica e uma segunda confirmacao por mensagem. O Cc nao e incluido nesse teste. O aceite SMTP e registrado como resultado do relay, nao como prova de recebimento ou criacao de ticket.
 
 Antes de habilitar envio TQ, a readiness tambem exige integracao OTRS somente leitura e sucesso inicial do checkpoint incremental de todas as filas de Qualidade. A mensagem de homologacao usa ID `ARION-ROUTE-<32 hex>`; QIDs de TQ continuam reservados ao corpo da solicitacao real.
+
+## Catálogo geográfico e clima
+
+A Central inclui IBGE e Open-Meteo, usando ExternalAPIIntegration, credenciais protegidas, ExternalAPIHealthCheck, IntegrationSyncState e leases existentes. IBGE sincroniza pelo worker e conserva catálogo offline. Open-Meteo coleta UF/mês sob demanda, com cache persistente, limite de requisições e modalidade comercial obrigatória para uso regular em produção. Configuração não comprova acesso ativo. Ver [GEO Intelligence](geo-intelligence.md).
