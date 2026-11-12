@@ -60,6 +60,8 @@ FALLBACK_5XX = ERRORS["INTERNAL_ERROR"]
 # Names identify endpoints by their resolved route, rather than by a client
 # supplied Accept header. Path prefixes also cover unknown URLs below API roots.
 API_ROUTE_NAMES = {
+    "mapa:intelligence", "mapa:weather-collect", "mapa:presentation-data",
+    "mapa:presentation-detail", "mapa:presentation-intelligence",
     "analytics-query", "analytics-export", "analytics-saved-views",
     "preferences_api:preferences", "preferences_api:theme",
     "base_links:provider-detail", "base_links:detail", "base_links:map-aggregates",

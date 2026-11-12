@@ -9,6 +9,7 @@
 {% endblock %}
 {% block content %}
 <section class="geo-page" aria-labelledby="geo-title">
+  <div class="geo-focus-heading"><strong>GEO Intelligence</strong><a href="{% url 'painel:index' %}">← Navegação geral</a>{% if perms.configuracoes.present_geo %}<a data-present-action href="{% url 'mapa:presentation-start' %}">Apresentar ↗</a>{% endif %}</div>
   {% include "mapa/_cmdb.html" %}
   {% include "mapa/_weather_panel.html" %}
 </section>

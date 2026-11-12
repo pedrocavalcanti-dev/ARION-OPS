@@ -209,11 +209,11 @@ class MapMirrorTests(TestCase):
             "new URLSearchParams(location.search)", "state.selectedUF=(initialParams.get(\"uf\")||\"\").toUpperCase()",
             'if(state.selectedUF)url.searchParams.set("uf",state.selectedUF)',
             "if (state.selectedUF) await loadState(state.selectedUF)",
-            'const temporal=["projects","calls","repeat","motives"].includes(state.mode);',
+            'const temporal=["projects","calls","repeat","motives","climate"].includes(state.mode);',
             'ui.reasonWrap.hidden=state.mode==="base";',
         ):
             self.assertIn(token, script)
-        self.assertEqual(script.count("bind();initialize();"), 1)
+        self.assertEqual(script.count("bind();setNationalCollapsed(true);initialize();"), 1)
         self.assertNotIn("DOMContentLoaded", script)
 
     def test_drawer_sections_follow_the_selected_tab(self):

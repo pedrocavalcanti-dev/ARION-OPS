@@ -2,7 +2,7 @@ const regions={N:["AC","AM","AP","PA","RO","RR","TO"],NE:["AL","BA","CE","MA","P
 const allUF=Object.values(regions).flat().sort();
 const fmt=new Intl.NumberFormat("pt-BR",{maximumFractionDigits:1});
 const escape=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
-const quantity=(value,unit="")=>value==null?"Indisponível":fmt.format(value)+(unit?" "+unit:"");
+const quantity=(value,unit="")=>value==null?"Indisponível":(typeof value==="number"?fmt.format(value):escape(value))+(unit?" "+unit:"");
 
 function dailyChart(series){
   if(!series.length)return "<p class='geo-status'>Sem série diária para este período.</p>";
@@ -20,8 +20,11 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
   const panel=page.querySelector("[data-geo-intelligence]");
   if(!panel)return {update(){}};
   const $=s=>page.querySelector(s),region=$("[data-region-filter]"),uf=$("[data-geo-uf]"),month=$("[data-geo-month]"),category=$("[data-category-filter]"),layer=$("[data-geo-layer]");
-  let controller=null,sequence=0,pollTimer=0;
+  let controller=null,sequence=0,pollTimer=0,timelineTimer=0,current=null;
+  const dayInput=$("[data-timeline-day]"),dayLabel=$("[data-timeline-label]"),play=$("[data-timeline-play]");
+  const categoryKeys={Massiva:"massiva",Rompimento:"rompimento",Equipamento:"equipamento",Energia:"energia","Configuração":"configuracao","Reset remoto":"reset_remoto","Demais motivos técnicos":"demais","Sem classificação":"sem_classificacao","Pendência Financeira":"financeiro"};
   const status=$("[data-weather-status]");
+  if(window.ResizeObserver)new ResizeObserver(()=>page.style.setProperty("--geo-analytics-height",`${panel.getBoundingClientRect().height}px`)).observe(panel);
   function syncControls(){
     region.value=state.region;
     const ufs=regions[state.region]||allUF;
@@ -40,31 +43,56 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       const response=preloaded?null:await fetch(urlFor(panel.dataset.url),{headers:{"X-Requested-With":"XMLHttpRequest"},signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});
       const payload=preloaded||await response.json();
       if(own!==sequence)return;
-      if(response&&!response.ok)throw new Error(payload.error||"Análise mensal indisponível.");
-      const climate=payload.climate,summary=payload.summary;
+      if(response&&!response.ok)throw new Error(payload.error?.message||payload.error||"Análise mensal indisponível.");
+      current=payload;pause();
+      if(state.day&&!payload.daily.some(r=>r.date===state.day))state.day="";
+      dayInput.max=payload.daily.length;
+      dayInput.value=state.day?payload.daily.findIndex(r=>r.date===state.day)+1:0;
+      render();
+    }catch(error){if(error.name!=="AbortError"&&own===sequence)status.textContent=error.message;}
+  }
+  function render(){
+      const payload=current;if(!payload)return;
+      const climate=state.day?payload.daily.find(r=>r.date===state.day)||{}:payload.climate,summary=payload.summary;
+      dayLabel.textContent=state.day?state.day.slice(8)+"/"+state.day.slice(5,7):"Mês completo";
       $("[data-geo-context]").textContent=[state.selectedUF||region.options[region.selectedIndex]?.text||"Brasil",payload.period.month,payload.period.partial?"Período parcial":"Mês completo"].join(" · ");
-      const metrics=[["Incidentes válidos",summary.ticket_count,""],["Links CMDB",summary.filtered_source_total,""],["Chuva estimada",climate.precipitation_mm,"mm"],["Dias chuvosos",climate.rainy_days_percent,"%"],["Vento máximo",climate.wind_max_kmh,"km/h"],["Rajada máxima",climate.gust_max_kmh,"km/h"]];
+      const reasons=Object.entries(summary.category_counts||{}).filter(([label])=>label!=="Sem classificação").sort((a,b)=>b[1]-a[1]);
+      const incidents=state.day?(climate.tickets??0):summary.ticket_count;
+      const metrics=state.mode==="climate"||["rain","wind","wind_speed","temperature","temperature_min","temperature_max","direction","correlation"].includes(state.layer)?[["Chuva estimada",state.day?climate.rain_mm:climate.precipitation_mm,"mm"],[state.day?"Incidentes no dia":"Dias chuvosos",state.day?incidents:climate.rainy_days,""],["Temperatura média",climate.temperature_mean_c,"°C"],["Rajada máxima",climate.gust_max_kmh,"km/h"]]:state.mode==="base"||state.mode==="projects"?[["Links CMDB atuais",summary.filtered_source_total,""],["UFs com links",Object.values(summary.states).filter(r=>r.total_links>0).length,""],["Incidentes no mês",summary.ticket_count,""],["Links afetados no mês",summary.affected_link_count,""]]:[[state.day?"Incidentes no dia":"Incidentes válidos",incidents,""],["Links afetados no mês",summary.affected_link_count,""],["Links reincidentes no mês",summary.recurrence_link_count,""],["Classificação predominante",reasons[0]?.[0]||"Sem classificação",""]];
       $("[data-weather-metrics]").innerHTML=metrics.map(([label,value,unit])=>`<div><strong>${quantity(value,unit)}</strong><span>${escape(label)}${label==="Dias chuvosos"&&climate.rainy_days!=null?" · "+climate.rainy_days+" dias":""}</span></div>`).join("");
       $("[data-weather-chart]").innerHTML=dailyChart(payload.daily);
-      const reasons=Object.entries(summary.category_counts||{}).sort((a,b)=>b[1]-a[1]);
       const projected=Object.entries(summary.distribution_projected||{}).filter(([,v])=>v>0);
-      $("[data-geo-reasons]").innerHTML='<h3>Classificações registradas</h3>'+reasons.slice(0,5).map(([label,v])=>`<p><span>${escape(label)}</span><b>${fmt.format(v)}</b></p>`).join("")+(projected.length?'<div data-projected><h3>Distribuição projetada · estimativa</h3>'+projected.map(([label,v])=>`<p><span>${escape(label)}</span><b>${fmt.format(v)}</b></p>`).join("")+"<span>Não representa diagnóstico comprovado.</span></div>":"");
+      const projectedTotal=projected.reduce((n,[,v])=>n+v,0);
+      $("[data-geo-reasons]").innerHTML='<h3>Classificações registradas · mês</h3>'+reasons.slice(0,5).map(([label,v])=>`<button type="button" data-explore-category="${categoryKeys[label]||""}" title="Explorar esta classificação no mapa"><span>${escape(label)}</span><b>${fmt.format(v)}</b></button>`).join("")+(projected.length?'<span>Cenário estimado · distribuição por pesos</span><div class="geo-scenario" aria-label="Cenário estimado; não representa diagnóstico confirmado">'+projected.map(([label,v])=>`<span style="flex:${v}" title="${escape(label)}: ${v} estimados (${quantity(v/projectedTotal*100)}%). Não é diagnóstico registrado."></span>`).join("")+"</div>":"");
+      const regionLinks=Object.fromEntries(Object.keys(regions).map(r=>[r,regions[r].reduce((n,uf)=>n+(summary.states[uf]?.total_links||0),0)]));
+      $("[data-geo-reasons]").insertAdjacentHTML("beforeend",'<h3>Links CMDB por região</h3>'+Object.entries(regionLinks).filter(([,n])=>n>0).map(([label,n])=>`<p><span>${label}</span><b>${fmt.format(n)}</b></p>`).join(""));
       const notes=[];
-      if(climate.available){notes.push(`${climate.covered_ufs} UF(s) com cache · ${climate.points} células · completude ${quantity(climate.completeness*100,"%")}`);if(climate.stale)notes.push("Cache vencido");if(climate.partial)notes.push("Cobertura temporal parcial");}
-      else notes.push("Clima ainda não coletado; indicadores operacionais disponíveis.");
+      if(payload.climate.available){const climate=payload.climate;notes.push(`${climate.covered_ufs} UF(s) com cache · ${climate.points} células · completude ${quantity(climate.completeness*100,"%")}`);if(climate.stale)notes.push("Cache vencido");if(climate.partial)notes.push("Cobertura temporal parcial");}
+      else notes.push(payload.collection?.message||"Dados climáticos indisponíveis.");
       if(payload.missing_ufs.length)notes.push("Sem clima: "+payload.missing_ufs.join(", "));
       status.textContent=notes.join(" · ");
-      onWeather(payload);
-    }catch(error){if(error.name!=="AbortError"&&own===sequence)status.textContent=error.message;}
+      status.dataset.state=payload.collection?.status||"unavailable";
+      const q=summary.reconciliation;
+      $("[data-geo-quality]").textContent=q?`${q.incidents} incidentes distintos · ${q.classified} classificados · ${q.unclassified} sem classificação confiável · ${q.with_uf} com UF · ${q.without_uf} sem localização vinculada · ${q.affected_links} links afetados distintos · ${q.recurrent_links} reincidentes. Ocorrências estaduais: ${q.state_occurrences}; não somar para obter o total nacional.`:payload.notice;
+      if(payload.climate.available){const c=payload.climate;$("[data-geo-quality]").append(document.createTextNode(` Chuva elevada: ${quantity(c.heavy_rain_days)} dias com média territorial ≥ 20 mm. Coincidência: ${quantity(c.coincident_days)} dias com chuva ≥ 1 mm e incidentes técnicos; não confirma causa. Temperatura: ${quantity(c.temperature_min_c,"°C")} a ${quantity(c.temperature_max_c,"°C")}. Vento máximo: ${quantity(c.wind_max_kmh,"km/h")}; direção média aproximada: ${quantity(c.wind_direction_deg,"°")}.`));}
+      onWeather(payload,state.day);
   }
   const changed=()=>refresh().catch(()=>{status.textContent="Não foi possível atualizar este recorte.";});
   region.addEventListener("change",()=>{state.region=region.value;state.selectedUF="";syncControls();changed();});
   uf.addEventListener("change",()=>selectUF(uf.value));
   month?.addEventListener("change",()=>{if(!month.value||!month.reportValidity())return;state.period=month.value;state.dateFrom="";state.dateTo="";changed();});
   category?.addEventListener("change",()=>{state.category=category.value;changed();});
-  layer.addEventListener("change",()=>{state.layer=layer.value;if(state.layer==="calls"||state.layer==="motives"||["rain","wind","correlation"].includes(state.layer))state.mode="calls";changed();});
+  layer.addEventListener("change",()=>{state.layer=layer.value;if(["rain","wind","wind_speed","temperature","temperature_min","temperature_max","direction","correlation"].includes(state.layer))state.mode="climate";else if(state.layer==="calls"||state.layer==="motives")state.mode="calls";changed();});
   $("[data-weather-refresh]").addEventListener("click",changed);
-  $("[data-weather-toggle]").addEventListener("click",event=>{const content=$("#geo-intelligence-content"),open=content.hidden;content.hidden=!open;event.currentTarget.setAttribute("aria-expanded",String(open));event.currentTarget.textContent=open?"Recolher":"Expandir";window.dispatchEvent(new Event("resize"));});
+  $("[data-weather-toggle]").addEventListener("click",event=>{const content=$("#geo-intelligence-content"),open=content.hidden;content.hidden=!open;event.currentTarget.setAttribute("aria-expanded",String(open));event.currentTarget.textContent=open?"Recolher":"Análises";});
+  $("[data-geo-reasons]").addEventListener("click",event=>{const button=event.target.closest("[data-explore-category]");if(!button)return;state.category=button.dataset.exploreCategory;state.mode="calls";state.layer="calls";changed();});
+  const pause=()=>{clearInterval(timelineTimer);timelineTimer=0;play.textContent="▶";play.setAttribute("aria-label","Reproduzir dias");};
+  function showDay(){state.day=current?.daily[Number(dayInput.value)-1]?.date||"";render();}
+  dayInput.addEventListener("input",()=>{pause();showDay();});
+  function start(){pause();if(!current)return;play.textContent="Ⅱ";play.setAttribute("aria-label","Pausar reprodução");timelineTimer=setInterval(()=>{dayInput.value=Number(dayInput.value)>=Number(dayInput.max)?1:Number(dayInput.value)+1;showDay();},Number($("[data-timeline-speed]").value));}
+  play.addEventListener("click",()=>timelineTimer?pause():start());
+  $("[data-timeline-speed]").addEventListener("change",()=>{if(timelineTimer)start();});
+  document.addEventListener("visibilitychange",()=>{if(document.hidden)pause();});
   $("[data-geo-fullscreen]")?.addEventListener("click",async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{status.textContent="Tela cheia indisponível neste navegador.";}});
   $("[data-geo-collect-form]")?.addEventListener("submit",async event=>{
     event.preventDefault();const button=$("[data-weather-collect]");button.disabled=true;
@@ -72,9 +100,10 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       const form=event.currentTarget,body=new URLSearchParams(urlFor(panel.dataset.url).searchParams),csrf=form.querySelector("[name=csrfmiddlewaretoken]").value;
       body.set("csrfmiddlewaretoken",csrf);
       const response=await fetch(panel.dataset.collectUrl,{method:"POST",body,headers:{"X-CSRFToken":csrf}});
-      const result=await response.json();
-      if(!response.ok)throw new Error(result.error||"Não foi possível solicitar a coleta.");
-      status.textContent=result.jobs?"Coleta na fila do worker. A análise continuará disponível; atualize para acompanhar.":"Cache válido já disponível.";
+      const result=await response.json().catch(()=>({message:response.status===403?"Sem autorização ou sessão CSRF expirada. Recarregue a página.":"Resposta indisponível. Consulte a integração."}));
+      status.dataset.state=result.status||"unavailable";
+      if(!response.ok)throw new Error(result.message||result.error?.message||result.error||"Não foi possível solicitar a coleta.");
+      status.textContent=result.message;
       clearTimeout(pollTimer);pollTimer=setTimeout(()=>update(),15000);
     }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
   });

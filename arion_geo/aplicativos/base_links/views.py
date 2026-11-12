@@ -428,6 +428,8 @@ def map_state_detail(request):
     except ValueError as error:
         return JsonResponse({"error": str(error)}, status=400)
     mode = params.get("mode", "base")
+    if mode == "motives" and params.get("cohort") == "created":
+        mode = "calls"
     default_tab = "tickets" if mode in {"projects", "calls", "repeat", "motives"} else "overview"
     tab = (params.get("tab") or default_tab).strip()
     if tab not in {"overview", "tickets", "projects", "providers", "reasons", "recurrence"}:

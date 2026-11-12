@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from aplicativos.base_links.models import Projeto, Operadora
 from aplicativos.configuracoes.models import GroupDataScope
-from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket, OTRSTicketConfigItem
+from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem
 from aplicativos.integracoes.services.incidents import IncidentRules
 from .services.analytics import MapAnalyticsService
 from .services.presentation import project_distribution
@@ -77,6 +77,69 @@ class GeoIntelligenceTests(TestCase):
         self.assertEqual(query.call_count,1)
         payload=response.json()
         self.assertEqual(payload["ticket_count"],payload["geo_intelligence"]["summary"]["ticket_count"])
+
+    def test_collection_reports_disabled_configuration_before_any_network(self):
+        with patch("aplicativos.integracoes.clients.public_data.PublicDataClient.get") as network:
+            response=self.client.post(reverse("mapa:weather-collect"),{"period":"2026-10","mode":"calls"})
+        self.assertEqual(response.status_code,409)
+        self.assertEqual(response.json()["status"],"disabled")
+        self.assertIn("desabilitada",response.json()["message"])
+        network.assert_not_called()
+
+    def test_focused_motives_and_weather_share_created_month_even_if_resolved_later(self):
+        ticket=self.ticket(211,reason="RompimentoFibra")
+        ticket.terminal_state_at=datetime(2026,11,3,tzinfo=dt_timezone.utc)
+        ticket.save(update_fields=["terminal_state_at"])
+        params={"mode":"motives","cohort":"created","period":"2026-10","category":"rompimento","uf":"SP"}
+        result=self.client.get(reverse("base_links:map-aggregates"),params).json()
+        intelligence=self.client.get(reverse("mapa:intelligence"),params).json()
+        detail=self.client.get(reverse("base_links:map-state-detail"),{**params,"tab":"tickets"}).json()
+        self.assertEqual(result["ticket_count"],1)
+        self.assertEqual(result["terminal_ticket_count"],intelligence["summary"]["ticket_count"])
+        self.assertEqual(detail["ticket_total"],1)
+
+    def test_combined_client_project_region_month_reason_category_and_isp(self):
+        isp=CMDBOperatorMirror.objects.create(source_config_item_id="geo-provider",name="ISP do teste")
+        link=self.links["BA"]
+        link.contracting_client="Vivo";link.business_project="FUST";link.operator=isp
+        link.save(update_fields=["contracting_client","business_project","operator"])
+        self.ticket(301,"BA",reason="RompimentoFibra")
+        self.ticket(302,"BA",reason="EquipamentoTravado")
+        self.ticket(303,"SP",reason="RompimentoFibra")
+        params={"client":"Vivo","project":"FUST","region":"NE","period":"2026-10","reason":"rompimento_fibra","category":"rompimento","provider":str(isp.pk)}
+        data=self.client.get(reverse("mapa:intelligence"),params).json()
+        self.assertEqual(data["summary"]["ticket_count"],1)
+        self.assertEqual(data["summary"]["affected_link_count"],1)
+        self.assertEqual(set(data["summary"]["states"]),{"BA"})
+        self.assertEqual(sum(d["tickets"] for d in data["daily"]),1)
+        self.assertEqual(data["summary"]["ticket_provider_counts"],{"ISP do teste":1})
+
+    def test_reconciliation_keeps_unknown_geography_and_deduplicates_multiple_states(self):
+        ticket=self.ticket(201)
+        OTRSTicketConfigItem.objects.create(ticket=ticket,cmdb_link=self.links["RJ"],config_item_id="geo-1")
+        self.links["BA"].state="Local não identificado"
+        self.links["BA"].save(update_fields=["state"])
+        self.ticket(202,"BA",reason="Motivo ainda desconhecido")
+        result=MapAnalyticsService.query(self.user,{"period":"2026-10","mode":"calls"})
+        q=result["reconciliation"]
+        self.assertEqual(q,{"incidents":2,"classified":1,"unclassified":1,"with_uf":1,"without_uf":1,"affected_links":3,"recurrent_links":0,"state_occurrences":2})
+        self.assertNotIn("",result["states"])
+        self.assertEqual(sum(result["daily_counts"].values()),2)
+
+    def test_presentation_varies_month_project_and_modes_but_cannot_expand_client_scope(self):
+        CMDBLinkMirror.objects.create(source_config_item_id="second-project",name="CLARO - FUST",state="BA",contracting_client="Claro",business_project="FUST")
+        self.ticket(201,reason="PendenciaFinanceira")
+        key=self.start()
+        url=reverse("mapa:presentation-data",args=[key])
+        for mode in ("base","projects","calls","repeat","motives","climate"):
+            response=self.client.get(url,{"mode":mode,"project":"FUST","period":"2026-09","region":"NE"})
+            self.assertEqual(response.status_code,200,(mode,response.content))
+            self.assertEqual(response.json()["selected_project"],"FUST")
+            self.assertNotIn("financeir",response.content.decode().casefold())
+        self.assertEqual(self.client.get(url,{"client":"Vivo"}).status_code,403)
+        self.assertEqual(self.client.get(url,{"project":"Projeto inexistente"}).status_code,403)
+        self.assertEqual(self.client.get(url,{"category":"financeiro"}).status_code,403)
+        self.assertEqual(self.client.get(url,{"reason":"pendencia_financeira"}).status_code,403)
 
     def start(self):
         response=self.client.post(reverse("mapa:presentation-start"),{"client":"Claro","project":"BRADESCO","period":"2026-10"})

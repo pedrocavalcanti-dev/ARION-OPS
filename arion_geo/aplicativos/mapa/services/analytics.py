@@ -127,7 +127,7 @@ def filter_tracking_relations(relations, *, arion_status="", assignee=""):
 
 
 class MapAnalyticsService:
-    MODES = {"base", "projects", "calls", "repeat", "motives"}
+    MODES = {"base", "projects", "calls", "repeat", "motives", "climate"}
 
     @staticmethod
     def _unlinked_ticket_queryset(
@@ -203,6 +203,11 @@ class MapAnalyticsService:
         mode = (params.get("mode") or "base").strip()
         if mode not in cls.MODES:
             raise ValueError("Modo de mapa invalido.")
+        # Climate is a visualization of the monthly incident universe.
+        requested_mode = mode
+        monthly_motives = mode == "motives" and params.get("cohort") == "created"
+        if mode == "climate":
+            mode = "calls"
         start, end = _bounds(params)
         client = (params.get("client") or "all").strip()
         project = canonical_project_name(params.get("project"))
@@ -336,6 +341,8 @@ class MapAnalyticsService:
                 terminal_relations = terminal_relations.filter(
                     ticket__closing_code_raw__in=ClosingReasonCanonicalizer.raw_values(reason_filter),
                 )
+            if monthly_motives:
+                terminal_relations = period_relations
             query_source = filtered if mode == "projects" else ticket_candidates
             query_links = query_source.prefetch_related(
                 Prefetch("ticket_relations", queryset=period_relations, to_attr="_map_period"),
@@ -346,7 +353,7 @@ class MapAnalyticsService:
             query_links = filtered
 
         unlinked_tickets = cls._unlinked_ticket_queryset(
-            user=user, scoped_links=scoped, mode=mode, start_at=start_at,
+            user=user, scoped_links=scoped, mode="calls" if monthly_motives else mode, start_at=start_at,
             end_exclusive=end_exclusive, status_filter=status_filter,
             priority_filter=priority_filter, reason_filter=reason_filter,
             client=client, project=project, provider=provider, uf_filter=uf_filter,
@@ -369,6 +376,7 @@ class MapAnalyticsService:
             return ticket_identity_cache[ticket.pk]
         global_client_identified = global_client_unidentified = 0
         invalid_uf_count = 0
+        located_ticket_ids, affected_link_ids, recurrent_link_ids = set(), set(), set()
         for link in query_links.iterator(chunk_size=500):
             client_label = BusinessIdentityRules.client_for_token(link.contracting_client) or link.contracting_client
             link_project = canonical_project_name(link.business_project)
@@ -381,7 +389,6 @@ class MapAnalyticsService:
             uf = _uf(link.state)
             if not uf:
                 invalid_uf_count += int(link_matches)
-                continue
             item = result.setdefault(uf, {
                 "total_links": 0, "client_counts": {}, "project_counts": {}, "account_counts": {},
                 "provider_counts": {}, "city_counts": {}, "ticket_status_counts": {},
@@ -420,6 +427,12 @@ class MapAnalyticsService:
             active = {rel.ticket_id for rel in active_rows if context_matches(rel.ticket)}
             terminal = {rel.ticket_id: rel.ticket for rel in terminal_rows if context_matches(rel.ticket)}
             global_tickets.update(tickets)
+            if uf:
+                located_ticket_ids.update(tickets)
+            if tickets:
+                affected_link_ids.add(link.pk)
+            if len(tickets) >= 2:
+                recurrent_link_ids.add(link.pk)
             global_ticket_statuses.update({ticket_id: normalize_business_status(ticket.business_status) for ticket_id, ticket in tickets.items()})
             global_ticket_priorities.update({ticket_id: ticket.priority_name for ticket_id, ticket in tickets.items()})
             global_ticket_reasons.update({ticket_id: ClosingReasonCanonicalizer.display(ticket.closing_code_raw) for ticket_id, ticket in tickets.items()})
@@ -456,7 +469,7 @@ class MapAnalyticsService:
                 _inc(item["recurrence_provider_counts"], link.operator.name if link.operator_id and link.operator.is_present_in_source else "Provedor não identificado")
             if terminal:
                 item["terminal_links"] += 1
-        result = {uf: item for uf, item in result.items() if item["total_links"] or item["tickets_by_id"]}
+        result = {uf: item for uf, item in result.items() if uf and (item["total_links"] or item["tickets_by_id"])}
         for item in result.values():
             total_links = item["total_links"]
             identified = total_links - item["client_counts"].get("Cliente não identificado", 0)
@@ -521,7 +534,7 @@ class MapAnalyticsService:
         status_counts, priority_counts, ticket_reason_counts = {}, {}, {}
         for status in global_ticket_statuses.values():
             _inc(status_counts, status)
-        if mode == "calls":
+        if mode == "calls" or monthly_motives:
             for row in unlinked_tickets.values("business_status").annotate(total=Count("pk")):
                 _inc(status_counts, normalize_business_status(row["business_status"]), row["total"])
         for priority in global_ticket_priorities.values():
@@ -559,21 +572,28 @@ class MapAnalyticsService:
                 _inc(technical_daily_counts, day)
         for category in global_ticket_categories.values():
             _inc(category_counts, IncidentRules.LABELS[category])
+        incident_total = len(global_tickets) + (unlinked_ticket_count if mode == "calls" or monthly_motives else 0)
+        unclassified = category_counts.get(IncidentRules.LABELS["sem_classificacao"],0)
         return {
+            "reconciliation":{"incidents":incident_total,"classified":sum(category_counts.values())-unclassified,
+                              "unclassified":unclassified,"with_uf":len(located_ticket_ids),
+                              "without_uf":incident_total-len(located_ticket_ids),
+                              "affected_links":len(affected_link_ids),"recurrent_links":len(recurrent_link_ids),
+                              "state_occurrences":sum(row["ticket_count"] for row in result.values())},
             "region": region, "allowed_ufs": allowed_ufs,
             "daily_counts": daily_counts, "technical_daily_counts": technical_daily_counts,
             "category_counts": category_counts,
-            "mode": mode, "location_mode": "uf", "states": result,
+            "mode": requested_mode, "location_mode": "uf", "states": result,
             "source_total": source_total, "filtered_source_total": filtered_total,
             "client_identified_count": global_client_identified,
             "client_unidentified_count": global_client_unidentified,
             "client_coverage": round(global_client_identified / filtered_total * 100, 1) if filtered_total else 0,
             "valid_uf_count": filtered_total - invalid_uf_count, "invalid_uf_count": invalid_uf_count,
-            "ticket_count": len(global_tickets) + (unlinked_ticket_count if mode == "calls" else 0),
+            "ticket_count": incident_total,
             "unlinked_ticket_count": unlinked_ticket_count,
             "active_ticket_count": len(active_ids),
-            "affected_link_count": sum(row["affected_links"] for row in result.values()),
-            "recurrence_link_count": sum(row["recurrence_links"] for row in result.values()),
+            "affected_link_count": len(affected_link_ids),
+            "recurrence_link_count": len(recurrent_link_ids),
             "recurrence_ticket_count": len(global_recurrence_ticket_ids),
             "terminal_ticket_count": len(global_terminal) + (unlinked_ticket_count if mode == "motives" else 0), "metric": metric,
             "terminal_link_count": sum(row["terminal_links"] for row in result.values()),

@@ -1,5 +1,5 @@
 {% load static %}
-<header class="geo-toolbar geo-toolbar--map brand-decoration brand-decoration--heading">
+<details class="geo-filter-panel"><summary>Filtros <span aria-hidden="true">⌄</span></summary><header class="geo-toolbar geo-toolbar--map">
   <div class="geo-heading geo-heading--map">
     <span class="section-kicker">NOC ATACADO <span>/</span> GEOGRAFIA</span>
     <div class="geo-heading-line"><h1 id="geo-title">Base de links</h1><span class="source-badge" data-source-badge><i></i>CMDB real · base atual</span></div>
@@ -13,20 +13,18 @@
     </div>
     <div class="geo-custom-period" data-custom-period hidden><label>De <input type="date" data-date-from></label><label>Até <input type="date" data-date-to></label><button type="button" data-apply-period>Aplicar</button></div>
   </div>
-  <div class="geo-analysis-controls">
+{% include "mapa/_intelligence.html" %}</header></details>  <div class="geo-analysis-controls">
     <div class="mode-control"><span class="control-caption">MODO DA ANÁLISE</span><div class="mode-filters" role="group" aria-label="Modo geográfico">
         <button class="mode-chip is-selected" type="button" data-mode="base" aria-pressed="true">Base</button>
         <button class="mode-chip" type="button" data-mode="projects" aria-pressed="false">Projetos</button>
         <button class="mode-chip" type="button" data-mode="calls" aria-pressed="false">Chamados</button>
         <button class="mode-chip" type="button" data-mode="repeat" aria-pressed="false">Reincidência</button>
         <button class="mode-chip" type="button" data-mode="motives" aria-pressed="false">Motivos</button>
+        <button class="mode-chip" type="button" data-mode="climate" aria-pressed="false">Clima</button>
       </div></div>
     <div class="geo-search-wrap"><label class="map-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8"/><path d="m13.2 13.2 4 4"/></svg><input type="search" data-state-search placeholder="Buscar UF..." autocomplete="off" aria-label="Buscar estado por nome ou sigla" role="combobox" aria-expanded="false" aria-controls="state-search-results" aria-autocomplete="list"><kbd>UF</kbd></label><div id="state-search-results" class="state-search-results" data-state-search-results role="listbox" aria-label="Estados correspondentes" hidden></div></div>
   </div>
   <div class="map-active-filters" data-active-filters role="group" aria-label="Filtros aplicados" hidden></div>
-</header>
-
-{% if not presentation %}{% include "mapa/_intelligence.html" %}{% endif %}
 <main class="geo-map-stage" data-map-config data-token="{{ mapbox_token }}" data-geojson-url="{% static 'geo/brasil_estados.geojson' %}" data-default-period="{{ default_period }}" data-current-period="{{ current_period }}" data-presentation="{{ presentation|yesno:'true,false' }}" data-fixed-client="{{ presentation_client }}" data-fixed-project="{{ presentation_project }}" data-fixed-period="{{ presentation_period }}" data-api-url="{% if presentation %}{{ presentation_api }}{% else %}{% url 'base_links:map-aggregates' %}{% endif %}" data-detail-url="{% if presentation %}{{ presentation_detail }}{% else %}{% url 'base_links:map-state-detail' %}{% endif %}" data-base-url="{% url 'base_links:index' %}" data-cockpit-url="{% url 'cockpit' %}">
   <div id="brazil-map" class="geo-map-canvas" role="application" aria-label="Mapa interativo do Brasil por estado"></div>
   <div class="state-hover-tooltip" data-state-hover-tooltip role="tooltip" hidden></div>
