@@ -61,10 +61,10 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
     regional = aggregate_weather(weather)
     # Daily ticket observations are deduplicated; no projection enters coincidence.
     operational = summary["technical_daily_counts"]
-    regional["coincident_days"] = sum(1 for day in regional["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and operational.get(day["date"],0)>0)
+    regional["coincident_days"] = sum(1 for day in regional["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and operational.get(day["date"],0)>0) if any(day["precipitation_sum"] is not None for day in regional["daily"]) else None
     for uf,row in weather.items():
         daily = summary["states"].get(uf,{}).get("technical_daily_counts",{})
-        row["coincident_days"] = sum(1 for day in row["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and daily.get(day["date"],0)>0)
+        row["coincident_days"] = sum(1 for day in row["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and daily.get(day["date"],0)>0) if any(day["precipitation_sum"] is not None for day in row["daily"]) else None
     series = []
     for i in range((end-first).days+1):
         day = (first+timedelta(days=i)).isoformat()
@@ -74,15 +74,21 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
                        "wind_max_kmh":climate.get("wind_speed_10m_max"),"gust_max_kmh":climate.get("wind_gusts_10m_max"),"wind_direction_deg":climate.get("wind_direction_10m_dominant")})
     readiness = collection_readiness()
     jobs = list(WeatherCollectionJob.objects.filter(uf__in=ufs,period=first).values("uf","status"))
+    can_collect = readiness["status"] == "ready"
+    configuration_status = readiness.get("configuration_status", readiness["status"])
     if readiness["status"] == "ready":
         statuses={j["status"] for j in jobs}
-        state = "running" if "running" in statuses else "queued" if "pending" in statuses else "completed" if weather and not any(r["stale"] for r in weather.values()) and len(weather)==len(ufs) else "unavailable"
-        messages={"running":"Coleta em andamento.","queued":"Coleta agendada no worker.","completed":"Cache climático disponível.","unavailable":"Dados indisponíveis para todo ou parte do recorte. Solicite a coleta autorizada."}
+        state = "running" if "running" in statuses else "queued" if "pending" in statuses else "failed" if "error" in statuses else "completed" if weather and not any(r["stale"] for r in weather.values()) and len(weather)==len(ufs) else "awaiting_collection"
+        messages={"running":"Processando coleta no worker.","queued":"Na fila de coleta do worker.","completed":"Concluído · cache climático disponível.","failed":"Falha na coleta. Consulte a saúde da integração antes de tentar novamente.","awaiting_collection":"Aguardando coleta para todo ou parte do recorte."}
         readiness={"status":state,"message":messages[state]}
         if state == "queued" and not IntegrationLease.objects.filter(key="worker",expires_at__gt=timezone.now()).exists():
             readiness["message"] = "Coleta agendada. Worker sem lease ativo; verifique o serviço na Central."
+    readiness.update(configuration_status=configuration_status, can_collect=can_collect and bool(ufs), cache_available=bool(weather))
     if presentation:
         readiness={"status":"completed" if weather else "unavailable","message":"Contexto climático disponível." if weather else "Contexto climático indisponível neste recorte."}
+    if presentation:
+        # Option catalogs belong to /dados/, never to the local daily series.
+        summary={key:value for key,value in summary.items() if key not in {"projects","providers","clients","priority_options","reasons","reason_options"}}
     return {"summary":summary,"weather":weather,"climate":regional,"daily":series,
             "collection":readiness,
             "period":{"month":first.strftime("%Y-%m"),"partial":first==timezone.localdate().replace(day=1)},

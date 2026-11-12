@@ -494,7 +494,7 @@ class MapAnalyticsService:
                 if ticket.source_created_at:
                     day = timezone.localtime(ticket.source_created_at).date().isoformat()
                     _inc(item["daily_counts"], day)
-                    if category != "financeiro":
+                    if category not in {"financeiro", "sem_classificacao"}:
                         _inc(item["technical_daily_counts"], day)
             item["active_tickets"] = len(item["active_ticket_ids"])
             item["recurrence_tickets"] = len(item["recurrence_ticket_ids"])
@@ -568,7 +568,7 @@ class MapAnalyticsService:
                 global_ticket_dates[ticket.pk] = timezone.localtime(ticket.source_created_at).date().isoformat()
         for ticket_id, day in global_ticket_dates.items():
             _inc(daily_counts, day)
-            if global_ticket_categories.get(ticket_id) != "financeiro":
+            if global_ticket_categories.get(ticket_id) not in {None, "financeiro", "sem_classificacao"}:
                 _inc(technical_daily_counts, day)
         for category in global_ticket_categories.values():
             _inc(category_counts, IncidentRules.LABELS[category])

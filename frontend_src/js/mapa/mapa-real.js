@@ -127,6 +127,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
       if(state.arionStatus)chips.push(["arionStatus","Status ARION: "+((data?.arion_statuses||[]).find(row=>row.value===state.arionStatus)?.label||state.arionStatus)]);
       if(state.assignee)chips.push(["assignee","Respons\u00e1vel: "+(state.assignee==="unassigned"?"Sem respons\u00e1vel":(data?.assignees||[]).find(row=>String(row.id)===state.assignee)?.name||"Selecionado")]);
     }
+    $("[data-filter-count]").textContent=String(chips.length);
     ui.activeFilters.hidden=!chips.length;
     ui.activeFilters.innerHTML=chips.map(([key,label])=>"<button type=\"button\" class=\"map-filter-chip\" aria-label=\"Remover filtro: "+esc(label)+"\" data-clear-filter=\""+esc(key)+"\"><span>"+esc(label)+"</span><span aria-hidden=\"true\">&#215;</span></button>").join("")+(chips.length?"<button type=\"button\" class=\"map-clear-filters\" aria-label=\"Limpar todos os filtros aplicados\" data-clear-all-filters>Limpar filtros</button>":"");
   }
@@ -163,6 +164,8 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   function syncMoreFiltersOpen(){
     const open=ui.moreFilters.open,toolbar=page.querySelector(".geo-toolbar--map");
     toolbar.classList.toggle("is-more-filters-open",open);
+    ui.moreFilters.querySelector("summary").setAttribute("aria-expanded",String(open));
+    page.dispatchEvent(new CustomEvent("geo:layout"));
     if(!open)clearTimeout(moreFiltersTimer);
   }
 
@@ -170,13 +173,6 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     if(!ui.moreFilters.open)return;
     ui.moreFilters.open=false;syncMoreFiltersOpen();
     if(returnFocus)ui.moreFilters.querySelector("summary").focus();
-  }
-  function scheduleMoreFiltersClose(){
-    clearTimeout(moreFiltersTimer);
-    if(!ui.moreFilters.open||ui.moreFiltersContent.contains(document.activeElement))return;
-    moreFiltersTimer=setTimeout(()=>{
-      if(ui.moreFilters.open&&!ui.moreFiltersContent.contains(document.activeElement))closeMoreFilters();
-    },12000);
   }
   function closeSearch(clearValue=false){
     ui.results.hidden=true;ui.search.setAttribute("aria-expanded","false");ui.search.removeAttribute("aria-activedescendant");searchIndex=-1;
@@ -242,6 +238,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     history.replaceState(null,"",url.pathname+url.search+url.hash);
   }
   function updateModeControls(){
+    geoController.syncMode();
     const temporal=["projects","calls","repeat","motives","climate"].includes(state.mode);
     if(ui.periodControl){
       if(temporal){
@@ -323,7 +320,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   }
   function fillFilters() {
     ui.project.innerHTML = '<option value="">Todos os projetos</option>' + data.projects.map(value=>`<option value="${esc(value)}">${esc(displayProject(value))}</option>`).join("");
-    const selectedProject = isPresentation ? root.dataset.fixedProject : data.selected_project || "";
+    const selectedProject = data.selected_project || "";
     state.project = data.projects.includes(selectedProject) ? selectedProject : "";
     ui.project.value = state.project;
     ui.provider.innerHTML = '<option value="">Todos os provedores</option>' + data.providers.map(row=>`<option value="${esc(row.id)}">${esc(row.name)}</option>`).join("");
@@ -362,7 +359,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     const maximum=maxMetric();
     return { type:"FeatureCollection", features:geojson.features.filter(feature=>!state.region||(data?.allowed_ufs||[]).includes(feature.properties.sigla)).map(feature=>{
       const code=feature.properties.sigla,row=data.states[code] || {};
-      return { ...feature, id:code, properties:{...feature.properties,value:metricValue(row),dominant:dominantClient(row),cause:Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]||"",intensity:state.layer==="direction"?.45:climateKeys[state.layer]?Math.max(0,Math.min(1,state.layer.startsWith("temperature")?(metricValue(row)+15)/60:metricValue(row)/maximum)):Math.sqrt(metricValue(row)/maximum),has_data:climateKeys[state.layer]?Number.isFinite(climateValue(row)):metricValue(row)>0,context_faded:Boolean(state.selectedUF&&state.selectedUF!==code)} };
+      return { ...feature, id:code, properties:{...feature.properties,value:metricValue(row),dominant:dominantClient(row),cause:Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0]?.[0]||"",intensity:state.layer==="direction"?.45:climateKeys[state.layer]?Math.max(0,Math.min(1,state.layer.startsWith("temperature")?(metricValue(row)+15)/60:metricValue(row)/maximum)):Math.sqrt(metricValue(row)/maximum),has_data:climateKeys[state.layer]?Number.isFinite(climateValue(row)):Boolean(row.total_links||metricValue(row)>0),context_faded:Boolean(state.selectedUF&&state.selectedUF!==code)} };
     })};
   }
   function labelCollection() {
@@ -474,6 +471,9 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     }
     if(geoRamps[state.layer]||state.layer==="calls"){
       const ramps=geoRamps[state.layer]||quantitative.calls,colors=ramps[theme()],labels={temperature:"Temperatura média · °C",temperature_min:"Temperatura mínima · °C",temperature_max:"Temperatura máxima · °C",wind_speed:"Vento máximo · km/h",direction:"Direção dominante · graus",rain:"Chuva estimada · mm",wind:"Rajada máxima · km/h",correlation:"Dias com chuva ≥ 1 mm e incidentes técnicos · sem causalidade",calls:"Incidentes válidos"};
+      if(geoRamps[state.layer]&&!Object.values(data?.states||{}).some(row=>Number.isFinite(climateValue(row)))){
+        ui.legend.innerHTML=`<span class="legend-scale-label">${esc(labels[state.layer])} · Sem dados neste recorte · Cinza: ausência de observação</span>`;return;
+      }
       ui.legend.innerHTML=`<span class="legend-scale-label">${esc(labels[state.layer])}</span><span class="legend-scale" style="background:linear-gradient(90deg,${colors.join(",")})"></span><span class="legend-scale-label">${state.layer.startsWith("temperature")?"−15":"0"} — ${state.layer.startsWith("temperature")?"45":number.format(maxMetric())} · ${state.day?esc(state.day):"Mês"} · Cinza: sem dados</span>`;return;
     }
     if (state.mode === "base") {
@@ -597,7 +597,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
       listRows(ui.projects,row.project_counts||{});listRows(ui.providers,row.ticket_provider_counts||row.provider_counts||{},"incidentes");listRows(ui.reasons,row.category_counts||{},"incidentes");
       ui.panelRecurrence.textContent=number.format(row.recurrence_links||0)+" links com pelo menos dois incidentes válidos no mês.";
       ui.panelOverviewContext.textContent="Classificações registradas; cenário estimado identificado nas análises.";
-      openPanel();return;
+      renderClimatePanel(row);openPanel();return;
     }
     ui.panelCode.textContent=code; ui.panelName.textContent=stateNames[code]||code;
     ui.panelFlag.src=flags[code]||""; ui.panelFlag.alt="Bandeira de "+(stateNames[code]||code);
@@ -654,13 +654,25 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     if(state.mode==="motives"&&state.reason)cockpit.searchParams.set("termination_reason",state.reason);
     ui.openCockpit.href=cockpit.pathname+cockpit.search;
     ui.openCockpit.textContent=["base","projects"].includes(state.mode)?"Abrir UF no Cockpit":"Analisar no Cockpit";
-    openPanel();
+    renderClimatePanel(row);openPanel();
     ui.announce.textContent=(stateNames[code]||code)+", "+number.format(count)+" "+modeLabels[state.mode]+".";
+  }
+  function renderClimatePanel(row){
+    if(!climateKeys[state.layer])return;
+    const value=climateValue(row),c=state.day?row.climate?.daily?.find(d=>d.date===state.day):row.climate;
+    const format=(v,unit="")=>Number.isFinite(v)?number.format(v)+(unit?" "+unit:""):"Indisponível";
+    const labels={rain:"Chuva estimada · mm",temperature:"Temperatura média · °C",temperature_min:"Temperatura mínima · °C",temperature_max:"Temperatura máxima · °C",wind:"Rajada máxima · km/h",wind_speed:"Vento máximo · km/h",direction:"Direção de origem · °",correlation:"Dias coincidentes · sem causalidade"};
+    ui.panelTotal.textContent=format(value);
+    ui.panelScope.textContent=labels[state.layer]+" · "+(state.day||state.period);
+    const metrics=[["Chuva estimada",c?.[state.day?"precipitation_sum":"precipitation_mm"],"mm"],["Temperatura média",c?.[state.day?"temperature_2m_mean":"temperature_mean_c"],"°C"],["Vento máximo",c?.[state.day?"wind_speed_10m_max":"wind_max_kmh"],"km/h"],["Rajada máxima",c?.[state.day?"wind_gusts_10m_max":"gust_max_kmh"],"km/h"]];
+    ui.panelOverview.innerHTML=metrics.map(([label,n,unit])=>`<div class="panel-overview-kpi"><strong>${format(n,unit)}</strong><span>${label}</span></div>`).join("");
+    ui.panelOverviewContext.textContent=c?"Estimativa territorial · Open-Meteo / Copernicus ERA5. Método e cobertura nas análises.":"Sem cache climático neste recorte. Os chamados permanecem disponíveis.";
   }
   function panelWidth(element,fallback){const width=parseFloat(getComputedStyle(element).width);return Number.isFinite(width)&&width>0?width:fallback;}
   function updateMapLayout(){
     const drawerWidth=panelWidth(panel,480),nationalWidth=panelWidth(national,300);
     root.style.setProperty("--map-drawer-width",`${drawerWidth}px`);
+    page.style.setProperty("--geo-detail-reserve",`${state.selectedUF?drawerWidth+52:36}px`);
     root.style.setProperty("--map-national-width",`${nationalWidth}px`);
     root.style.setProperty("--map-control-inset",`${drawerWidth+16}px`);
     root.classList.toggle("national-collapsed",state.collapsed);
@@ -674,12 +686,14 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
       const drawerHeight=focused?Math.min(panelHeight(),stageHeight*.48):0;
       padding={top:24,right:24,bottom:drawerHeight+24,left:24};
     }else{
-      const left=state.collapsed?28:panelWidth(national,300)+28;
+      const left=ui.moreFilters.open?ui.moreFilters.querySelector(".geo-toolbar").getBoundingClientRect().width+36:state.collapsed?28:panelWidth(national,300)+28;
       const right=focused?panelWidth(panel,356)+28:28;
       const maxOccupied=Math.max(0,stageWidth*.62),occupied=left+right;
       const factor=occupied>maxOccupied&&occupied?maxOccupied/occupied:1;
-      const analyticsHeight=page.querySelector("[data-geo-intelligence]")?.getBoundingClientRect().height||180;
-      padding={top:82,right:right*factor,bottom:Math.min(analyticsHeight+40,stageHeight*.4),left:left*factor};
+      const analytics=page.querySelector("[data-geo-intelligence]");
+      const analyticsHeight=analytics.dataset.panelState==="collapsed"?0:analytics.getBoundingClientRect().height;
+      const bottom=analyticsHeight+(page.classList.contains("has-timeline")?92:52);
+      padding={top:96,right:right*factor,bottom:Math.min(bottom,stageHeight*.52),left:left*factor};
     }
     return padding;
   }
@@ -691,6 +705,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
 
     if(!points.length)return;
     const bounds=points.reduce((box,point)=>box.extend(point),new mapboxgl.LngLatBounds(points[0],points[0]));
+    if(smallStateCallouts[state.selectedUF])bounds.extend(smallStateCallouts[state.selectedUF].label);
     map.fitBounds(bounds,{padding:mapFitPadding(true),maxZoom:5.8,duration});
   }
   function fitBrazil(duration=550){fitRegion(duration,true);}
@@ -732,7 +747,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
   function chooseSearchResult(code){closeSearch(true);closeTooltip();selectState(code);}
 
   function bind(){
-    page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";if(!["projects","calls","repeat","motives","climate"].includes(state.mode)){state.status="";state.priority="";state.arionStatus="";state.assignee="";}state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
+    page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";if(!["projects","calls","repeat","motives","climate"].includes(state.mode)){state.status="";state.priority="";state.arionStatus="";state.assignee="";}state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
     page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
     ui.project.addEventListener("change",()=>{state.project=ui.project.value;fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
     ui.provider.addEventListener("change",()=>{state.provider=ui.provider.value;fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
@@ -745,10 +760,9 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     ui.assignee.addEventListener("change",()=>{state.assignee=ui.assignee.value;fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel filtrar o respons\u00e1vel."));});
     ui.activeFilters.addEventListener("click",event=>{const clear=event.target.closest("[data-clear-filter]");if(clear){clearFilterValue(clear.dataset.clearFilter);return;}if(event.target.closest("[data-clear-all-filters]")){closeMoreFilters();state.mode="base";state.region="";state.category="";state.layer="analysis";state.client=isPresentation?root.dataset.fixedClient:"all";state.project="";state.provider="";state.period="this_month";state.reason="";state.status="";state.priority="";state.arionStatus="";state.assignee="";state.dateFrom="";state.dateTo="";ui.project.value="";ui.provider.value="";ui.reason.value="";ui.status.value="";ui.priority.value="";ui.arionStatus.value="";ui.assignee.value="";ui.dateFrom.value="";ui.dateTo.value="";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client==="all";item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});clearSelection();updateModeControls();fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel limpar os filtros."));}});
     ui.moreFilters.addEventListener("toggle",syncMoreFiltersOpen);
-    ui.moreFiltersContent.addEventListener("change",event=>{if(event.target.matches("select"))closeMoreFilters();});
-    ["pointermove","pointerdown","input","keydown"].forEach(type=>ui.moreFiltersContent.addEventListener(type,scheduleMoreFiltersClose,{passive:type==="pointermove"}));
-    ui.moreFiltersContent.addEventListener("focusin",()=>clearTimeout(moreFiltersTimer));
-    ui.moreFiltersContent.addEventListener("focusout",()=>requestAnimationFrame(scheduleMoreFiltersClose));
+    page.querySelectorAll("[data-filters-close]").forEach(button=>button.addEventListener("click",()=>closeMoreFilters(true)));
+    $("[data-filters-apply]").addEventListener("click",()=>{closeMoreFilters(true);fetchData().catch(error=>showError(error.message));});
+    $("[data-filters-clear]").addEventListener("click",()=>ui.activeFilters.querySelector("[data-clear-all-filters]")?.click());
     page.querySelectorAll("[data-state-tab]").forEach(button=>button.addEventListener("click",()=>{if(!state.selectedUF)return;state.ticketPage=1;loadState(state.selectedUF,button.dataset.stateTab,1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));}));
     ui.panelTicketSearch.addEventListener("input",()=>{clearTimeout(panelSearchTimer);state.ticketSearch=ui.panelTicketSearch.value.trim();state.ticketPage=1;panelSearchTimer=setTimeout(()=>{if(state.selectedUF&&state.ufTab==="tickets")loadState(state.selectedUF,"tickets",1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));},240);});
     ui.panelTicketSize.addEventListener("change",()=>{state.ticketPageSize=Number(ui.panelTicketSize.value)||25;state.ticketPage=1;if(state.selectedUF&&state.ufTab==="tickets")loadState(state.selectedUF,"tickets",1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));});
@@ -774,6 +788,8 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     ui.ufPrevious.addEventListener("click",()=>moveState(-1));ui.ufNext.addEventListener("click",()=>moveState(1));
     $("[data-map-retry]").addEventListener("click",initialize);
     window.addEventListener("arion:themechange",event=>{const next=event.detail?.theme||theme();if(map?.getLayer("arion-background"))map.setPaintProperty("arion-background","background-color",next==="light"?"#e5eae6":"#0c0d0d");renderMap();renderLegend();});
+    let layoutTimer=0;
+    page.addEventListener("geo:layout",()=>{clearTimeout(layoutTimer);layoutTimer=setTimeout(()=>{map?.resize();refitCurrentMap(0);},90);});
     let resizeTimer=0;
     window.addEventListener("resize",()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(ui.moreFilters.open)syncMoreFiltersOpen();if(!map)return;updateMapLayout();map.resize();refitCurrentMap(260);},140);},{passive:true});
   }
@@ -788,6 +804,8 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
       await fetchData();window.mapboxgl.accessToken=root.dataset.token;
       map=new window.mapboxgl.Map({container:mapElement,style:{version:8,glyphs:"mapbox://fonts/mapbox/{fontstack}/{range}.pbf",sources:{},layers:[{id:"arion-background",type:"background",paint:{"background-color":theme()==="light"?"#e5eae6":"#0c0d0d"}}]},bounds:[[-76,-37],[-32,8]],fitBoundsOptions:{padding:35},minZoom:1.3,maxZoom:8,renderWorldCopies:false,attributionControl:true,cooperativeGestures:false});
       const canvas=map.getCanvas();
+      map.on("movestart",event=>{if(event.originalEvent)manualCamera=true;});
+      mapElement.addEventListener("pointerdown",event=>{if(event.target.closest(".mapboxgl-ctrl-zoom-in,.mapboxgl-ctrl-zoom-out"))manualCamera=true;});
       canvas.addEventListener("wheel",()=>{manualCamera=true;},{passive:true});
       canvas.addEventListener("pointermove",event=>{if(event.buttons)manualCamera=true;},{passive:true});
       canvas.addEventListener("keydown",event=>{if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","+","-","="].includes(event.key))manualCamera=true;});
@@ -800,10 +818,10 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
         map.addSource("arion-state-label-points",{type:"geojson",data:labelCollection()});
         map.addLayer({id:"arion-weather-labels",type:"symbol",source:"arion-state-label-points",minzoom:3.2,layout:{"text-field":["get","weather_label"],"text-font":["Open Sans Semibold","Arial Unicode MS Regular"],"text-size":10,"text-offset":[0,1.4],"text-allow-overlap":false},paint:{"text-color":theme()==="light"?"#25372f":"#e4ebe5","text-halo-color":theme()==="light"?"#e5eae6":"#151b18","text-halo-width":1.5}});
         map.addLayer({id:"arion-weather-direction",type:"symbol",source:"arion-state-label-points",filter:["==",["get","directional"],true],layout:{"text-field":"↓","text-size":22,"text-rotate":["get","wind_direction"],"text-offset":[0,-1],"text-allow-overlap":false},paint:{"text-color":theme()==="light"?"#67508f":"#d0b3ef"}});
-        map.addLayer({id:"arion-state-labels",type:"symbol",source:"arion-state-label-points",minzoom:3.1,maxzoom:5.8,layout:{"text-field":["get","sigla"],"text-font":["Open Sans Semibold","Arial Unicode MS Regular"],"text-size":["interpolate",["linear"],["zoom"],3.1,9,5.8,11],"text-allow-overlap":false,"text-ignore-placement":false,"text-optional":true,"symbol-placement":"point"},paint:{"text-color":theme()==="light"?"#25372f":"#e4ebe5","text-halo-color":theme()==="light"?"rgba(235,240,235,.94)":"rgba(17,22,20,.94)","text-halo-width":1.2,"text-opacity":.9}});
+        map.addLayer({id:"arion-state-labels",type:"symbol",source:"arion-state-label-points",layout:{"text-field":["get","sigla"],"text-font":["Open Sans Semibold","Arial Unicode MS Regular"],"text-size":["interpolate",["linear"],["zoom"],2,11,5.8,14],"text-allow-overlap":false,"text-ignore-placement":true,"text-optional":true,"symbol-placement":"point"},paint:{"text-color":theme()==="light"?"#25372f":"#e4ebe5","text-halo-color":theme()==="light"?"rgba(235,240,235,.94)":"rgba(17,22,20,.94)","text-halo-width":1.2,"text-opacity":.9}});
         map.addSource("arion-state-callouts",{type:"geojson",data:calloutCollection(),promoteId:"sigla"});
         map.addLayer({id:"arion-state-callout-lines",type:"line",source:"arion-state-callouts",filter:["==",["geometry-type"],"LineString"],paint:{"line-color":theme()==="light"?"rgba(48,67,56,.5)":"rgba(221,233,224,.45)","line-width":1,"line-opacity":.88}});
-        map.addLayer({id:"arion-state-callout-labels",type:"symbol",source:"arion-state-callouts",filter:["==",["geometry-type"],"Point"],layout:{"text-field":["get","sigla"],"text-font":["Open Sans Semibold","Arial Unicode MS Regular"],"text-size":["interpolate",["linear"],["zoom"],3,9,5.8,11],"text-allow-overlap":false,"text-ignore-placement":false,"text-optional":true,"symbol-placement":"point","text-padding":5},paint:{"text-color":theme()==="light"?"#31463a":"#e5ece6","text-halo-color":theme()==="light"?"#f2f5f1":"#151b18","text-halo-width":3,"text-halo-blur":.15,"text-opacity":1}});
+        map.addLayer({id:"arion-state-callout-labels",type:"symbol",source:"arion-state-callouts",filter:["==",["geometry-type"],"Point"],layout:{"text-field":["get","sigla"],"text-font":["Open Sans Semibold","Arial Unicode MS Regular"],"text-size":["interpolate",["linear"],["zoom"],2,11,5.8,14],"text-allow-overlap":false,"text-ignore-placement":true,"text-optional":true,"symbol-placement":"point","text-padding":5},paint:{"text-color":theme()==="light"?"#31463a":"#e5ece6","text-halo-color":theme()==="light"?"#f2f5f1":"#151b18","text-halo-width":3,"text-halo-blur":.15,"text-opacity":1}});
         const selectableLayers=["arion-state-fill","arion-state-labels","arion-state-callout-labels"];
         selectableLayers.forEach(layer=>{
           map.on("click",layer,event=>{const code=event.features?.[0]?.properties?.sigla;if(code)selectState(code);});
@@ -927,6 +945,8 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     const bounds=new window.mapboxgl.LngLatBounds();
     const walk=coords=>{if(typeof coords[0]==="number")bounds.extend(coords);else coords.forEach(walk);};
     features.forEach(f=>walk(f.geometry.coordinates));
+    const codes=new Set(features.map(f=>f.properties.sigla));
+    Object.entries(smallStateCallouts).forEach(([code,p])=>{if(codes.has(code))bounds.extend(p.label);});
     map.fitBounds(bounds,{padding:mapFitPadding(false),maxZoom:6,duration:window.matchMedia("(prefers-reduced-motion: reduce)").matches?0:duration});
   }
   const geoController=mountGeoIntelligence({page,root,state,urlFor,refresh:fetchData,fitRegion:()=>setTimeout(fitRegion,100),selectUF:code=>code?selectState(code):clearSelection(),onWeather:(payload,day)=>{
@@ -937,6 +957,7 @@ import { mountGeoIntelligence } from "./geo-intelligence.js";
     if(["base","projects"].includes(state.mode)){data.ticket_count=payload.summary.ticket_count;data.affected_link_count=payload.summary.affected_link_count;}
     Object.entries(data.states).forEach(([code,row])=>{row.climate=payload.weather[code];row.geo_ticket_count=payload.summary.states[code]?.ticket_count||0;row.geo_category_counts=payload.summary.states[code]?.category_counts||{};row.geo_daily_counts=payload.summary.states[code]?.daily_counts||{};if(["base","projects"].includes(state.mode))row.ticket_count=row.geo_ticket_count;});
     renderMap();renderLegend();renderNational();
+    if(state.selectedUF)renderClimatePanel(data.states[state.selectedUF]||{});
   }});
   updateModeControls();
   page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client===state.client;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});

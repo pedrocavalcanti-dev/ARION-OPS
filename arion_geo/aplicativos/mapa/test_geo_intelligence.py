@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone as dt_timezone
+from datetime import date, datetime, timezone as dt_timezone
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -9,7 +9,7 @@ from django.urls import reverse
 
 from aplicativos.base_links.models import Projeto, Operadora
 from aplicativos.configuracoes.models import GroupDataScope
-from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem
+from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem, ExternalAPIIntegration, WeatherCollectionJob
 from aplicativos.integracoes.services.incidents import IncidentRules
 from .services.analytics import MapAnalyticsService
 from .services.presentation import project_distribution
@@ -68,6 +68,26 @@ class GeoIntelligenceTests(TestCase):
         self.assertEqual(data["summary"]["ticket_count"],1)
         self.assertFalse(data["climate"]["available"])
         self.assertTrue(all(r["rain_mm"] is None for r in data["daily"]))
+        self.assertIsNone(data["climate"]["coincident_days"])
+        self.assertEqual(data["collection"]["configuration_status"],"not_configured")
+        self.assertFalse(data["collection"]["can_collect"])
+
+    def test_collection_states_follow_queue_without_network_or_simulated_cache(self):
+        ExternalAPIIntegration.objects.create(provider="open_meteo",name="Weather",enabled=True,config={"mode":"evaluation","evaluation_authorized":True})
+        url=reverse("mapa:intelligence")
+        params={"period":"2026-10","uf":"SP"}
+        with patch("aplicativos.integracoes.clients.public_data.PublicDataClient.get") as network:
+            data=self.client.get(url,params).json()
+            self.assertEqual(data["collection"]["status"],"awaiting_collection")
+            self.assertTrue(data["collection"]["can_collect"])
+            job=WeatherCollectionJob.objects.create(uf="SP",period=date(2026,10,1))
+            for stored,expected in (("pending","queued"),("running","running"),("error","failed"),("success","awaiting_collection")):
+                job.status=stored;job.save(update_fields=["status"])
+                result=self.client.get(url,params).json()
+                self.assertEqual(result["collection"]["status"],expected)
+                self.assertFalse(result["climate"]["available"])
+                self.assertFalse(result["collection"]["cache_available"])
+            network.assert_not_called()
 
     def test_monthly_map_reuses_incident_aggregation_for_weather_comparison(self):
         self.ticket(1)
@@ -83,7 +103,8 @@ class GeoIntelligenceTests(TestCase):
             response=self.client.post(reverse("mapa:weather-collect"),{"period":"2026-10","mode":"calls"})
         self.assertEqual(response.status_code,409)
         self.assertEqual(response.json()["status"],"disabled")
-        self.assertIn("desabilitada",response.json()["message"])
+        self.assertEqual(response.json()["configuration_status"],"not_configured")
+        self.assertIn("Não configurado",response.json()["message"])
         network.assert_not_called()
 
     def test_focused_motives_and_weather_share_created_month_even_if_resolved_later(self):
@@ -125,6 +146,17 @@ class GeoIntelligenceTests(TestCase):
         self.assertEqual(q,{"incidents":2,"classified":1,"unclassified":1,"with_uf":1,"without_uf":1,"affected_links":3,"recurrent_links":0,"state_occurrences":2})
         self.assertNotIn("",result["states"])
         self.assertEqual(sum(result["daily_counts"].values()),2)
+        self.assertEqual(sum(result["technical_daily_counts"].values()),1)
+
+    def test_unknown_classifications_remain_incidents_but_never_factual_weather_coincidence(self):
+        self.ticket(401,reason="Classificação ainda não mapeada")
+        self.ticket(402,reason="PendenciaFinanceira")
+        self.ticket(403,reason="RompimentoFibra")
+        result=self.client.get(reverse("mapa:intelligence"),{"period":"2026-10","uf":"SP"}).json()
+        self.assertEqual(result["summary"]["ticket_count"],3)
+        self.assertEqual(sum(result["summary"]["daily_counts"].values()),3)
+        self.assertEqual(sum(result["summary"]["technical_daily_counts"].values()),1)
+        self.assertEqual(sum(result["summary"]["states"]["SP"]["technical_daily_counts"].values()),1)
 
     def test_presentation_varies_month_project_and_modes_but_cannot_expand_client_scope(self):
         CMDBLinkMirror.objects.create(source_config_item_id="second-project",name="CLARO - FUST",state="BA",contracting_client="Claro",business_project="FUST")
@@ -184,6 +216,25 @@ class GeoIntelligenceTests(TestCase):
         self.assertNotIn("geo_presentation",self.client.session)
         group.permissions.remove(*Permission.objects.filter(codename="present_geo"))
         self.assertEqual(self.client.get(reverse("mapa:presentation-start")).status_code,403)
+
+    def test_presentation_counts_define_distinct_incidents_and_respect_operational_filters(self):
+        self.ticket(501,reason="FalhaMassiva")
+        self.ticket(502,reason="PendenciaFinanceira")
+        self.ticket(503,status="OPEN",reason="RompimentoFibra")
+        key=self.start()
+        url=reverse("mapa:presentation-data",args=[key])
+        result=self.client.get(url,{"period":"2026-10","mode":"calls","status":"RESOLVED","include_intelligence":"1"}).json()
+        self.assertEqual(result["source_total"],5)
+        self.assertEqual(result["filtered_source_total"],5)
+        self.assertEqual(result["ticket_count"],2)
+        self.assertEqual(sum(result["daily_counts"].values()),2)
+        self.assertEqual(sum(result["category_counts"].values()),1)
+        self.assertEqual(sum(result["technical_daily_counts"].values()),1)
+        self.assertEqual(sum(result["distribution_projected"].values()),1)
+        self.assertIn("TicketID",result["definitions"]["ticket_count"])
+        raw=json.dumps(result).casefold()
+        for reserved in ("financeir","closing_code_raw","title","assignees","account_counts"):
+            self.assertNotIn(reserved,raw)
 
     def test_presentation_does_not_block_native_logout(self):
         self.start()

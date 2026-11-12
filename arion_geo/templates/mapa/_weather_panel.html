@@ -1,6 +1,23 @@
-<section class="geo-intelligence" aria-label="Clima e incidentes no mês" data-geo-intelligence data-url="{% if presentation %}{{ intelligence_url }}{% else %}{% url 'mapa:intelligence' %}{% endif %}" {% if not presentation and perms.configuracoes.run_integrations %}data-collect-url="{% url 'mapa:weather-collect' %}"{% endif %}>
-  <header><div><strong>GEO Intelligence</strong><span data-geo-context>Estimativa territorial mensal · OTRS + CMDB + Clima</span></div><div class="geo-intelligence-actions">{% if not presentation and perms.configuracoes.run_integrations %}<form data-geo-collect-form>{% csrf_token %}<button type="submit" class="geo-text-action" data-weather-collect>Coletar clima do recorte</button></form>{% endif %}<button class="geo-text-action" type="button" data-weather-refresh>Atualizar</button><button class="geo-text-action" type="button" data-weather-toggle aria-expanded="false" aria-controls="geo-intelligence-content">Análises</button></div></header>
-  <p class="geo-status" data-weather-status role="status">Consultando cache local…</p>
-  <div class="geo-weather-metrics" data-weather-metrics></div><div class="geo-intelligence-content" id="geo-intelligence-content" hidden><div class="geo-daily-chart" data-weather-chart></div><div class="geo-reasons" data-geo-reasons></div></div>
-  <details class="geo-method-note"><summary>Método e cobertura</summary><p>Chuva: estimativa espacial em mm; dias chuvosos: média diária ≥ 1 mm. Vento e rajada: máximos amostrados em km/h. Coincidência temporal não confirma causalidade. Fonte: Open-Meteo / Copernicus ERA5. Temperatura média: média espacial e temporal; mínimas/máximas: extremos amostrados. Direção: média circular ponderada; ausente se os vetores se anulam. Inventário CMDB atual; tickets por data de criação. Um ticket pode aparecer em várias UFs; o total nacional é distinto.</p><div data-geo-quality></div></details>
-<div class="geo-timeline" data-geo-timeline><button type="button" data-timeline-play aria-label="Reproduzir dias">▶</button><input type="range" min="0" max="31" value="0" data-timeline-day aria-label="Dia do mês; zero representa o mês completo"><output data-timeline-label>Mês completo</output><label>Velocidade<select data-timeline-speed><option value="1200">1×</option><option value="600">2×</option><option value="300">4×</option></select></label></div></section>
+<section class="geo-intelligence" aria-label="Análises GEO Intelligence" data-geo-intelligence data-panel-state="collapsed" data-url="{% if presentation %}{{ intelligence_url }}{% else %}{% url 'mapa:intelligence' %}{% endif %}" {% if not presentation and perms.configuracoes.run_integrations %}data-collect-url="{% url 'mapa:weather-collect' %}"{% endif %}>
+  <header><div class="geo-analysis-heading"><strong>GEO Intelligence</strong><span data-geo-context></span></div><div class="geo-intelligence-actions">
+    <button class="geo-text-action" type="button" data-weather-toggle aria-expanded="false" aria-controls="geo-analysis-body">Análises</button>
+    <button class="geo-text-action" type="button" data-analysis-expand aria-expanded="false" aria-controls="geo-intelligence-content" hidden>Expandir</button>
+    <button class="geo-text-action" type="button" data-analysis-close aria-label="Fechar análises" hidden>Fechar</button>
+  </div></header>
+  <div id="geo-analysis-body" class="geo-analysis-body" hidden>
+    <div class="geo-weather-metrics" data-weather-metrics></div>
+    <div class="geo-climate-status"><p class="geo-status" data-weather-status role="status">Consultando cache local…</p><div class="geo-intelligence-actions">
+      {% if not presentation and perms.configuracoes.run_integrations %}<form data-geo-collect-form hidden>{% csrf_token %}<button type="submit" class="geo-text-action" data-weather-collect>Coletar clima do recorte</button></form>{% endif %}
+      {% if not presentation and perms.configuracoes.view_integrations and perms.configuracoes.manage_integrations %}<a class="geo-text-action" data-weather-configure href="{% url 'configuracoes:integracoes:geo-detail' provider='open_meteo' %}" hidden>Configurar integração</a>{% endif %}
+      <button class="geo-text-action" type="button" data-weather-refresh>Atualizar</button>
+    </div></div>
+    <div class="geo-intelligence-content" id="geo-intelligence-content" hidden><section class="geo-daily-chart" aria-label="Evolução mensal" data-weather-chart></section><section class="geo-reasons" aria-label="Distribuição da análise" data-geo-reasons></section></div>
+    <details class="geo-method-note"><summary>Método e cobertura</summary><p>Chuva: estimativa espacial em mm; dias chuvosos: média diária ≥ 1 mm. Vento e rajada: máximos amostrados em km/h. Coincidência temporal não confirma causalidade. Fonte: Open-Meteo / Copernicus ERA5. Temperatura média: média espacial e temporal; mínimas/máximas: extremos amostrados. Direção: média circular ponderada; ausente se os vetores se anulam. Inventário CMDB atual; tickets por data de criação. Um ticket pode aparecer em várias UFs; o total nacional é distinto.</p><div data-geo-quality></div></details>
+  </div>
+</section>
+<section class="geo-timeline" aria-label="Reprodução temporal" data-geo-timeline hidden>
+  <button type="button" data-timeline-play aria-label="Reproduzir dias">▶</button><output data-timeline-label>Mês completo</output>
+  <input type="range" min="0" max="31" value="0" data-timeline-day aria-label="Dia do mês; zero representa o mês completo">
+  <label><span>Velocidade</span><select data-timeline-speed aria-label="Velocidade da reprodução"><option value="1200">1×</option><option value="600">2×</option><option value="300">4×</option></select></label>
+  <button type="button" data-timeline-reset aria-label="Reiniciar período">↺</button><button type="button" data-timeline-expand aria-expanded="false" aria-controls="geo-intelligence-content">Detalhar</button>
+</section>

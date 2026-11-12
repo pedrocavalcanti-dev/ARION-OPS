@@ -44,7 +44,7 @@ def _fixed_params(request, key):
     values = request.GET.copy()
     if "client" in values and values["client"] != session.get("client"):
         raise PermissionDenied("O cliente da apresentação está fixado.")
-    params = {name:values.get(name,"") for name in ("region","uf","provider","category","reason")}
+    params = {name:values.get(name,"") for name in ("region","uf","provider","category","reason","status","priority")}
     params["client"] = session["client"]
     params["project"] = canonical_project_name(values.get("project",session.get("project","")))
     params["period"] = month_bounds(values.get("period",session.get("period")))[0].strftime("%Y-%m")

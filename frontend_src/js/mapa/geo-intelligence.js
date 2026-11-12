@@ -4,27 +4,53 @@ const fmt=new Intl.NumberFormat("pt-BR",{maximumFractionDigits:1});
 const escape=value=>String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const quantity=(value,unit="")=>value==null?"Indisponível":(typeof value==="number"?fmt.format(value):escape(value))+(unit?" "+unit:"");
 
-function dailyChart(series){
+function dailyChart(series, layer="rain"){
   if(!series.length)return "<p class='geo-status'>Sem série diária para este período.</p>";
   const width=600,height=125,left=32,right=35,top=18,bottom=20,plot=height-top-bottom;
-  const rainMax=Math.max(1,...series.map(r=>r.rain_mm??0)),ticketMax=Math.max(1,...series.map(r=>r.tickets));
+  const config={temperature:["temperature_mean_c","Temperatura média","°C"],temperature_min:["temperature_min_c","Temperatura mínima","°C"],temperature_max:["temperature_max_c","Temperatura máxima","°C"],wind:["gust_max_kmh","Rajada máxima","km/h"],wind_speed:["wind_max_kmh","Vento máximo","km/h"]}[layer]||["rain_mm","Chuva estimada","mm"];
+  const [key,label,unit]=config;
+  const combined=layer==="correlation";
+  if(combined)series=series.map(r=>({...r,tickets:r.technical_tickets}));
+  const observed=series.map(r=>r[key]).filter(Number.isFinite),hasClimate=observed.length>0;
+  const low=Math.min(0,...observed),high=Math.max(1,...observed);
+  series=series.map(r=>({...r,rain_mm:r[key]==null?null:r[key]-low}));
+  const rainMax=high-low,ticketMax=Math.max(1,...series.map(r=>r.tickets));
   const step=(width-left-right)/series.length;
   const x=i=>left+(i+.5)*step,yRain=v=>top+plot*(1-v/rainMax),yTicket=v=>top+plot*(1-v/ticketMax);
-  const bars=series.map((r,i)=>r.rain_mm==null?"":`<rect class="rain-bar" x="${x(i)-step*.32}" y="${yRain(r.rain_mm)}" width="${step*.64}" height="${plot*r.rain_mm/rainMax}"><title>${escape(r.date)}: chuva ${quantity(r.rain_mm,"mm")}; ${r.tickets} incidentes</title></rect>`).join("");
+  const bars=series.map((r,i)=>r.rain_mm==null?"":`<rect class="rain-bar" x="${x(i)-step*.32}" y="${yRain(r.rain_mm)}" width="${step*.64}" height="${plot*r.rain_mm/rainMax}"><title>${escape(r.date)}: ${escape(label)} ${quantity(r.rain_mm+low,unit)}; ${r.tickets} incidentes</title></rect>`).join("");
   const line=series.map((r,i)=>`${x(i)},${yTicket(r.tickets)}`).join(" ");
   const ticks=[0,Math.floor((series.length-1)/2),series.length-1].map(i=>`<text x="${x(i)}" y="${height-3}" text-anchor="middle">${series[i].date.slice(-2)}</text>`).join("");
-  return `<div class="geo-chart-legend"><b>Chuva · mm (esquerda)</b><b>Incidentes · quantidade (direita)</b></div><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Chuva estimada e incidentes diários. Eixo esquerdo em milímetros; direito em quantidade."><text x="0" y="${top+5}">${fmt.format(rainMax)}</text><text x="${width-right+5}" y="${top+5}">${fmt.format(ticketMax)}</text><text x="15" y="${top+plot}">0</text><text x="${width-right+5}" y="${top+plot}">0</text>${bars}<polyline class="ticket-line" points="${line}"/>${ticks}</svg>`;
+  return `<div class="geo-chart-legend"><b>${hasClimate?escape(label)+" · "+unit+" (esquerda)":"Clima indisponível · sem simulação"}</b><b>Incidentes · quantidade (direita)</b></div><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${hasClimate?escape(label)+' em '+unit+' e incidentes diários':'Incidentes diários; clima indisponível'}"><text x="0" y="${top+5}">${hasClimate?fmt.format(high):""}</text><text x="${width-right+5}" y="${top+5}">${fmt.format(ticketMax)}</text><text x="15" y="${top+plot}">${hasClimate?fmt.format(low):""}</text><text x="${width-right+5}" y="${top+plot}">0</text>${bars}<polyline class="ticket-line" points="${line}"/>${ticks}</svg>`;
 }
 
 export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,fitRegion,selectUF}){
   const panel=page.querySelector("[data-geo-intelligence]");
-  if(!panel)return {update(){}};
+  if(!panel)return {update(){},syncMode(){},allowedUFs:()=>allUF};
   const $=s=>page.querySelector(s),region=$("[data-region-filter]"),uf=$("[data-geo-uf]"),month=$("[data-geo-month]"),category=$("[data-category-filter]"),layer=$("[data-geo-layer]");
   let controller=null,sequence=0,pollTimer=0,timelineTimer=0,current=null;
   const dayInput=$("[data-timeline-day]"),dayLabel=$("[data-timeline-label]"),play=$("[data-timeline-play]");
   const categoryKeys={Massiva:"massiva",Rompimento:"rompimento",Equipamento:"equipamento",Energia:"energia","Configuração":"configuracao","Reset remoto":"reset_remoto","Demais motivos técnicos":"demais","Sem classificação":"sem_classificacao","Pendência Financeira":"financeiro"};
   const status=$("[data-weather-status]");
-  if(window.ResizeObserver)new ResizeObserver(()=>page.style.setProperty("--geo-analytics-height",`${panel.getBoundingClientRect().height}px`)).observe(panel);
+  const timeline=$("[data-geo-timeline]");
+  function setPanelState(value){
+    panel.dataset.panelState=value;
+    const open=value!=="collapsed",expanded=value==="expanded";
+    $("#geo-analysis-body").hidden=!open;
+    $("#geo-intelligence-content").hidden=!expanded;
+    $("[data-analysis-expand]").hidden=!open;
+    $("[data-analysis-close]").hidden=!open;
+    $("[data-weather-toggle]").setAttribute("aria-expanded",String(open));
+    $("[data-weather-toggle]").textContent=open?"Recolher":"Análises";
+    $("[data-analysis-expand]").textContent=expanded?"Resumo":"Expandir";
+    $("[data-analysis-expand]").setAttribute("aria-expanded",String(expanded));
+    $("[data-timeline-expand]").setAttribute("aria-expanded",String(expanded));
+    $("[data-timeline-expand]").textContent=expanded?"Recolher":"Detalhar";
+    page.dispatchEvent(new CustomEvent("geo:layout"));
+  }
+  if(window.ResizeObserver)new ResizeObserver(()=>{
+    page.style.setProperty("--geo-analytics-height",`${panel.getBoundingClientRect().height}px`);
+    page.dispatchEvent(new CustomEvent("geo:layout"));
+  }).observe(panel);
   function syncControls(){
     region.value=state.region;
     const ufs=regions[state.region]||allUF;
@@ -45,6 +71,7 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       if(own!==sequence)return;
       if(response&&!response.ok)throw new Error(payload.error?.message||payload.error||"Análise mensal indisponível.");
       current=payload;pause();
+      syncMode();
       if(state.day&&!payload.daily.some(r=>r.date===state.day))state.day="";
       dayInput.max=payload.daily.length;
       dayInput.value=state.day?payload.daily.findIndex(r=>r.date===state.day)+1:0;
@@ -58,22 +85,38 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       $("[data-geo-context]").textContent=[state.selectedUF||region.options[region.selectedIndex]?.text||"Brasil",payload.period.month,payload.period.partial?"Período parcial":"Mês completo"].join(" · ");
       const reasons=Object.entries(summary.category_counts||{}).filter(([label])=>label!=="Sem classificação").sort((a,b)=>b[1]-a[1]);
       const incidents=state.day?(climate.tickets??0):summary.ticket_count;
-      const metrics=state.mode==="climate"||["rain","wind","wind_speed","temperature","temperature_min","temperature_max","direction","correlation"].includes(state.layer)?[["Chuva estimada",state.day?climate.rain_mm:climate.precipitation_mm,"mm"],[state.day?"Incidentes no dia":"Dias chuvosos",state.day?incidents:climate.rainy_days,""],["Temperatura média",climate.temperature_mean_c,"°C"],["Rajada máxima",climate.gust_max_kmh,"km/h"]]:state.mode==="base"||state.mode==="projects"?[["Links CMDB atuais",summary.filtered_source_total,""],["UFs com links",Object.values(summary.states).filter(r=>r.total_links>0).length,""],["Incidentes no mês",summary.ticket_count,""],["Links afetados no mês",summary.affected_link_count,""]]:[[state.day?"Incidentes no dia":"Incidentes válidos",incidents,""],["Links afetados no mês",summary.affected_link_count,""],["Links reincidentes no mês",summary.recurrence_link_count,""],["Classificação predominante",reasons[0]?.[0]||"Sem classificação",""]];
+      const distinct=field=>new Set(Object.values(summary.states).flatMap(r=>Object.keys(r[field]||{})).filter(v=>!v.includes("não identificado"))).size;
+      const stateRanking=Object.entries(summary.states).filter(([,r])=>r.ticket_count>0).sort((a,b)=>b[1].ticket_count-a[1].ticket_count);
+      const peak=payload.daily.reduce((best,r)=>r.tickets>(best?.tickets||0)?r:best,null);
+      const metrics=state.mode==="climate"?[["Chuva estimada",state.day?climate.rain_mm:climate.precipitation_mm,"mm"],[state.day?"Incidentes no dia":"Dias chuvosos",state.day?incidents:climate.rainy_days,""],["Temperatura média",climate.temperature_mean_c,"°C"],["Rajada máxima",climate.gust_max_kmh,"km/h"]]:["base","projects"].includes(state.mode)?[["Links CMDB",summary.filtered_source_total,""],["UFs com links",Object.values(summary.states).filter(r=>r.total_links>0).length,""],["Projetos",distinct("project_counts"),""],["Provedores",distinct("provider_counts"),""]]:state.mode==="motives"?[["Categoria predominante",reasons[0]?.[0]||"Sem classificação",""],["UF com mais incidentes",stateRanking[0]?.[0]||"Sem dados",""],["Dia de maior concentração",peak?peak.date.slice(8)+"/"+peak.date.slice(5,7):"Sem dados",""],["Dias coincidentes com chuva",payload.climate.coincident_days," dias"]]:[[state.day?"Incidentes no dia":"Incidentes válidos",incidents,""],["Links afetados no mês",summary.affected_link_count,""],["Links reincidentes no mês",summary.recurrence_link_count,""],["Motivo predominante",reasons[0]?.[0]||"Sem classificação",""]];
       $("[data-weather-metrics]").innerHTML=metrics.map(([label,value,unit])=>`<div><strong>${quantity(value,unit)}</strong><span>${escape(label)}${label==="Dias chuvosos"&&climate.rainy_days!=null?" · "+climate.rainy_days+" dias":""}</span></div>`).join("");
-      $("[data-weather-chart]").innerHTML=dailyChart(payload.daily);
+      $("[data-weather-chart]").innerHTML=dailyChart(payload.daily,state.layer);
       const projected=Object.entries(summary.distribution_projected||{}).filter(([,v])=>v>0);
       const projectedTotal=projected.reduce((n,[,v])=>n+v,0);
       $("[data-geo-reasons]").innerHTML='<h3>Classificações registradas · mês</h3>'+reasons.slice(0,5).map(([label,v])=>`<button type="button" data-explore-category="${categoryKeys[label]||""}" title="Explorar esta classificação no mapa"><span>${escape(label)}</span><b>${fmt.format(v)}</b></button>`).join("")+(projected.length?'<span>Cenário estimado · distribuição por pesos</span><div class="geo-scenario" aria-label="Cenário estimado; não representa diagnóstico confirmado">'+projected.map(([label,v])=>`<span style="flex:${v}" title="${escape(label)}: ${v} estimados (${quantity(v/projectedTotal*100)}%). Não é diagnóstico registrado."></span>`).join("")+"</div>":"");
-      const regionLinks=Object.fromEntries(Object.keys(regions).map(r=>[r,regions[r].reduce((n,uf)=>n+(summary.states[uf]?.total_links||0),0)]));
-      $("[data-geo-reasons]").insertAdjacentHTML("beforeend",'<h3>Links CMDB por região</h3>'+Object.entries(regionLinks).filter(([,n])=>n>0).map(([label,n])=>`<p><span>${label}</span><b>${fmt.format(n)}</b></p>`).join(""));
+      if(["base","projects"].includes(state.mode)){
+        const counts={};Object.values(summary.states).forEach(r=>Object.entries(r.project_counts||{}).forEach(([name,n])=>counts[name]=(counts[name]||0)+n));
+        $("[data-weather-chart]").innerHTML='<h3>Projetos · links CMDB atuais</h3>'+Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([name,n])=>`<p class="geo-analysis-row"><span>${escape(name)}</span><b>${fmt.format(n)}</b></p>`).join("");
+        const regionLinks=Object.fromEntries(Object.keys(regions).map(r=>[r,regions[r].reduce((n,uf)=>n+(summary.states[uf]?.total_links||0),0)]));
+        $("[data-geo-reasons]").innerHTML='<h3>Links CMDB por região</h3>'+Object.entries(regionLinks).filter(([,n])=>n>0).map(([label,n])=>`<p><span>${label}</span><b>${fmt.format(n)}</b></p>`).join("");
+      }else{
+        $("[data-geo-reasons]").insertAdjacentHTML("beforeend",'<h3>Incidentes por UF · mês</h3>'+stateRanking.slice(0,5).map(([code,r])=>`<p><span>${code}</span><b>${fmt.format(r.ticket_count)}</b></p>`).join(""));
+      }
       const notes=[];
       if(payload.climate.available){const climate=payload.climate;notes.push(`${climate.covered_ufs} UF(s) com cache · ${climate.points} células · completude ${quantity(climate.completeness*100,"%")}`);if(climate.stale)notes.push("Cache vencido");if(climate.partial)notes.push("Cobertura temporal parcial");}
-      else notes.push(payload.collection?.message||"Dados climáticos indisponíveis.");
-      if(payload.missing_ufs.length)notes.push("Sem clima: "+payload.missing_ufs.join(", "));
+      if(payload.collection?.message)notes.push(payload.collection.message);
+      else if(!payload.climate.available)notes.push("Dados climáticos indisponíveis.");
+      if(payload.missing_ufs.length&&payload.climate.available)notes.push(`${payload.missing_ufs.length} UF(s) sem cache`);
       status.textContent=notes.join(" · ");
-      status.dataset.state=payload.collection?.status||"unavailable";
+      status.dataset.state=payload.collection?.configuration_status==="not_configured"?"not_configured":payload.collection?.status||"unavailable";
+      const canCollect=Boolean(payload.collection?.can_collect),busy=["queued","running"].includes(payload.collection?.status);
+      const form=$("[data-geo-collect-form]");if(form)form.hidden=!canCollect||busy;
+      const configure=$("[data-weather-configure]");if(configure)configure.hidden=payload.collection?.configuration_status==="ready";
+      clearTimeout(pollTimer);
+      if(busy)pollTimer=setTimeout(()=>update(),15000);
       const q=summary.reconciliation;
       $("[data-geo-quality]").textContent=q?`${q.incidents} incidentes distintos · ${q.classified} classificados · ${q.unclassified} sem classificação confiável · ${q.with_uf} com UF · ${q.without_uf} sem localização vinculada · ${q.affected_links} links afetados distintos · ${q.recurrent_links} reincidentes. Ocorrências estaduais: ${q.state_occurrences}; não somar para obter o total nacional.`:payload.notice;
+      if(payload.missing_ufs.length)$("[data-geo-quality]").append(document.createTextNode(" Sem clima: "+payload.missing_ufs.join(", ")+"."));
       if(payload.climate.available){const c=payload.climate;$("[data-geo-quality]").append(document.createTextNode(` Chuva elevada: ${quantity(c.heavy_rain_days)} dias com média territorial ≥ 20 mm. Coincidência: ${quantity(c.coincident_days)} dias com chuva ≥ 1 mm e incidentes técnicos; não confirma causa. Temperatura: ${quantity(c.temperature_min_c,"°C")} a ${quantity(c.temperature_max_c,"°C")}. Vento máximo: ${quantity(c.wind_max_kmh,"km/h")}; direção média aproximada: ${quantity(c.wind_direction_deg,"°")}.`));}
       onWeather(payload,state.day);
   }
@@ -82,11 +125,20 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
   uf.addEventListener("change",()=>selectUF(uf.value));
   month?.addEventListener("change",()=>{if(!month.value||!month.reportValidity())return;state.period=month.value;state.dateFrom="";state.dateTo="";changed();});
   category?.addEventListener("change",()=>{state.category=category.value;changed();});
-  layer.addEventListener("change",()=>{state.layer=layer.value;if(["rain","wind","wind_speed","temperature","temperature_min","temperature_max","direction","correlation"].includes(state.layer))state.mode="climate";else if(state.layer==="calls"||state.layer==="motives")state.mode="calls";changed();});
+  layer.addEventListener("change",()=>{state.layer=layer.value;if(["rain","wind","wind_speed","temperature","temperature_min","temperature_max","direction","correlation"].includes(state.layer))state.mode="climate";else if(state.layer==="calls"||state.layer==="motives")state.mode=state.layer;changed();});
   $("[data-weather-refresh]").addEventListener("click",changed);
-  $("[data-weather-toggle]").addEventListener("click",event=>{const content=$("#geo-intelligence-content"),open=content.hidden;content.hidden=!open;event.currentTarget.setAttribute("aria-expanded",String(open));event.currentTarget.textContent=open?"Recolher":"Análises";});
+  $("[data-weather-toggle]").addEventListener("click",()=>setPanelState(panel.dataset.panelState==="collapsed"?"summary":"collapsed"));
+  $("[data-analysis-expand]").addEventListener("click",()=>setPanelState(panel.dataset.panelState==="expanded"?"summary":"expanded"));
+  $("[data-analysis-close]").addEventListener("click",()=>{setPanelState("collapsed");$("[data-weather-toggle]").focus();});
+  $("[data-timeline-expand]").addEventListener("click",()=>setPanelState(panel.dataset.panelState==="expanded"?"summary":"expanded"));
+  $("[data-timeline-reset]").addEventListener("click",()=>{pause();dayInput.value=0;showDay();});
   $("[data-geo-reasons]").addEventListener("click",event=>{const button=event.target.closest("[data-explore-category]");if(!button)return;state.category=button.dataset.exploreCategory;state.mode="calls";state.layer="calls";changed();});
   const pause=()=>{clearInterval(timelineTimer);timelineTimer=0;play.textContent="▶";play.setAttribute("aria-label","Reproduzir dias");};
+  function syncMode(){
+    timeline.hidden=!["calls","motives","climate"].includes(state.mode);
+    page.classList.toggle("has-timeline",!timeline.hidden);
+    if(timeline.hidden){pause();state.day="";}
+  }
   function showDay(){state.day=current?.daily[Number(dayInput.value)-1]?.date||"";render();}
   dayInput.addEventListener("input",()=>{pause();showDay();});
   function start(){pause();if(!current)return;play.textContent="Ⅱ";play.setAttribute("aria-label","Pausar reprodução");timelineTimer=setInterval(()=>{dayInput.value=Number(dayInput.value)>=Number(dayInput.max)?1:Number(dayInput.value)+1;showDay();},Number($("[data-timeline-speed]").value));}
@@ -104,9 +156,9 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
       status.dataset.state=result.status||"unavailable";
       if(!response.ok)throw new Error(result.message||result.error?.message||result.error||"Não foi possível solicitar a coleta.");
       status.textContent=result.message;
-      clearTimeout(pollTimer);pollTimer=setTimeout(()=>update(),15000);
+      await update();
     }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
   });
   syncControls();
-  return {update,allowedUFs:()=>regions[state.region]||allUF};
+  return {update,syncMode,allowedUFs:()=>regions[state.region]||allUF};
 }

@@ -1,19 +1,31 @@
 {% load static %}
-<details class="geo-filter-panel"><summary>Filtros <span aria-hidden="true">⌄</span></summary><header class="geo-toolbar geo-toolbar--map">
-  <div class="geo-heading geo-heading--map">
-    <span class="section-kicker">NOC ATACADO <span>/</span> GEOGRAFIA</span>
-    <div class="geo-heading-line"><h1 id="geo-title">Base de links</h1><span class="source-badge" data-source-badge><i></i>CMDB real · base atual</span></div>
-  </div>
-  <div class="geo-context-controls" aria-label="Contexto da análise">
-    <div class="operator-control"><span class="control-caption">CLIENTE</span><div class="geo-filters" role="group" aria-label="Filtrar cliente contratante">
-      <button class="filter-chip is-selected" type="button" data-client="all" aria-pressed="true">Todas</button><button class="filter-chip" type="button" data-client="Claro" aria-pressed="false">Claro</button><button class="filter-chip" type="button" data-client="Vivo" aria-pressed="false">Vivo</button><button class="filter-chip" type="button" data-client="Algar" aria-pressed="false">Algar</button><button class="filter-chip" type="button" data-client="other" aria-pressed="false">Outras</button>
-    </div></div>
-    <div class="future-filters"><label><span>Projeto</span><select data-project-filter aria-label="Filtrar projeto"><option value="">Todos os projetos</option></select></label>
-      <details class="map-more-filters" data-more-filters><summary aria-controls="map-more-filters-panel">Mais filtros</summary><div class="map-more-filters-content" id="map-more-filters-panel" data-more-filters-content><label data-period-control hidden><span>Período</span><select data-period-filter aria-label="Selecionar período"><option value="this_month">Este mês</option><option value="last_month">Mês anterior</option><option value="last_30">Últimos 30 dias</option><option value="last_90">Últimos 90 dias</option><option value="custom">Personalizado</option></select></label><label><span>Provedor / ISP</span><select data-provider-filter><option value="">Todos</option></select></label><div data-ticket-filters hidden><label><span>Status operacional</span><select data-status-filter><option value="">Todos</option><option value="OPEN">Aberto</option><option value="PENDING">Pendente</option><option value="SCHEDULED">Agendado</option><option value="RESOLVED">Resolvido</option></select></label><label><span>Prioridade OTRS</span><select data-priority-filter><option value="">Todas</option></select></label><label><span>Status ARION</span><select data-arion-status-filter><option value="">Todos</option></select></label><label><span>Responsável ARION</span><select data-assignee-filter><option value="">Todos</option><option value="unassigned">Sem responsável</option></select></label><label class="motives-select" data-motives-select hidden><span>Motivo de fechamento</span><select data-motive-filter aria-label="Filtrar motivo de fechamento"><option value="">Todos os motivos</option></select></label></div></div></details>
+<details class="geo-filter-panel" data-more-filters>
+  <summary aria-controls="map-more-filters-panel">Filtros <span data-filter-count>0</span><span aria-hidden="true">⌄</span></summary>
+  <div class="geo-toolbar geo-toolbar--map" id="map-more-filters-panel">
+    <header class="geo-filter-header"><strong>Filtros do Mapa</strong><button type="button" class="geo-text-action" data-filters-close aria-label="Fechar filtros">Fechar</button></header>
+    <div class="geo-heading" hidden><h1 id="geo-title">Base de links</h1><span data-source-badge></span></div>
+    <div class="map-more-filters-content" data-more-filters-content>
+      <details class="geo-filter-section" open><summary>Cliente e projeto</summary><div class="geo-filter-fields">
+        <div class="operator-control"><span class="control-caption">Cliente</span><div class="geo-filters" role="group" aria-label="Filtrar cliente contratante">
+          <button class="filter-chip is-selected" type="button" data-client="all" aria-pressed="true">Todas</button><button class="filter-chip" type="button" data-client="Claro" aria-pressed="false">Claro</button><button class="filter-chip" type="button" data-client="Vivo" aria-pressed="false">Vivo</button><button class="filter-chip" type="button" data-client="Algar" aria-pressed="false">Algar</button><button class="filter-chip" type="button" data-client="other" aria-pressed="false">Outras</button>
+        </div></div>
+        {% if presentation %}<p class="geo-fixed-client">Cliente fixado: {{ presentation_client }}</p>{% endif %}
+        <label>Projeto<select data-project-filter aria-label="Filtrar projeto"><option value="">Todos os projetos</option></select></label>
+      </div></details>
+      {% include "mapa/_intelligence.html" %}
+      <details class="geo-filter-section"><summary>ISP e dados operacionais</summary><div class="geo-filter-fields">
+        <label>Provedor / ISP<select data-provider-filter><option value="">Todos</option></select></label>
+        <div data-ticket-filters hidden>
+          <label>Status operacional<select data-status-filter><option value="">Todos</option><option value="OPEN">Aberto</option><option value="PENDING">Pendente</option><option value="SCHEDULED">Agendado</option><option value="RESOLVED">Resolvido</option></select></label>
+          <label>Prioridade OTRS<select data-priority-filter><option value="">Todas</option></select></label>
+          <label {% if presentation %}hidden{% endif %}>Status ARION<select data-arion-status-filter><option value="">Todos</option></select></label>
+          <label {% if presentation %}hidden{% endif %}>Responsável ARION<select data-assignee-filter><option value="">Todos</option><option value="unassigned">Sem responsável</option></select></label>
+        </div>
+      </div></details>
     </div>
-    <div class="geo-custom-period" data-custom-period hidden><label>De <input type="date" data-date-from></label><label>Até <input type="date" data-date-to></label><button type="button" data-apply-period>Aplicar</button></div>
+    <footer class="geo-filter-footer"><button type="button" class="geo-text-action" data-filters-apply>Aplicar</button><button type="button" class="geo-text-action" data-filters-clear>Limpar</button><button type="button" class="geo-text-action" data-filters-close>Fechar</button></footer>
   </div>
-{% include "mapa/_intelligence.html" %}</header></details>  <div class="geo-analysis-controls">
+</details>  <div class="geo-analysis-controls">
     <div class="mode-control"><span class="control-caption">MODO DA ANÁLISE</span><div class="mode-filters" role="group" aria-label="Modo geográfico">
         <button class="mode-chip is-selected" type="button" data-mode="base" aria-pressed="true">Base</button>
         <button class="mode-chip" type="button" data-mode="projects" aria-pressed="false">Projetos</button>

@@ -56,12 +56,13 @@ def presentation_payload(user,params):
     # Explicit allowlist: no original motives, titles, tickets, accounts or financial data.
     return {"mode":params.get("mode","calls"),"states":states,"period":source["period"],"region_link_counts":region_links,
             "region":source["region"],"allowed_ufs":source["allowed_ufs"],"projects":source["projects"],
-            "selected_project":params.get("project",""),"providers":source["providers"],"clients":[params["client"]],
+            "selected_project":params.get("project",""),"providers":source["providers"],"clients":[params["client"]],"priority_options":source.get("priority_options",[]),
             "filtered_source_total":source["filtered_source_total"],"source_total":source["filtered_source_total"],
             "ticket_count":source["ticket_count"],"affected_link_count":source["affected_link_count"],
             "recurrence_link_count":source["recurrence_link_count"],"recurrence_ticket_count":source["recurrence_ticket_count"],
             "terminal_ticket_count":source["ticket_count"],
             "ticket_reason_counts":technical,"category_counts":technical,"distribution_projected":projection,
             "daily_counts":source["daily_counts"],"technical_daily_counts":source["technical_daily_counts"],
+            "definitions":{"source_total":"Links CMDB no recorte autorizado; não representa tickets.","filtered_source_total":"Links CMDB no recorte autorizado; não representa tickets.","ticket_count":"Incidentes válidos distintos por TicketID, incluindo os sem UF elegível.","category_counts":"Classificações técnicas registradas; não inclui estimativas.","distribution_projected":"Estimativa estatística separada das classificações registradas.","technical_daily_counts":"Tickets distintos com classificação técnica comprovada por dia de criação."},
             "projection_label":"Distribuição projetada · estimativa, não diagnóstico",
             "reasons":list(technical),"reason_options":[{"value":o["value"],"label":o["label"]} for o in source["reason_options"] if IncidentRules.category(o["value"]) not in {"financeiro","sem_classificacao"}],"presentation":True}

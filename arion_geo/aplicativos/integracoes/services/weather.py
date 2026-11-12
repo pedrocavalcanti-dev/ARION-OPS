@@ -27,7 +27,9 @@ MODEL = "era5"
 def collection_readiness(integration=None):
     """Safe configuration state. No network, secrets or implicit activation."""
     integration = integration or ExternalAPIIntegration.objects.filter(provider="open_meteo").first()
-    if not integration or not integration.enabled:
+    if not integration:
+        return {"status":"disabled", "configuration_status":"not_configured", "message":"Não configurado. Cadastre a integração climática na Central de Integrações."}
+    if not integration.enabled:
         return {"status":"disabled", "message":"Integração climática desabilitada. Configure e habilite na Central de Integrações."}
     cfg = integration.config or {}
     mode = cfg.get("mode", "evaluation")
