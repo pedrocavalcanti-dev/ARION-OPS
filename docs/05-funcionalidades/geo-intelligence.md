@@ -2,6 +2,8 @@
 
 O Mapa 2D existente permanece a superfície de exploração, em layout focado na viewport com filtros flutuantes, seis modos (Base, Projetos, Chamados, Reincidência, Motivos e Clima), indicadores compactos, análises expansíveis e drawer por UF. Região e UF são enquadradas pela geometria; exploração manual é preservada no resize. CMDB e OTRS continuam como fontes oficiais; catálogo geográfico e reanálise meteorológica são contexto analítico. Não há escrita nos bancos remotos.
 
+Análises inicia recolhido como dock, abre resumo com até quatro indicadores do modo e expande com altura limitada e rolagem interna. Os filtros usam um único drawer, cabeçalho/rodapé fixos e seis seções recolhíveis, sem rolagem horizontal. Seleções continuam usando o estado e as consultas existentes; Aplicar atualiza o recorte e fecha o drawer, Limpar reutiliza a limpeza atual. As 27 siglas têm prioridade sobre valores meteorológicos desde o enquadramento nacional; estados pequenos usam linhas-guia. A área útil considera os painéis abertos sem substituir a câmera explorada manualmente.
+
 ## Recortes e indicadores
 
 - Brasil e as cinco macrorregiões oficiais do IBGE. Sudeste: ES, MG, RJ e SP.
@@ -13,7 +15,7 @@ O Mapa 2D existente permanece a superfície de exploração, em layout focado na
 - As categorias são derivadas do catálogo de motivos confirmado, sem regravar `closing_code_raw`. Valores sem mapeamento confiável ficam sem classificação. Motivos financeiros válidos permanecem na contagem interna.
 - Um ticket com vários links conta uma vez no total; pode aparecer em mais de uma UF vinculada. Não some contagens estaduais para obter o total nacional. Tickets sem localização não são atribuídos artificialmente a uma região.
 
-Camadas: análise existente, cliente/projeto, incidentes válidos, categoria dominante, chuva, temperatura média/mínima/máxima, vento, rajada, direção aproximada e dias de coincidência temporal. A timeline percorre o mês, com reprodução/pausa/velocidade, atualizando cores, valores meteorológicos e incidentes diários a partir do cache local. Transições e marcadores são representações territoriais discretas, não observações de circuito. Cinza indica ausência de dados; zero meteorológico válido permanece distinto de ausência. O gráfico identifica chuva em mm no eixo esquerdo e incidentes no eixo direito. Não há radar, anomalia climatológica ou atribuição automática de causa.
+Camadas: análise existente, cliente/projeto, incidentes válidos, categoria dominante, chuva, temperatura média/mínima/máxima, vento, rajada, direção aproximada e dias de coincidência temporal. A timeline independente das análises aparece em Chamados, Motivos e Clima, com reprodução/pausa/velocidade/reinício e acesso à série detalhada. Base, Projetos e Reincidência ocultam e pausam a reprodução. Cores, valores meteorológicos e incidentes diários reutilizam as séries locais, sem consulta ou reenquadramento por dia. Transições e marcadores são representações territoriais discretas, não observações de circuito. Cinza indica ausência de dados; zero observado permanece distinto de ausência. O gráfico acompanha chuva, temperatura ou vento, com variável/unidade no eixo esquerdo e incidentes no direito. Na comparação combinada, a série factual inclui apenas classificações técnicas conhecidas; registros sem classificação permanecem no total e fora da coincidência. Não há radar, anomalia climatológica ou atribuição automática de causa.
 
 ## IBGE
 
@@ -101,7 +103,7 @@ Temperatura média e agregação diária foram conferidas no [registro oficial d
 
 ## Diagnóstico e reconciliação
 
-A coleta usa estados `disabled`, `incomplete`, `incompatible`, `unauthorized`, `queued`, `running`, `completed`, `unavailable` e `invalid`. Falhas locais são explicadas antes de qualquer chamada externa. Abertura do Mapa apenas lê configuração/cache/jobs; permissão e CSRF seguem obrigatórios na solicitação. No DEV inspecionado, o antigo HTTP 400 vinha de integração inexistente, sem job/cache, e não da API Open-Meteo.
+A coleta usa estados `disabled`, `incomplete`, `incompatible`, `unauthorized`, `awaiting_collection`, `queued`, `running`, `completed`, `failed`, `unavailable` e `invalid`. Cadastro ausente mantém POST `409 / disabled` com `configuration_status=not_configured`. A leitura mensal informa configuração, possibilidade de coleta e disponibilidade de cache separadamente. Administradores autorizados recebem a ação Configurar integração; o botão de coleta depende de configuração apta e UF elegível. Fila/processamento têm acompanhamento por leitura local a cada 15 segundos. Falhas locais são explicadas antes de qualquer chamada externa. Abertura do Mapa apenas lê configuração/cache/jobs; permissão e CSRF seguem obrigatórios na solicitação. No DEV inspecionado, o antigo HTTP 400 vinha de integração inexistente, sem job/cache, e não da API Open-Meteo. O [ensaio pela aplicação](../06-integracoes-e-dados/open-meteo-homologacao.md) documenta o procedimento e os bloqueios reais.
 
 O resumo interno inclui `reconciliation`: incidentes distintos, classificados/não classificados, com/sem UF, links afetados/reincidentes distintos e ocorrências estaduais. Tickets de links sem UF confiável permanecem no total e nas séries, sem receber localização inventada. Esse diagnóstico não é enviado à apresentação como campo interno.
 
