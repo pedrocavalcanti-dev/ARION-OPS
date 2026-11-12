@@ -124,5 +124,9 @@
   </div>
 </section>
 
+<section class="integration-section"><h2>GEO Intelligence</h2><div class="integration-grid">
+<a class="integration-card" href="{% url 'configuracoes:integracoes:geo-detail' 'ibge' %}"><h3>IBGE — Regiões e Estados</h3><p>Geografia / Dados Públicos</p><span class="integration-link">Catálogo oficial, cache e sincronização →</span></a>
+<a class="integration-card" href="{% url 'configuracoes:integracoes:geo-detail' 'open_meteo' %}"><h3>Open-Meteo — Clima e Histórico</h3><p>Meteorologia / GEO Intelligence</p><span class="integration-link">Licença, coleta mensal e saúde →</span></a>
+</div></section>
 <p class="integration-search-empty" hidden>Nenhuma integração corresponde à busca.</p>
 {% endblock %}

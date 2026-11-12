@@ -55,6 +55,7 @@ class Command(BaseCommand):
                 self._schedule_once(timezone.now())
                 self._backlog_history(timezone.now())
                 self._cancellation_intake()
+                self._geo_intelligence()
                 if options["once"]:
                     break
                 time.sleep(interval)
@@ -64,6 +65,13 @@ class Command(BaseCommand):
             worker_stop.set()
             worker_heartbeat.join(timeout=2)
             worker.release()
+
+    def _geo_intelligence(self):
+        from aplicativos.integracoes.services.geo_scheduler import scheduler_tick
+        try:
+            scheduler_tick()
+        except Exception as exc:
+            self.stderr.write(self.style.WARNING("[GEO] " + self._safe_error_summary(exc)))
 
     def _schedule_once(self, now):
         cmdb_state, _ = IntegrationSyncState.objects.get_or_create(key="cmdb")

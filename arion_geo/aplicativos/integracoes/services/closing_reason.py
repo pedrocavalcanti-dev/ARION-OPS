@@ -22,6 +22,9 @@ class ClosingReasonCanonicalizer:
     """
 
     REASONS = (
+        ClosingReason("sem_atuacao", "Sem atuação", ("SemAtuacao", "Sem Atuação", "Sem atuacao", "Sem atuação")),
+        ClosingReason("improcedente", "Improcedente", ("Improcedente",)),
+        ClosingReason("reset_remoto", "Reset remoto", ("ResetRemoto", "Reset remoto", "Reset Remoto")),
         ClosingReason("falha_massiva", "Falha Massiva", ("FalhaMassiva", "Falha Massiva", "Defeito Massivo")),
         ClosingReason("pendencia_financeira", "Pendência Financeira", ("PendenciaFinanceira", "Pendência Financeira")),
         ClosingReason("configuracao_vlan", "Configuração de VLAN", ("ConfiguracaoVlan", "Configuração de VLAN")),

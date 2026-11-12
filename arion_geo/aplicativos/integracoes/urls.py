@@ -1,10 +1,15 @@
 from django.urls import path
 
 from . import views
+from . import geo_views
 
 app_name = "integracoes"
 
 urlpatterns = [
+    path("geo/<str:provider>/", geo_views.detail, name="geo-detail"),
+    path("geo/<str:provider>/salvar/", geo_views.save, name="geo-save"),
+    path("geo/<str:provider>/testar/", geo_views.test, name="geo-test"),
+    path("geo/<str:provider>/sincronizar/", geo_views.sync, name="geo-sync"),
     path("", views.home, name="home"),
     path("cmdb/", views.cmdb_detail, name="cmdb"),
     path("cmdb/testar/", views.cmdb_test, name="cmdb-test"),

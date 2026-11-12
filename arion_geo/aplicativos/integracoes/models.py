@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Integration(models.Model):
@@ -133,6 +134,8 @@ class ExternalAPIIntegration(models.Model):
     class Provider(models.TextChoices):
         BREVO = "brevo", "Brevo"
         MAPBOX = "mapbox", "Mapbox"
+        IBGE = "ibge", "IBGE — Regiões e Estados"
+        OPEN_METEO = "open_meteo", "Open-Meteo — Clima e Histórico"
 
     class Health(models.TextChoices):
         NOT_TESTED = "not_tested", "Ainda não testada"
@@ -163,6 +166,10 @@ class ExternalAPIIntegration(models.Model):
 
     @property
     def credential_configured(self):
+        if self.provider == self.Provider.IBGE:
+            return True
+        if self.provider == self.Provider.OPEN_METEO:
+            return bool(self.secret_ciphertext) if self.config.get("mode") == "commercial" else bool(self.config.get("evaluation_authorized"))
         if self.provider == self.Provider.BREVO:
             return bool(self.secret_ciphertext or self.smtp_secret_ciphertext)
         return bool((self.config or {}).get("public_token"))
@@ -198,6 +205,52 @@ class ExternalAPIHealthCheck(models.Model):
         ordering = ("-created_at", "-pk")
         verbose_name = "teste de saúde de API externa"
         verbose_name_plural = "testes de saúde de APIs externas"
+
+
+class GeographyCatalog(models.Model):
+    """Last complete validated catalog; map opening never calls IBGE."""
+    key = models.CharField(max_length=20, unique=True, default="brazil")
+    regions = models.JSONField(default=list)
+    states = models.JSONField(default=list)
+    source = models.CharField(max_length=30, default="ibge")
+    synced_at = models.DateTimeField()
+
+
+class WeatherMonth(models.Model):
+    uf = models.CharField(max_length=2)
+    region = models.CharField(max_length=2)
+    period = models.DateField()
+    source = models.CharField(max_length=30, default="open_meteo")
+    model = models.CharField(max_length=30, default="era5")
+    method = models.CharField(max_length=40, default="area-grid-v1")
+    # Requested coordinates, returned cells, daily variable/value/unit and area weights.
+    samples = models.JSONField(default=list)
+    summary = models.JSONField(default=dict)
+    completeness = models.FloatField(default=0)
+    collected_at = models.DateTimeField()
+    expires_at = models.DateTimeField(db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("uf", "period", "source", "model", "method"), name="weather_uf_month_source_unique")]
+        indexes = [models.Index(fields=("period", "uf"), name="weather_period_uf_idx")]
+
+
+class WeatherCollectionJob(models.Model):
+    """Idempotent, bounded on-demand queue consumed by the existing worker."""
+    uf = models.CharField(max_length=2)
+    period = models.DateField()
+    status = models.CharField(max_length=12, default="pending", choices=(("pending", "Pendente"), ("running", "Coletando"), ("success", "Concluído"), ("error", "Falhou")))
+    attempts = models.PositiveSmallIntegerField(default=0)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    last_error = models.CharField(max_length=240, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("uf", "period"), name="weather_job_uf_month_unique")]
+        indexes = [models.Index(fields=("status", "next_attempt_at"), name="weather_job_due_idx")]
 
 
 class CMDBOperatorMirror(models.Model):
