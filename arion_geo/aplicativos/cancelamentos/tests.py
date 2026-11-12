@@ -258,13 +258,13 @@ class CancellationTests(TestCase):
         self.assertEqual(process.stage, "COMPLETED")
         self.assertIsNotNone(process.completed_at)
 
-    def test_pending_blocks_silent_completion_and_exception_requires_evidence(self):
+    def test_pending_blocks_silent_completion_and_exception_requires_reason(self):
         process = self.approve()
         self.confirm(process)
         self.act(process, "equipment_add", description="ONU", status="NOT_RETURNED")
         with self.assertRaises(ValidationError):
-            self.act(process, "complete", exception_reason="Encaminhado à área responsável")
-        self.act(process, "complete", exception_reason="Área patrimonial assumiu", exception_evidence="Processo patrimonial 1")
+            self.act(process, "complete", exception_reason="   ")
+        self.act(process, "complete", exception_reason="Área patrimonial assumiu")
         process.refresh_from_db()
         self.assertTrue(process.completion_exception)
         self.assertEqual(process.equipment.get().status, "NOT_RETURNED")

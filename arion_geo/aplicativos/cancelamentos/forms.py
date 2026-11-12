@@ -169,7 +169,6 @@ class HandoffForm(forms.ModelForm):
 class CompletionForm(OperationalForm):
     exception_reason = forms.CharField(label="Justificativa de exceção (somente com permissão específica)",
                                        max_length=3000, required=False, widget=forms.Textarea(attrs={"rows": 3}))
-    exception_evidence = forms.CharField(label="Evidência da exceção", max_length=1000, required=False)
 
 
 class StatusForm(OperationalForm):

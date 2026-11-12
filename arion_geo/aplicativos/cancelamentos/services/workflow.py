@@ -437,9 +437,9 @@ def act_on_process(*, request, pk, action, data):
         if blockers:
             if values["exception_reason"]:
                 require(request.user, "override_cancellation_completion")
-            if not values["exception_reason"].strip() or not values["exception_evidence"].strip():
-                raise ValidationError(blockers + ["Exceção exige permissão específica, justificativa e evidência."])
-            process.completion_exception = f"{values['exception_reason']}\nEvidência: {values['exception_evidence']}"
+            if not values["exception_reason"].strip():
+                raise ValidationError(blockers + ["Exceção exige permissão específica e justificativa."])
+            process.completion_exception = values["exception_reason"].strip()
         process.stage = CancellationProcess.Stage.COMPLETED
         process.completed_at, process.completed_by = timezone.now(), request.user
         description = "Conclusão operacional NOC registrada. Situação de pagamento permanece independente."
