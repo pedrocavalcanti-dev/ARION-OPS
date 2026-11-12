@@ -1,8 +1,8 @@
-# GEO Intelligence regional e mensal
+# GEO Intelligence nacional, regional e local
 
 O Mapa 2D existente permanece a superfície de exploração, em layout focado na viewport com filtros flutuantes, seis modos (Base, Projetos, Chamados, Reincidência, Motivos e Clima), indicadores compactos, análises expansíveis e drawer por UF. Região e UF são enquadradas pela geometria; exploração manual é preservada no resize. CMDB e OTRS continuam como fontes oficiais; catálogo geográfico e reanálise meteorológica são contexto analítico. Não há escrita nos bancos remotos.
 
-Análises inicia recolhido como dock, abre resumo com até quatro indicadores do modo e expande com altura limitada e rolagem interna. Os filtros usam um único drawer, cabeçalho/rodapé fixos e seis seções recolhíveis, sem rolagem horizontal. Seleções continuam usando o estado e as consultas existentes; Aplicar atualiza o recorte e fecha o drawer, Limpar reutiliza a limpeza atual. As 27 siglas têm prioridade sobre valores meteorológicos desde o enquadramento nacional; estados pequenos usam linhas-guia. A área útil considera os painéis abertos sem substituir a câmera explorada manualmente.
+Análises inicia recolhido como dock, abre resumo com quatro indicadores e expande em drawer lateral direito (painel inferior no mobile), com uma rolagem principal e seções recolhíveis. A faixa compacta sob o cabeçalho reúne os modos e o período. Ver [cobertura nacional, investigação municipal, ícones e filtros](geo-intelligence-nacional-local.md). Os filtros usam um único drawer, cabeçalho/rodapé fixos e seis seções recolhíveis, sem rolagem horizontal. Seleções continuam usando o estado e as consultas existentes; Aplicar atualiza o recorte e fecha o drawer, Limpar reutiliza a limpeza atual. As 27 siglas têm prioridade sobre valores meteorológicos desde o enquadramento nacional; estados pequenos usam linhas-guia. A área útil considera os painéis abertos sem substituir a câmera explorada manualmente.
 
 ## Recortes e indicadores
 
@@ -43,7 +43,7 @@ TLS continua validado, redirects são recusados e URLs não aceitam credenciais,
 
 Mantidos timeout de 2–30 s, até duas tentativas adicionais para falhas transitórias, orçamento diário incluindo tentativas e limite de 4 MB por resposta/descompactação. HTTP 429 interrompe repetições imediatas, respeita `Retry-After` na fila e não troca silenciosamente para outra fonte. Falhas não armazenam segredo, URL com chave, corpo externo ou exceção bruta.
 
-Testar conectividade valida uma célula do último mês completo e não a grava como estimativa estadual. A Central solicita uma UF/mês dentro do Data Scope, com `run_integrations`, `view_map` e CSRF; o Mapa mantém seu recorte autorizado existente. O Worker processa as mesmas filas/caches territoriais `area-grid-v2`, uma UF por vez sob lease. GETs do Mapa não consultam a API meteorológica.
+Testar conectividade valida uma célula do último mês completo e não a grava como estimativa estadual. A Central permite Brasil, macrorregião ou UF/mês com prévia assinada de volume, controles de pausa/retomada/cancelamento, `run_integrations`, `view_map`, CSRF e Data Scope; o Mapa mantém seu recorte autorizado existente. O Worker processa as mesmas filas/caches territoriais `area-grid-v2`, uma UF por vez sob lease. GETs do Mapa não consultam a API meteorológica.
 
 Agendamento é opcional em qualquer fonte e exige seleção explícita de UFs. Somente esses recortes são atualizados para o último mês completo; não há coleta nacional implícita. Jobs antigos configurados para atualização mas sem UFs ficam sem agendamento até selecionar os recortes. Para ensaio isolado: `integration_worker --geo-only --once` executa somente GEO e encerra, sem sincronizar outros módulos. O Worker normal mantém sua operação existente.
 
@@ -86,6 +86,7 @@ Configuração opcional:
 |---|---|---|
 | `/mapa/intelligence/` | GET | view_map + Data Scope; resumo mensal e cache climático |
 | `/mapa/clima/coletar/` | POST | view_map + run_integrations + CSRF; enfileira apenas UFs do recorte autorizado |
+| `/mapa/clima/local/` | GET / POST | view_map + escopo; lê cache municipal/janela de TicketID; coleta também exige run_integrations + CSRF |
 | `/mapa/apresentar/` | GET / POST | view_map + present_geo; seleção validada e criação da sessão |
 | `/mapa/apresentacao/<chave>/` | GET | Página executiva vinculada à sessão |
 | `…/dados/`, `…/detalhes/`, `…/intelligence/` | GET | Mesmo escopo fixo; agregados sanitizados |
@@ -94,7 +95,7 @@ Configuração opcional:
 | `/configuracoes/administracao/integracoes/geo/open_meteo/` | GET | view_integrations; fonte, configuração, consumo e saúde |
 | `…/salvar/` | POST | manage_integrations + CSRF |
 | `…/testar/` | POST | run_integrations + CSRF; lease e intervalo mínimo entre testes |
-| `…/sincronizar/` | POST | run_integrations + CSRF; IBGE ou uma UF/mês climática, esta também com view_map + Data Scope |
+| `…/sincronizar/` | POST | run_integrations + CSRF; IBGE ou prévia/controle/coleta de Brasil, região ou UF/mês, com view_map + Data Scope |
 
 Os endpoints existentes de agregados e detalhes do Mapa também aceitam `region` e `category`. Filtros mensais usam `period=AAAA-MM`.
 

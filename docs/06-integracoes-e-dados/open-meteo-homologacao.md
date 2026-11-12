@@ -2,6 +2,8 @@
 
 ## Estado validado em 12/11/2026
 
+**Rodada nacional atual:** 17/27 UFs em cache completo (238 células, aproximadamente 80,39% da área da quadratura). Dez UFs e cerca de 130 requisições antes de retries aguardam quota; cinco células estão salvas em progresso. Consumo climático do dia: 250/250. Um município com cache real diário/horário: São Paulo/SP, IBGE 3550308, com 792 horas incluindo margens. O cache original de SP foi preservado. Worker GEO encerrou após a rodada; persistência SQLite DEV. Ver [operação nacional e local](../05-funcionalidades/geo-intelligence-nacional-local.md). A tabela abaixo registra o ensaio inicial de SP, anterior à expansão.
+
 O fluxo **Central → teste real → solicitação de uma UF → Worker → cache → GEO Intelligence → Mapa** foi executado com sucesso no **SQLite DEV disponível**. Não foi usado MySQL de produção, banco OTRS ou dado meteorológico fictício.
 
 | Evidência SP / outubro de 2026 | Resultado |
@@ -49,7 +51,7 @@ Agendamento é opcional em qualquer fonte: habilitar, escolher explicitamente as
 ## Testar e coletar uma UF
 
 1. Conferir a fonte e usar **Testar conectividade** com `run_integrations`. O teste valida uma célula do último mês completo, não a persiste como estimativa estadual e respeita um minuto entre testes. Repetir durante esse intervalo não altera a saúde do último teste válido.
-2. Em **Coletas e sincronização**, selecionar **SP / outubro de 2026** e usar **Solicitar coleta ao Worker**. Exige `run_integrations`, `view_map`, CSRF e UF presente no Data Scope. Não selecionar Brasil nem agendar outras UFs para esse ensaio.
+2. Em **Coletas e sincronização**, escolher abrangência **UF**, **SP / outubro de 2026**, usar **Estimar volume** e **Autorizar e enfileirar o recorte**. Exige `run_integrations`, `view_map`, CSRF e UF presente no Data Scope. Não selecionar Brasil nem agendar outras UFs para esse ensaio.
 3. Alternativamente, o botão de coleta do Mapa reaproveita o recorte autorizado e a mesma fila.
 4. Conferir o estado do Worker e a fila na Central. Solicitar uma coleta com Worker parado apenas a deixa pendente; não executa chamadas na requisição da página.
 
@@ -83,7 +85,9 @@ HTTP 429 interrompe retries imediatos e conserva `Retry-After` no próximo proce
 
 - [x] Bootstrap idempotente, sem rede ou jobs automáticos; configuração existente preservada.
 - [x] Pública sem chave em DEV/produção nos testes de contrato; comercial e self-hosted configuráveis.
-- [x] Teste real pela Central e coleta real somente de SP/2026-10.
+- [x] Ensaio inicial SP e expansão real para 17/27 UFs em outubro/2026, respeitando quota.
+- [x] São Paulo municipal: diário/horário real, sem alteração do espelho ou causa automática.
+- [ ] Concluir dez UFs pendentes com quota renovada e Worker autorizado.
 - [x] Worker GEO executado, sucesso na primeira tentativa e cache real persistido no SQLite DEV.
 - [x] Indicadores, camadas e timeline no Mapa com os dados reais.
 - [x] Interface em temas claro/escuro e desktop/notebook/mobile, sem overflow horizontal.
@@ -91,6 +95,6 @@ HTTP 429 interrompe retries imediatos e conserva `Retry-After` no próximo proce
 - [ ] Homologar credencial/DPAPI comercial ou instância self-hosted real, se essas fontes forem utilizadas.
 - [ ] Configurar e confirmar execução contínua do Worker no ambiente de destino.
 
-Evidências locais em `var/geo-simple/`: Central, páginas Open-Meteo/IBGE em 1440/1024/390 pixels, chuva/temperatura reais de SP no Mapa. Diagnóstico de coleta em `var/geo-simple-real-result.json`, fora do Git. Nenhuma credencial, cookie ou banco deve ser publicado.
+Evidências atuais em `var/geo-national/` e diagnóstico `var/geo-national-result.json`. Migration nova aditiva: `integracoes.0018_weathercollectionjob_progress_and_more`, aplicada no SQLite DEV; homologação MySQL pendente. Evidências iniciais em `var/geo-simple/`: Central, páginas Open-Meteo/IBGE em 1440/1024/390 pixels, chuva/temperatura reais de SP no Mapa. Diagnóstico de coleta em `var/geo-simple-real-result.json`, fora do Git. Nenhuma credencial, cookie ou banco deve ser publicado.
 
 Ver [candidata 1.4.1](../08-releases/v1.4.1-candidata.md) e [implantação Windows](../08-releases/geo-intelligence-implantacao-windows.md). Rollback para código anterior à simplificação pode indisponibilizar as novas fontes; preservar os caches e restaurar somente configuração prévia compatível e autorizada, sem converter fonte pública em comercial nem reverter migrations destrutivamente.

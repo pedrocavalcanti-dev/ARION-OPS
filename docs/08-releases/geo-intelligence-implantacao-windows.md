@@ -1,5 +1,7 @@
 # Atualização GEO Intelligence — Windows Server
 
+A evolução nacional/local acrescenta a migration aditiva **integracoes.0018_weathercollectionjob_progress_and_more** (progresso da fila e cache municipal). Manter as tabelas/caches ao reverter código; não reverter migrations destrutivamente. Ver [operação nacional/local](../05-funcionalidades/geo-intelligence-nacional-local.md).
+
 Esta entrega não altera a versão registrada nem a tag `v1.4.0`. Nenhum deploy foi executado pelo agente. Homologar migrations e testes focados no MySQL DEV `arion_geo_dev` antes de autorizar produção. Credenciais/plano meteorológico e DPAPI do usuário de serviço exigem configuração no ambiente de destino.
 
 ## Preparação
@@ -87,7 +89,7 @@ Commits funcionais: `54af248` (integrações), `f2743b4` (GEO/apresentação/ind
 
 ## Validação da candidata 1.4.1 — etapa anterior à simplificação
 
-Ver o [changelog e diagnóstico da candidata](v1.4.1-candidata.md). A versão anunciada/tag 1.4.0 permanece intacta. A candidata não acrescenta migrations e não foi implantada em produção.
+Ver o [changelog e diagnóstico da candidata](v1.4.1-candidata.md). A versão anunciada/tag 1.4.0 permanece intacta. Naquela etapa a candidata não acrescentava migrations; a evolução nacional/local posterior acrescenta integracoes.0018. Não houve implantação em produção.
 
 - Bateria de **232 testes focados passou**, cobrindo Mapa/GEO, clima, Cancelamentos, Dashboard/Cockpit e tratamento de erros/segurança das APIs. Após a revisão de cache, os **16 testes climáticos passaram** novamente, incluindo um teste adicional de reagendamento de job concluído sem cache do método atual: **233 casos distintos validados**. O runner usa MD5 somente sob `override_settings` durante os testes; nenhum hasher da aplicação foi alterado.
 - `check`: sem problemas. `makemigrations --check --dry-run`: nenhuma alteração. Build de produção: 34 bundles mais Service Worker, sem dependência nova.
