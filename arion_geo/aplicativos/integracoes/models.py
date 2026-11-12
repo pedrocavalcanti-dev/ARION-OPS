@@ -169,7 +169,13 @@ class ExternalAPIIntegration(models.Model):
         if self.provider == self.Provider.IBGE:
             return True
         if self.provider == self.Provider.OPEN_METEO:
-            return bool(self.secret_ciphertext) if self.config.get("mode") == "commercial" else bool(self.config.get("evaluation_authorized"))
+            from .services.geo_configuration import weather_configuration
+            from .clients.public_data import PublicDataError
+            try:
+                cfg = weather_configuration(self)
+                return bool(self.secret_ciphertext) if cfg["mode"] == "commercial" else True
+            except PublicDataError:
+                return False
         if self.provider == self.Provider.BREVO:
             return bool(self.secret_ciphertext or self.smtp_secret_ciphertext)
         return bool((self.config or {}).get("public_token"))

@@ -29,7 +29,7 @@ def weather_response(start=date(2026,10,1),days=31,rain=2):
 class GeographyWeatherTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_superuser("geo-admin","geo@example.invalid","strong-test-password")
-        self.integration = ExternalAPIIntegration.objects.create(provider="open_meteo",name="Weather",enabled=True,config={"mode":"evaluation","evaluation_authorized":True,"daily_budget":250})
+        self.integration, _ = ExternalAPIIntegration.objects.update_or_create(provider="open_meteo",defaults={"name":"Weather","enabled":True,"config":{"mode":"public","daily_budget":250}})
 
     def test_temperature_extremes_and_circular_direction_keep_correct_units(self):
         a=weather_response(days=2);b=weather_response(days=2)
@@ -54,10 +54,10 @@ class GeographyWeatherTests(TestCase):
         self.integration.config={"mode":"commercial"}
         self.assertEqual(collection_readiness(self.integration)["status"],"incomplete")
         self.integration.config={"mode":"evaluation"}
-        self.assertEqual(collection_readiness(self.integration)["status"],"unauthorized")
+        self.assertEqual(collection_readiness(self.integration)["status"],"ready")
         self.integration.config={"mode":"evaluation","evaluation_authorized":True}
         with override_settings(ARION_PRODUCTION=True):
-            self.assertEqual(collection_readiness(self.integration)["status"],"incompatible")
+            self.assertEqual(collection_readiness(self.integration)["status"],"ready")
 
     def test_successful_job_without_current_method_cache_is_rescheduled_once(self):
         job=WeatherCollectionJob.objects.create(uf="SP",period=date(2026,10,1),status="success",attempts=1)
@@ -84,9 +84,9 @@ class GeographyWeatherTests(TestCase):
         with self.assertRaises(PublicDataError):fetch_catalog(client)
 
     @override_settings(ARION_PRODUCTION=True)
-    def test_evaluation_cannot_collect_in_production_or_automatically(self):
-        with self.assertRaises(PublicDataError):licensed_configuration(self.integration)
-        with self.assertRaises(PublicDataError):licensed_configuration(self.integration,automatic=True)
+    def test_public_configuration_works_in_production_without_key(self):
+        self.assertEqual(licensed_configuration(self.integration)["mode"],"public")
+        self.assertEqual(licensed_configuration(self.integration,automatic=True)["mode"],"public")
 
     def test_commercial_license_key_and_endpoint_are_required(self):
         self.integration.config={"mode":"commercial","license_confirmed":True}
@@ -154,11 +154,11 @@ class GeographyWeatherTests(TestCase):
         self.assertEqual(job.status,"pending")
         self.assertEqual(job.attempts,1)
 
-    def test_form_never_enables_automatic_evaluation(self):
-        data={"enabled":"on","mode":"evaluation","endpoint":ARCHIVE_ENDPOINTS["evaluation"],"evaluation_authorized":"on","automatic":"on","interval_hours":168,"timeout":15,"retries":1,"cache_hours":720,"daily_budget":250}
+    def test_form_requires_explicit_ufs_for_automatic_collection(self):
+        data={"enabled":"on","mode":"public","endpoint":ARCHIVE_ENDPOINTS["public"],"automatic":"on","interval_hours":168,"timeout":15,"retries":1,"cache_hours":720,"daily_budget":250}
         form=WeatherConfigurationForm(data)
         self.assertFalse(form.is_valid())
-        self.assertIn("automatic",form.errors)
+        self.assertIn("scheduled_ufs",form.errors)
 
     def test_connector_pages_and_secret_rendering(self):
         self.client.force_login(self.user)

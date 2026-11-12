@@ -2,7 +2,7 @@
 import calendar
 import json
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone as datetime_timezone
 from functools import lru_cache
 
 from django.conf import settings
@@ -11,11 +11,12 @@ from django.db.models import F
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
 
-from ..clients.public_data import ARCHIVE_ENDPOINTS, PublicDataClient, PublicDataError
+from ..clients.public_data import PublicDataClient, PublicDataError
 from ..models import ExternalAPIHealthCheck, ExternalAPIIntegration, IntegrationSyncState, WeatherCollectionJob, WeatherMonth
 from .external_apis import decrypt_external_api_secret
 from .geography import STATE_BY_UF
 from .sync_lock import Lease
+from .geo_configuration import get_geo_integration, weather_configuration, weather_source, weather_sources, weather_source_info
 
 VARIABLES = {"precipitation_sum": "mm", "wind_speed_10m_max": "km/h", "wind_gusts_10m_max": "km/h",
              "temperature_2m_mean": "°C", "temperature_2m_min": "°C", "temperature_2m_max": "°C",
@@ -25,23 +26,15 @@ MODEL = "era5"
 
 
 def collection_readiness(integration=None):
-    """Safe configuration state. No network, secrets or implicit activation."""
-    integration = integration or ExternalAPIIntegration.objects.filter(provider="open_meteo").first()
-    if not integration:
-        return {"status":"disabled", "configuration_status":"not_configured", "message":"Não configurado. Cadastre a integração climática na Central de Integrações."}
+    """Safe default configuration state, without network or automatic collection."""
+    integration = integration if integration is not None else get_geo_integration("open_meteo")
     if not integration.enabled:
-        return {"status":"disabled", "message":"Integração climática desabilitada. Configure e habilite na Central de Integrações."}
-    cfg = integration.config or {}
-    mode = cfg.get("mode", "evaluation")
-    if mode not in ARCHIVE_ENDPOINTS or cfg.get("endpoint", ARCHIVE_ENDPOINTS.get(mode)) != ARCHIVE_ENDPOINTS.get(mode):
-        return {"status":"incompatible", "message":"Modalidade ou destino incompatível com a integração climática."}
-    if mode == "evaluation" and getattr(settings,"ARION_PRODUCTION",False):
-        return {"status":"incompatible", "message":"Avaliação gratuita indisponível em produção. Configure a modalidade comercial licenciada."}
-    if mode == "evaluation" and not cfg.get("evaluation_authorized"):
-        return {"status":"unauthorized", "message":"Avaliação sem autorização administrativa de homologação não comercial."}
-    if mode == "commercial" and (not cfg.get("license_confirmed") or not integration.secret_ciphertext):
-        return {"status":"incomplete", "message":"Configuração incompleta: licença de histórico e chave comercial pendentes."}
-    return {"status":"ready", "message":"Integração configurada; coleta executada pelo worker."}
+        return {"status":"disabled", "message":"Integração climática desabilitada na Central de Integrações."}
+    try:
+        configured_weather(integration)
+    except PublicDataError as error:
+        return {"status":"incomplete" if error.code=="credential" else "incompatible", "message":str(error)}
+    return {"status":"ready", "message":"Integração configurada; coleta sob demanda pelo worker."}
 
 
 def circular_mean(values):
@@ -81,22 +74,23 @@ def month_bounds(value=None):
     return first, end
 
 
-def licensed_configuration(integration, *, automatic=False):
+def configured_weather(integration, *, automatic=False):
     if not integration or not integration.enabled:
-        raise PublicDataError("Integração climática desabilitada ou não configurada.")
-    cfg = integration.config or {}
-    mode = cfg.get("mode", "evaluation")
-    if mode == "commercial":
-        if not cfg.get("license_confirmed") or not integration.secret_ciphertext:
-            raise PublicDataError("Licença de histórico e chave comercial pendentes.")
-    elif mode == "evaluation":
-        if automatic or getattr(settings, "ARION_PRODUCTION", False) or not cfg.get("evaluation_authorized"):
-            raise PublicDataError("Avaliação requer homologação autorizada fora de produção, sem coleta periódica.")
-    else:
-        raise PublicDataError("Modo climático inválido.")
-    if cfg.get("endpoint", ARCHIVE_ENDPOINTS[mode]) != ARCHIVE_ENDPOINTS[mode]:
-        raise PublicDataError("Endpoint incompatível com o modo da integração.")
+        raise PublicDataError("Integração climática desabilitada ou não configurada.", code="configuration")
+    cfg = weather_configuration(integration)
+    if cfg["mode"] == "commercial" and (not integration.secret_ciphertext or cfg.get("credential_endpoint", cfg["endpoint"]) != cfg["endpoint"]):
+        raise PublicDataError("Cadastre uma chave para o endpoint comercial selecionado.", code="credential")
     return cfg
+
+
+# Compatibility for existing internal callers; no environment/license confirmation gate.
+licensed_configuration = configured_weather
+
+
+def weather_secret(integration, cfg):
+    if cfg["mode"] == "commercial" or (cfg["mode"] == "self_hosted" and cfg.get("credential_endpoint") == cfg["endpoint"]):
+        return decrypt_external_api_secret(integration)
+    return ""
 
 
 def _inside_ring(x, y, ring):
@@ -212,33 +206,32 @@ def _count_request(integration, cfg):
     key = "meteo-" + timezone.localdate().isoformat()
     state, _ = IntegrationSyncState.objects.get_or_create(key=key, defaults={"records_count":0})
     if (state.records_count or 0) >= int(cfg.get("daily_budget", 250)):
-        raise PublicDataError("Limite diário de consultas climáticas atingido.")
+        raise PublicDataError("Limite diário de consultas climáticas atingido.", code="rate_limited", retry_after=3600)
     IntegrationSyncState.objects.filter(pk=state.pk).update(records_count=F("records_count")+1, last_started_at=timezone.now())
-    ExternalAPIIntegration.objects.filter(pk=integration.pk).update(last_test_at=timezone.now())
 
 
 @sensitive_variables()
 def collect_month(uf, period, integration, *, client=None):
-    cfg = licensed_configuration(integration)
+    cfg = configured_weather(integration)
     start, end = month_bounds(period.strftime("%Y-%m"))
     # Archive has delayed availability; the current month is explicitly partial.
     end = min(end, timezone.localdate()-timedelta(days=5))
     if end < start:
         raise PublicDataError("Histórico do mês ainda não disponível no modelo ERA5.")
-    mode = cfg.get("mode", "evaluation")
-    source = "open_meteo_" + mode
-    cache = WeatherMonth.objects.filter(uf=uf, period=start, source=source, model=MODEL, method=METHOD, expires_at__gt=timezone.now()).first()
+    mode = cfg["mode"]
+    source = weather_source(cfg)
+    cache = WeatherMonth.objects.filter(uf=uf, period=start, source__in=weather_sources(cfg), model=MODEL, method=METHOD, expires_at__gt=timezone.now()).order_by("-collected_at").first()
     if cache:
         return cache
-    client = client or PublicDataClient(cfg.get("timeout",15), cfg.get("retries",1))
-    secret = decrypt_external_api_secret(integration) if mode == "commercial" else ""
+    client = client or PublicDataClient(cfg.get("timeout",15), cfg.get("retries",1), weather_endpoint=cfg["endpoint"])
+    secret = weather_secret(integration,cfg)
     cells = {}
     for point in sampling_points(uf):
         params = {"latitude":point["latitude"], "longitude":point["longitude"], "start_date":start.isoformat(), "end_date":end.isoformat(),
                   "daily":",".join(VARIABLES), "wind_speed_unit":"kmh", "timezone":"America/Sao_Paulo", "models":MODEL}
         if secret:
             params["apikey"] = secret
-        payload = client.get(ARCHIVE_ENDPOINTS[mode], params, before_attempt=lambda:_count_request(integration,cfg))
+        payload = client.get(cfg["endpoint"], params, before_attempt=lambda:_count_request(integration,cfg))
         sample = parse_daily(payload,start,end)
         cell_key = tuple(sample["cell"])
         if cell_key in cells:
@@ -249,7 +242,7 @@ def collect_month(uf, period, integration, *, client=None):
     samples = list(cells.values())
     summary = summarize(samples)
     summary["partial"] = end < start.replace(day=calendar.monthrange(start.year,start.month)[1])
-    summary["license_mode"] = mode
+    summary["source_info"] = weather_source_info(cfg)
     now = timezone.now()
     row, _ = WeatherMonth.objects.update_or_create(uf=uf, period=start, source=source, model=MODEL, method=METHOD, defaults={
         "region":str(STATE_BY_UF[uf]["region_id"]), "samples":samples, "summary":summary, "completeness":summary["completeness"],
@@ -260,22 +253,23 @@ def collect_month(uf, period, integration, *, client=None):
 @sensitive_variables()
 def test_weather(integration):
     """One cell verifies the contract; it is not persisted as a UF estimate."""
-    cfg = licensed_configuration(integration)
+    cfg = configured_weather(integration)
     first,end = month_bounds()
-    mode = cfg.get("mode","evaluation")
+    mode = cfg["mode"]
     point = sampling_points("SP")[0]
     params = {"latitude":point["latitude"],"longitude":point["longitude"],"start_date":first.isoformat(),"end_date":end.isoformat(),
               "daily":",".join(VARIABLES),"wind_speed_unit":"kmh","timezone":"America/Sao_Paulo","models":MODEL}
-    if mode=="commercial":
-        params["apikey"] = decrypt_external_api_secret(integration)
-    payload = PublicDataClient(cfg.get("timeout",15),cfg.get("retries",1)).get(ARCHIVE_ENDPOINTS[mode],params,before_attempt=lambda:_count_request(integration,cfg))
+    secret = weather_secret(integration,cfg)
+    if secret:
+        params["apikey"] = secret
+    payload = PublicDataClient(cfg.get("timeout",15),cfg.get("retries",1),weather_endpoint=cfg["endpoint"]).get(cfg["endpoint"],params,before_attempt=lambda:_count_request(integration,cfg))
     result = parse_daily(payload,first,end)
     return len(result["daily"]["time"])
 
 
 def request_collection(ufs, period, user):
-    integration = ExternalAPIIntegration.objects.filter(provider="open_meteo").first()
-    licensed_configuration(integration)
+    integration = get_geo_integration("open_meteo")
+    cfg = configured_weather(integration)
     start, _ = month_bounds(period)
     now = timezone.now()
     jobs = []
@@ -284,11 +278,11 @@ def request_collection(ufs, period, user):
         for uf in sorted(set(ufs)):
             if uf not in STATE_BY_UF:
                 raise ValueError("UF inválida.")
-            cached = WeatherMonth.objects.filter(uf=uf,period=start,source="open_meteo_"+integration.config.get("mode","evaluation"),model=MODEL,method=METHOD,expires_at__gt=now).exists()
+            cached = WeatherMonth.objects.filter(uf=uf,period=start,source__in=weather_sources(cfg),model=MODEL,method=METHOD,expires_at__gt=now).exists()
             if cached:
                 continue
             job, created = WeatherCollectionJob.objects.get_or_create(uf=uf, period=start, defaults={"requested_by":user})
-            if not created and (job.status == "success" or (job.status == "error" and job.updated_at < now-timedelta(minutes=5))):
+            if not created and (job.status == "success" or (job.status == "error" and job.next_attempt_at <= now and job.updated_at < now-timedelta(minutes=5))):
                 job.status, job.attempts, job.next_attempt_at, job.last_error = "pending",0,now,""
                 job.requested_by = user
                 job.save()
@@ -298,12 +292,19 @@ def request_collection(ufs, period, user):
 
 def cached_weather(ufs, period):
     start, _ = month_bounds(period)
-    integration = ExternalAPIIntegration.objects.filter(provider="open_meteo").first()
-    mode = (integration.config or {}).get("mode","evaluation") if integration else "evaluation"
-    if getattr(settings,"ARION_PRODUCTION",False) and mode!="commercial":
+    integration = get_geo_integration("open_meteo")
+    try:
+        cfg = weather_configuration(integration)
+    except PublicDataError:
         return {}
-    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source="open_meteo_"+mode,model=MODEL,method__in=("area-grid-v1",METHOD)).order_by("uf","method")
-    return {row.uf:{**row.summary, "source":row.source, "model":row.model, "method":row.method, "collected_at":row.collected_at.isoformat(), "stale":row.expires_at<=timezone.now() or row.method!=METHOD} for row in rows}
+    sources = weather_sources(cfg)
+    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source__in=sources,model=MODEL,method__in=("area-grid-v1",METHOD)).order_by("uf","method","collected_at")
+    result = {}
+    # Current method always wins over v1, then use the latest collection.
+    for row in rows:
+        result[row.uf] = {**row.summary, "source":row.source, "model":row.model, "method":row.method,
+                          "collected_at":row.collected_at.isoformat(), "stale":row.expires_at<=timezone.now() or row.method!=METHOD}
+    return result
 
 
 def worker_tick():
@@ -320,7 +321,7 @@ def worker_tick():
             return
         job.status, job.attempts = "running",job.attempts+1
         job.save()
-        integration = ExternalAPIIntegration.objects.filter(provider="open_meteo").first()
+        integration = get_geo_integration("open_meteo")
         try:
             collect_month(job.uf,job.period,integration)
             job.status, job.last_error = "success",""
@@ -330,7 +331,12 @@ def worker_tick():
             # Never persist provider response bodies, raw exception strings or URLs.
             job.last_error = str(error)[:240] if isinstance(error,PublicDataError) else "Falha climática; cache anterior preservado."
             job.status = "pending" if job.attempts < 3 else "error"
-            job.next_attempt_at = now+timedelta(minutes=2**job.attempts)
+            try:
+                job.next_attempt_at = now+timedelta(seconds=max(60*2**job.attempts,getattr(error,"retry_after",0)))
+            except OverflowError:
+                # An unrepresentable provider delay requires operator review, never an earlier automatic retry.
+                job.status = "error"
+                job.next_attempt_at = datetime.max.replace(tzinfo=datetime_timezone.utc)
             if integration:
                 integration.last_error, integration.health = job.last_error,"error"
         job.save()

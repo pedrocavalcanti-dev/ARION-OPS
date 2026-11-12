@@ -5,7 +5,6 @@ from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.db.models import Sum
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_post_parameters
@@ -13,15 +12,16 @@ from django.views.decorators.http import require_POST
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.configuracoes.permissions import access_required
-from .clients.public_data import PublicDataError
-from .forms import GeographyConfigurationForm, WeatherConfigurationForm
-from .models import ExternalAPIHealthCheck, ExternalAPIIntegration, IntegrationSyncState, WeatherCollectionJob, WeatherMonth
-from .services.geography import catalog, fetch_catalog
+from .clients.public_data import ARCHIVE_ENDPOINTS, PublicDataError
+from .forms import GeographyConfigurationForm, WeatherConfigurationForm, WeatherCollectionForm
+from .models import ExternalAPIHealthCheck, WeatherCollectionJob
+from .services.geography import fetch_catalog
 from .services.secrets import get_secret_protector
 from .services.sync_lock import Lease
-from .services.weather import test_weather
+from .services.weather import test_weather, month_bounds, request_collection
+from .services.geo_configuration import NAMES, get_geo_integration, WEATHER_DEFAULTS
+from .services.geo_operations import geo_operational_context
 
-NAMES = {"ibge":"IBGE — Regiões e Estados", "open_meteo":"Open-Meteo — Clima e Histórico"}
 
 
 def _provider(provider):
@@ -35,30 +35,34 @@ def _provider(provider):
 @access_required("view_integrations")
 def detail(request, provider):
     _provider(provider)
-    integration = ExternalAPIIntegration.objects.filter(provider=provider).first() or ExternalAPIIntegration(provider=provider,name=NAMES[provider])
+    integration = get_geo_integration(provider)
     form_class = GeographyConfigurationForm if provider == "ibge" else WeatherConfigurationForm
     initial = {**integration.config,"enabled":integration.enabled,"credential_configured":bool(integration.secret_ciphertext)}
     if provider == "open_meteo":
-        initial.setdefault("mode","evaluation")
-        initial.setdefault("endpoint","https://archive-api.open-meteo.com/v1/archive")
-    form = form_class(initial=initial) if request.user.has_perm("configuracoes.manage_integrations") else None
+        initial = {**WEATHER_DEFAULTS, **initial}
+        initial["mode"] = "public" if initial.get("mode")=="evaluation" else initial.get("mode","public")
+        initial["endpoint"] = integration.config.get("endpoint", ARCHIVE_ENDPOINTS.get(initial["mode"], ""))
+        initial["credential_endpoint"] = integration.config.get("credential_endpoint", "https://customer-archive-api.open-meteo.com/v1/archive" if integration.config.get("mode")=="commercial" else "")
+    form = form_class(initial=initial,**({"user":request.user} if provider=="open_meteo" else {})) if request.user.has_perm("configuracoes.manage_integrations") else None
     return _render(request,provider,integration,form)
 
 
 def _render(request, provider, integration, form, status=200):
-    geo = catalog()
-    usage = IntegrationSyncState.objects.filter(key__startswith="meteo-"+timezone.localdate().strftime("%Y-%m")).aggregate(total=Sum("records_count"))["total"] or 0
-    return render(request,"integracoes/geography_weather.html",{
+    context = geo_operational_context()
+    history = [{"at":check.created_at, "label":"Teste / operação", "status":check.get_status_display(), "message":check.message} for check in integration.checks.all()[:10]]
+    jobs = list(WeatherCollectionJob.objects.order_by("-updated_at")[:10]) if provider=="open_meteo" else []
+    history.extend({"at":job.updated_at, "label":f"Coleta {job.uf} · {job.period:%m/%Y}", "status":job.get_status_display(), "message":job.last_error or "Processamento pelo worker."} for job in jobs)
+    context.update({
         "integration":integration, "provider":provider, "api_form":form,
         "can_manage_integrations":request.user.has_perm("configuracoes.manage_integrations"),
         "can_test_integrations":request.user.has_perm("configuracoes.run_integrations"),
+        "can_collect_weather":request.user.has_perm("configuracoes.run_integrations") and request.user.has_perm("configuracoes.view_map"),
         "credential_configured":bool(integration.secret_ciphertext),
-        "geo_catalog":geo, "regions_count":len(geo["regions"]), "states_count":len(geo["states"]),
-        "weather_count":WeatherMonth.objects.count(), "request_count":usage,
-        "last_weather":WeatherMonth.objects.order_by("-collected_at").first(),
-        "jobs":WeatherCollectionJob.objects.exclude(status="success").order_by("-updated_at")[:10] if provider=="open_meteo" else (),
-        "checks":integration.checks.all()[:10] if integration.pk else (),
-    },status=status)
+        "history":sorted(history,key=lambda row:row["at"],reverse=True)[:10], "jobs":jobs,
+        "collection_form":WeatherCollectionForm(user=request.user,initial={"uf":"SP","period":month_bounds()[0].strftime("%Y-%m")}) if provider=="open_meteo" else None,
+    })
+    return render(request,"integracoes/geography_weather.html",context,status=status)
+
 
 
 @login_required
@@ -67,9 +71,9 @@ def _render(request, provider, integration, form, status=200):
 @sensitive_post_parameters("api_key")
 def save(request,provider):
     _provider(provider)
-    integration = ExternalAPIIntegration.objects.filter(provider=provider).first() or ExternalAPIIntegration(provider=provider,name=NAMES[provider])
+    integration = get_geo_integration(provider)
     cls = GeographyConfigurationForm if provider=="ibge" else WeatherConfigurationForm
-    form = cls(request.POST,initial={"credential_configured":bool(integration.secret_ciphertext)})
+    form = cls(request.POST,initial={"credential_configured":bool(integration.secret_ciphertext),"credential_endpoint":integration.config.get("credential_endpoint","https://customer-archive-api.open-meteo.com/v1/archive" if integration.config.get("mode")=="commercial" else "")},**({"user":request.user} if provider=="open_meteo" else {}))
     if not form.is_valid():
         return _render(request,provider,integration,form,400)
     data = dict(form.cleaned_data)
@@ -77,14 +81,18 @@ def save(request,provider):
     if secret:
         try:
             integration.secret_ciphertext = get_secret_protector().protect(secret)
+            data["credential_endpoint"] = data["endpoint"]
         except Exception:
             form.add_error("api_key","Não foi possível proteger a chave nesta identidade Windows.")
             return _render(request,provider,integration,form,400)
+    previous_endpoint = integration.config.get("credential_endpoint", "https://customer-archive-api.open-meteo.com/v1/archive" if integration.config.get("mode")=="commercial" and integration.secret_ciphertext else "")
+    if not secret and previous_endpoint:
+        data["credential_endpoint"] = previous_endpoint
     integration.enabled = data.pop("enabled")
     integration.config, integration.updated_by = data,request.user
     integration.save()
     AuditService.record(request=request,category="integration",action="geo.configure",obj=integration,description="Configuração de integração geográfica atualizada.",metadata={"provider":provider,"enabled":integration.enabled})
-    messages.success(request,"Configuração salva. A coleta depende de teste e execução do worker.")
+    messages.success(request,"Configuração salva. Coletas sob demanda e agendamentos explícitos são processados pelo worker.")
     return redirect("configuracoes:integracoes:geo-detail",provider=provider)
 
 
@@ -93,7 +101,10 @@ def save(request,provider):
 @require_POST
 def test(request,provider):
     _provider(provider)
-    integration,_ = ExternalAPIIntegration.objects.get_or_create(provider=provider,defaults={"name":NAMES[provider]})
+    integration = get_geo_integration(provider)
+    if integration.last_test_at and integration.last_test_at > timezone.now()-timedelta(minutes=1):
+        messages.warning(request,"Aguarde um minuto entre testes de conectividade.")
+        return redirect("configuracoes:integracoes:geo-detail",provider=provider)
     # Shared lease also bounds concurrent weather diagnostics and worker calls.
     lease = Lease("geo-climate" if provider=="open_meteo" else "geo-ibge")
     if not lease.acquire():
@@ -103,8 +114,6 @@ def test(request,provider):
     start = time.monotonic()
     success = False
     try:
-        if integration.last_test_at and integration.last_test_at > timezone.now()-timedelta(minutes=1):
-            raise PublicDataError("Aguarde um minuto entre testes de conectividade.")
         if provider=="ibge":
             regions,states = fetch_catalog()
             message = f"Conectividade confirmada: {len(regions)} regiões e {len(states)} UFs."
@@ -144,5 +153,17 @@ def sync(request,provider):
         messages.success(request,"Sincronização IBGE solicitada ao worker; o catálogo local continua disponível.")
         AuditService.record(request=request,category="integration",action="ibge.sync_requested",description="Atualização do catálogo solicitada.")
     else:
-        raise PermissionDenied("Solicite clima pelo recorte autorizado do Mapa.")
+        if not request.user.has_perm("configuracoes.view_map"):
+            raise PermissionDenied
+        form = WeatherCollectionForm(request.POST,user=request.user)
+        if not form.is_valid():
+            messages.error(request,"Selecione uma UF permitida e um mês válido.")
+        else:
+            try:
+                values=form.cleaned_data
+                jobs=request_collection([values["uf"]],values["period"],request.user)
+                messages.success(request,"Coleta solicitada ao worker." if jobs else "Cache válido já disponível para esta UF e mês.")
+                AuditService.record(request=request,category="integration",action="weather.collection_requested",description="Coleta climática de uma UF solicitada pela Central.",metadata={"uf":values["uf"],"period":values["period"],"jobs":len(jobs)})
+            except (PublicDataError,ValueError) as error:
+                messages.error(request,str(error))
     return redirect("configuracoes:integracoes:geo-detail",provider=provider)

@@ -32,6 +32,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--once", action="store_true", help="Avalia os jobs uma vez e encerra.")
         parser.add_argument("--interval", type=int, default=5, help="Intervalo de verificação em segundos.")
+        parser.add_argument("--geo-only", action="store_true", help="Executa apenas a fila GEO, sem sincronizar OTRS/CMDB ou outros módulos.")
 
     def handle(self, *args, **options):
         interval = max(1, min(options["interval"], 60))
@@ -42,7 +43,7 @@ class Command(BaseCommand):
         worker_stop = threading.Event()
         worker_heartbeat = threading.Thread(target=self._heartbeat, args=(worker, worker_stop), daemon=True)
         worker_heartbeat.start()
-        self.stdout.write(
+        self.stdout.write("ARION Integration Worker · GEO\nSomente GEO: catálogo e fila climática.\nWorker iniciado." if options.get("geo_only") else
             "ARION Integration Worker\n\n"
             "OTRS fast: 2 min\nOTRS full: 30 min\nCMDB:      10 min\n\n"
             "Worker iniciado."
@@ -52,9 +53,10 @@ class Command(BaseCommand):
                 if not worker.heartbeat():
                     self.stderr.write(self.style.ERROR("Worker lease lost; stopping to avoid duplicate scheduling."))
                     break
-                self._schedule_once(timezone.now())
-                self._backlog_history(timezone.now())
-                self._cancellation_intake()
+                if not options.get("geo_only"):
+                    self._schedule_once(timezone.now())
+                    self._backlog_history(timezone.now())
+                    self._cancellation_intake()
                 self._geo_intelligence()
                 if options["once"]:
                     break

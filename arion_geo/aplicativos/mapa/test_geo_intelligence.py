@@ -69,11 +69,11 @@ class GeoIntelligenceTests(TestCase):
         self.assertFalse(data["climate"]["available"])
         self.assertTrue(all(r["rain_mm"] is None for r in data["daily"]))
         self.assertIsNone(data["climate"]["coincident_days"])
-        self.assertEqual(data["collection"]["configuration_status"],"not_configured")
-        self.assertFalse(data["collection"]["can_collect"])
+        self.assertEqual(data["collection"]["configuration_status"],"ready")
+        self.assertTrue(data["collection"]["can_collect"])
 
     def test_collection_states_follow_queue_without_network_or_simulated_cache(self):
-        ExternalAPIIntegration.objects.create(provider="open_meteo",name="Weather",enabled=True,config={"mode":"evaluation","evaluation_authorized":True})
+        ExternalAPIIntegration.objects.update_or_create(provider="open_meteo",defaults={"name":"Weather","enabled":True,"config":{"mode":"public"}})
         url=reverse("mapa:intelligence")
         params={"period":"2026-10","uf":"SP"}
         with patch("aplicativos.integracoes.clients.public_data.PublicDataClient.get") as network:
@@ -98,13 +98,13 @@ class GeoIntelligenceTests(TestCase):
         payload=response.json()
         self.assertEqual(payload["ticket_count"],payload["geo_intelligence"]["summary"]["ticket_count"])
 
-    def test_collection_reports_disabled_configuration_before_any_network(self):
+    def test_collection_reports_explicitly_disabled_configuration_before_any_network(self):
+        ExternalAPIIntegration.objects.filter(provider="open_meteo").update(enabled=False)
         with patch("aplicativos.integracoes.clients.public_data.PublicDataClient.get") as network:
             response=self.client.post(reverse("mapa:weather-collect"),{"period":"2026-10","mode":"calls"})
         self.assertEqual(response.status_code,409)
         self.assertEqual(response.json()["status"],"disabled")
-        self.assertEqual(response.json()["configuration_status"],"not_configured")
-        self.assertIn("Não configurado",response.json()["message"])
+        self.assertIn("desabilitada",response.json()["message"])
         network.assert_not_called()
 
     def test_focused_motives_and_weather_share_created_month_even_if_resolved_later(self):

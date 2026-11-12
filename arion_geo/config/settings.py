@@ -811,3 +811,7 @@ else:
 import json as _geo_json
 GEO_PRESENTATION_WEIGHTS = _geo_json.loads(os.getenv("GEO_PRESENTATION_WEIGHTS", '{"Massiva":40,"Rompimento":30,"Equipamento":30}'))
 GEO_PRESENTATION_WEIGHT_MODE = os.getenv("GEO_PRESENTATION_WEIGHT_MODE", "configured")
+
+# Optional, explicitly trusted internal destinations for a self-hosted weather service.
+# HTTPS certificates are always verified. Public destinations need no allowlist.
+GEO_WEATHER_ALLOWED_HOSTS = tuple(value.strip().lower() for value in os.getenv("GEO_WEATHER_ALLOWED_HOSTS", "").split(",") if value.strip())

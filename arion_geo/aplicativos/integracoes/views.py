@@ -337,6 +337,8 @@ def home(request):
         brevo_api=_api_card(ExternalAPIIntegration.Provider.BREVO),
         mapbox_api=_api_card(ExternalAPIIntegration.Provider.MAPBOX),
     )
+    from .services.geo_operations import geo_operational_context
+    context.update(geo_operational_context())
     return render(request, "integracoes/home.html", context)
 
 

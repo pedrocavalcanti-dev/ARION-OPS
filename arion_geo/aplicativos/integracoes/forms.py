@@ -175,39 +175,66 @@ class MapboxConfigurationForm(forms.Form):
 
 
 class GeographyConfigurationForm(forms.Form):
+    automatic = forms.BooleanField(label="Atualizar catálogo periodicamente", required=False)
     enabled = forms.BooleanField(label="Habilitar integração", required=False)
     interval_hours = forms.IntegerField(label="Atualização do catálogo (horas)", min_value=24, max_value=8760, initial=720)
     timeout = forms.IntegerField(label="Timeout (segundos)", min_value=2, max_value=30, initial=15)
 
 
 class WeatherConfigurationForm(forms.Form):
-    enabled = forms.BooleanField(label="Habilitar integração", required=False)
-    mode = forms.ChoiceField(label="Modalidade de uso", choices=(("evaluation","Avaliação / homologação"),("commercial","Comercial licenciada")))
-    api_key = forms.CharField(label="Chave comercial", max_length=512, required=False, strip=True, widget=forms.PasswordInput(render_value=False, attrs={"autocomplete":"new-password"}), help_text="Vazio mantém a chave protegida. O valor nunca será exibido.")
-    endpoint = forms.ChoiceField(label="Endpoint permitido", choices=(("https://archive-api.open-meteo.com/v1/archive","Histórico público — avaliação"),("https://customer-archive-api.open-meteo.com/v1/archive","Histórico comercial — customer archive")))
-    evaluation_authorized = forms.BooleanField(label="Avaliação não comercial / homologação autorizada", required=False)
-    license_confirmed = forms.BooleanField(label="Licença para histórico confirmada (Professional ou superior compatível)", required=False)
-    automatic = forms.BooleanField(label="Atualizar automaticamente o último mês completo (somente comercial)", required=False)
-    interval_hours = forms.IntegerField(label="Intervalo de atualização (horas)", min_value=24, max_value=8760, initial=168)
+    enabled = forms.BooleanField(label="Disponibilizar meteorologia no GEO", required=False, initial=True)
+    mode = forms.ChoiceField(label="Fonte meteorológica", choices=(("public","Pública — Open-Meteo"),("commercial","Comercial — Open-Meteo"),("self_hosted","Self-hosted — instância própria")))
+    endpoint = forms.URLField(label="Endpoint HTTPS", max_length=500, initial="https://archive-api.open-meteo.com/v1/archive", help_text="O destino deve responder ao contrato histórico Open-Meteo. TLS permanece obrigatório.")
+    api_key = forms.CharField(label="Chave da fonte (quando necessária)", max_length=512, required=False, strip=True, widget=forms.PasswordInput(render_value=False, attrs={"autocomplete":"new-password"}), help_text="Pública não exige chave. Vazio mantém a credencial protegida do destino atual; nenhuma chave é enviada ao endpoint público.")
+    automatic = forms.BooleanField(label="Agendar atualização do último mês completo", required=False)
+    scheduled_ufs = forms.MultipleChoiceField(label="UFs do agendamento", required=False, widget=forms.CheckboxSelectMultiple, help_text="Nenhuma UF é agendada automaticamente. Escolha explicitamente os recortes desejados.")
+    interval_hours = forms.IntegerField(label="Intervalo entre atualizações (horas)", min_value=24, max_value=8760, initial=168)
     timeout = forms.IntegerField(label="Timeout (segundos)", min_value=2, max_value=30, initial=15)
-    retries = forms.IntegerField(label="Novas tentativas com backoff", min_value=0, max_value=2, initial=1)
-    cache_hours = forms.IntegerField(label="Validade do cache de mês completo (horas)", min_value=24, max_value=8760, initial=720)
-    daily_budget = forms.IntegerField(label="Limite diário de requisições HTTP (inclui retries)", min_value=1, max_value=1000, initial=250)
+    retries = forms.IntegerField(label="Tentativas adicionais", min_value=0, max_value=2, initial=1)
+    cache_hours = forms.IntegerField(label="Validade do cache (horas)", min_value=24, max_value=8760, initial=720)
+    daily_budget = forms.IntegerField(label="Limite diário de requisições HTTP", min_value=1, max_value=1000, initial=250)
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .services.geography import STATES
+        from .services.geo_operations import allowed_weather_ufs
+        allowed = set(allowed_weather_ufs(user)) if user is not None else {s["sigla"] for s in STATES}
+        self.fields["scheduled_ufs"].choices = [(s["sigla"],s["sigla"]) for s in sorted(STATES,key=lambda s:s["sigla"]) if s["sigla"] in allowed]
 
     def clean(self):
-        from .clients.public_data import ARCHIVE_ENDPOINTS
+        from .clients.public_data import PublicDataError, validate_weather_endpoint
         cleaned = super().clean()
-        mode = cleaned.get("mode")
-        if mode and cleaned.get("endpoint") != ARCHIVE_ENDPOINTS[mode]:
-            self.add_error("endpoint", "Selecione o endpoint correspondente à modalidade.")
-        if cleaned.get("enabled"):
-            if mode == "commercial" and not (cleaned.get("license_confirmed") and (cleaned.get("api_key") or self.initial.get("credential_configured"))):
-                self.add_error("license_confirmed", "Confirme a licença de histórico e cadastre uma chave comercial.")
-            if mode == "evaluation" and (getattr(settings,"ARION_PRODUCTION",False) or not cleaned.get("evaluation_authorized")):
-                self.add_error("evaluation_authorized", "Avaliação exige autorização fora de produção.")
-        if mode != "commercial" and cleaned.get("automatic"):
-            self.add_error("automatic", "Coleta periódica exige configuração comercial licenciada.")
+        mode, endpoint = cleaned.get("mode"), cleaned.get("endpoint")
+        if mode == "public":
+            cleaned["api_key"] = ""
+        if mode and endpoint:
+            try:
+                cleaned["endpoint"] = validate_weather_endpoint(mode, endpoint)
+            except PublicDataError as error:
+                self.add_error("endpoint", str(error))
+        stored_for_endpoint = self.initial.get("credential_configured") and self.initial.get("credential_endpoint")==endpoint
+        if cleaned.get("enabled") and mode=="commercial" and not (cleaned.get("api_key") or stored_for_endpoint):
+            self.add_error("api_key", "Cadastre uma chave para o endpoint comercial selecionado.")
+        if cleaned.get("automatic") and not cleaned.get("scheduled_ufs"):
+            self.add_error("scheduled_ufs", "Selecione pelo menos uma UF para o agendamento.")
         return cleaned
+
+
+class WeatherCollectionForm(forms.Form):
+    uf = forms.ChoiceField(label="UF")
+    period = forms.CharField(label="Mês da coleta", widget=forms.DateInput(attrs={"type":"month"}))
+
+    def __init__(self, *args, user, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .services.geo_operations import allowed_weather_ufs
+        self.fields["uf"].choices = [(uf,uf) for uf in sorted(allowed_weather_ufs(user))]
+
+    def clean_period(self):
+        from .services.weather import month_bounds
+        try:
+            return month_bounds(self.cleaned_data["period"])[0].strftime("%Y-%m")
+        except ValueError as error:
+            raise forms.ValidationError(str(error)) from None
 
 
 class CMDBSearchForm(forms.Form):

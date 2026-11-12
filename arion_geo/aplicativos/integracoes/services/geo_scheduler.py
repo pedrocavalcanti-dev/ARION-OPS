@@ -4,9 +4,10 @@ from django.utils import timezone
 
 from ..clients.public_data import PublicDataClient, PublicDataError
 from ..models import ExternalAPIHealthCheck, ExternalAPIIntegration, IntegrationSyncState
-from .geography import STATE_BY_UF, sync_catalog
+from .geography import sync_catalog
 from .sync_lock import Lease
 from .weather import licensed_configuration, month_bounds, request_collection, worker_tick
+from .geo_configuration import bootstrap_geo_integrations, weather_configuration
 
 
 def enqueue_ibge():
@@ -14,12 +15,13 @@ def enqueue_ibge():
 
 
 def scheduler_tick():
+    bootstrap_geo_integrations()
     now = timezone.now()
     integration = ExternalAPIIntegration.objects.filter(provider="ibge",enabled=True).first()
     if integration:
         state,_ = IntegrationSyncState.objects.get_or_create(key="ibge")
         pending = state.change_cursor and (not state.last_success_at or state.change_cursor > state.last_success_at)
-        due = not state.last_success_at or state.last_success_at < now-timedelta(hours=int(integration.config.get("interval_hours",720)))
+        due = integration.config.get("automatic", "interval_hours" in integration.config) and (not state.last_success_at or state.last_success_at < now-timedelta(hours=int(integration.config.get("interval_hours",720))))
         retry_ready = not state.last_error_at or state.last_error_at < now-timedelta(minutes=min(60,2**min(state.failure_count,6)))
         lease = Lease("geo-ibge")
         if (pending or due) and retry_ready and lease.acquire():
@@ -52,7 +54,10 @@ def scheduler_tick():
             try:
                 licensed_configuration(weather,automatic=True)
                 month,_ = month_bounds()
-                request_collection(list(STATE_BY_UF),month.strftime("%Y-%m"),None)
+                ufs = weather_configuration(weather).get("scheduled_ufs", [])
+                if not ufs:
+                    raise PublicDataError("Agendamento sem UFs selecionadas; configure os recortes na Central.")
+                request_collection(ufs,month.strftime("%Y-%m"),None)
                 state.last_started_at,state.last_error = now,""
             except PublicDataError as error:
                 state.last_started_at,state.last_error = now,str(error)[:240]

@@ -6,6 +6,7 @@ from aplicativos.integracoes.services.geography import REGIONS, STATES, region_s
 from aplicativos.integracoes.services.weather import cached_weather, month_bounds, collection_readiness, spatial_value, VARIABLES, circular_mean
 from aplicativos.integracoes.models import WeatherCollectionJob, IntegrationLease
 from .analytics import MapAnalyticsService
+from aplicativos.integracoes.services.geo_operations import worker_state
 
 
 def aggregate_weather(rows):
@@ -83,7 +84,7 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
         readiness={"status":state,"message":messages[state]}
         if state == "queued" and not IntegrationLease.objects.filter(key="worker",expires_at__gt=timezone.now()).exists():
             readiness["message"] = "Coleta agendada. Worker sem lease ativo; verifique o serviço na Central."
-    readiness.update(configuration_status=configuration_status, can_collect=can_collect and bool(ufs), cache_available=bool(weather))
+    readiness.update(configuration_status=configuration_status, can_collect=can_collect and bool(ufs), cache_available=bool(weather),worker=worker_state())
     if presentation:
         readiness={"status":"completed" if weather else "unavailable","message":"Contexto climático disponível." if weather else "Contexto climático indisponível neste recorte."}
     if presentation:
