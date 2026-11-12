@@ -246,7 +246,8 @@ class WeatherCollectionJob(models.Model):
     """Idempotent, bounded on-demand queue consumed by the existing worker."""
     uf = models.CharField(max_length=2)
     period = models.DateField()
-    status = models.CharField(max_length=12, default="pending", choices=(("pending", "Pendente"), ("running", "Coletando"), ("success", "Concluído"), ("error", "Falhou")))
+    status = models.CharField(max_length=12, default="pending", choices=(("pending", "Pendente"), ("running", "Coletando"), ("success", "Concluído"), ("error", "Falhou"), ("paused", "Pausado"), ("cancelled", "Cancelado")))
+    progress = models.JSONField(default=dict, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     next_attempt_at = models.DateTimeField(default=timezone.now)
@@ -257,6 +258,32 @@ class WeatherCollectionJob(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=("uf", "period"), name="weather_job_uf_month_unique")]
         indexes = [models.Index(fields=("status", "next_attempt_at"), name="weather_job_due_idx")]
+
+
+class WeatherLocalCache(models.Model):
+    """Shared municipal/model-cell cache and progressive task, never a CMDB coordinate."""
+    location_key = models.CharField(max_length=220)
+    city = models.CharField(max_length=200)
+    uf = models.CharField(max_length=2)
+    ibge_code = models.CharField(max_length=7, blank=True)
+    latitude = models.FloatField(null=True)
+    longitude = models.FloatField(null=True)
+    precision = models.CharField(max_length=40, default="municipal_estimate")
+    period = models.DateField()
+    source = models.CharField(max_length=30)
+    model = models.CharField(max_length=30, default="era5")
+    status = models.CharField(max_length=12, default="pending", db_index=True)
+    payload = models.JSONField(default=dict, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    last_error = models.CharField(max_length=240, blank=True)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    collected_at = models.DateTimeField(null=True)
+    expires_at = models.DateTimeField(null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("location_key", "period", "source", "model"), name="weather_local_period_unique")]
 
 
 class CMDBOperatorMirror(models.Model):

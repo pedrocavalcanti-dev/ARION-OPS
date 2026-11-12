@@ -14,7 +14,7 @@ from aplicativos.auditoria.services import AuditService
 from aplicativos.configuracoes.permissions import access_required
 from .clients.public_data import ARCHIVE_ENDPOINTS, PublicDataError
 from .forms import GeographyConfigurationForm, WeatherConfigurationForm, WeatherCollectionForm
-from .models import ExternalAPIHealthCheck, WeatherCollectionJob
+from .models import ExternalAPIHealthCheck, WeatherCollectionJob, WeatherLocalCache
 from .services.geography import fetch_catalog
 from .services.secrets import get_secret_protector
 from .services.sync_lock import Lease
@@ -47,11 +47,22 @@ def detail(request, provider):
     return _render(request,provider,integration,form)
 
 
-def _render(request, provider, integration, form, status=200):
+def _render(request, provider, integration, form, status=200, collection_form=None, preview=None):
+    if form is None and provider=="open_meteo" and request.user.has_perm("configuracoes.manage_integrations"):
+        from .services.geo_configuration import weather_configuration
+        try:
+            initial=weather_configuration(integration)
+        except PublicDataError:
+            initial={**WEATHER_DEFAULTS,**integration.config}
+        form=WeatherConfigurationForm(initial={**initial,"enabled":integration.enabled,"credential_configured":bool(integration.secret_ciphertext)},user=request.user)
     context = geo_operational_context()
     history = [{"at":check.created_at, "label":"Teste / operação", "status":check.get_status_display(), "message":check.message} for check in integration.checks.all()[:10]]
     jobs = list(WeatherCollectionJob.objects.order_by("-updated_at")[:10]) if provider=="open_meteo" else []
     history.extend({"at":job.updated_at, "label":f"Coleta {job.uf} · {job.period:%m/%Y}", "status":job.get_status_display(), "message":job.last_error or "Processamento pelo worker."} for job in jobs)
+    if provider=="open_meteo":
+        from .services.geo_operations import allowed_weather_ufs
+        for row in WeatherLocalCache.objects.filter(uf__in=allowed_weather_ufs(request.user)).order_by("-updated_at")[:10]:
+            history.append({"at":row.updated_at,"label":f"Localidade {row.city}/{row.uf} · {row.period:%m/%Y}","status":{"pending":"Pendente","running":"Coletando","success":"Concluído","error":"Falhou"}.get(row.status,row.status),"message":row.last_error or "Estimativa municipal IBGE · série diária e horária compartilhada por localidade."})
     context.update({
         "integration":integration, "provider":provider, "api_form":form,
         "can_manage_integrations":request.user.has_perm("configuracoes.manage_integrations"),
@@ -59,8 +70,13 @@ def _render(request, provider, integration, form, status=200):
         "can_collect_weather":request.user.has_perm("configuracoes.run_integrations") and request.user.has_perm("configuracoes.view_map"),
         "credential_configured":bool(integration.secret_ciphertext),
         "history":sorted(history,key=lambda row:row["at"],reverse=True)[:10], "jobs":jobs,
-        "collection_form":WeatherCollectionForm(user=request.user,initial={"uf":"SP","period":month_bounds()[0].strftime("%Y-%m")}) if provider=="open_meteo" else None,
+        "collection_form":collection_form or (WeatherCollectionForm(user=request.user,initial={"scope":"brazil","uf":"SP","period":month_bounds()[0].strftime("%Y-%m")}) if provider=="open_meteo" else None),
+        "geo_preview":preview,
     })
+    if provider=="open_meteo":
+        from .services.weather_coverage import collection_plan
+        from .services.geo_operations import allowed_weather_ufs
+        context["geo_coverage"] = collection_plan(allowed_weather_ufs(request.user),month_bounds()[0].strftime("%Y-%m"))
     return render(request,"integracoes/geography_weather.html",context,status=status)
 
 
@@ -161,9 +177,23 @@ def sync(request,provider):
         else:
             try:
                 values=form.cleaned_data
-                jobs=request_collection([values["uf"]],values["period"],request.user)
+                from .services.weather_coverage import collection_plan, control_jobs, plan_token, verify_plan
+                operation = request.POST.get("operation","collect")
+                if operation=="preview":
+                    preview = collection_plan(values["ufs"],values["period"])
+                    preview["token"] = plan_token(request.user,values["ufs"],values["period"])
+                    return _render(request,provider,get_geo_integration(provider),None,collection_form=form,preview=preview)
+                if operation in {"pause","resume","cancel"}:
+                    count = control_jobs(values["ufs"],values["period"],operation)
+                    messages.success(request,f"Fila atualizada: {count} tarefa(s). Cache e progresso preservados.")
+                    AuditService.record(request=request,category="integration",action="weather.queue_control",description="Controle da fila climática.",metadata={"operation":operation,"jobs":count})
+                    return redirect("configuracoes:integracoes:geo-detail",provider=provider)
+                if len(values["ufs"])>1:
+                    if not verify_plan(request.POST.get("preview_token",""),request.user,values["ufs"],values["period"]):
+                        raise ValueError("Visualize a estimativa do recorte antes de iniciar a coleta em lote.") from None
+                jobs=request_collection(values["ufs"],values["period"],request.user)
                 messages.success(request,"Coleta solicitada ao worker." if jobs else "Cache válido já disponível para esta UF e mês.")
-                AuditService.record(request=request,category="integration",action="weather.collection_requested",description="Coleta climática de uma UF solicitada pela Central.",metadata={"uf":values["uf"],"period":values["period"],"jobs":len(jobs)})
+                AuditService.record(request=request,category="integration",action="weather.collection_requested",description="Coleta climática progressiva solicitada pela Central.",metadata={"ufs":values["ufs"],"period":values["period"],"jobs":len(jobs)})
             except (PublicDataError,ValueError) as error:
                 messages.error(request,str(error))
     return redirect("configuracoes:integracoes:geo-detail",provider=provider)

@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
 
 from ..clients.public_data import PublicDataClient, PublicDataError
-from ..models import ExternalAPIHealthCheck, ExternalAPIIntegration, IntegrationSyncState, WeatherCollectionJob, WeatherMonth
+from ..models import ExternalAPIHealthCheck, ExternalAPIIntegration, IntegrationSyncState, WeatherCollectionJob, WeatherMonth, WeatherLocalCache
 from .external_apis import decrypt_external_api_secret
 from .geography import STATE_BY_UF
 from .sync_lock import Lease
@@ -206,12 +206,13 @@ def _count_request(integration, cfg):
     key = "meteo-" + timezone.localdate().isoformat()
     state, _ = IntegrationSyncState.objects.get_or_create(key=key, defaults={"records_count":0})
     if (state.records_count or 0) >= int(cfg.get("daily_budget", 250)):
-        raise PublicDataError("Limite diário de consultas climáticas atingido.", code="rate_limited", retry_after=3600)
+        tomorrow=timezone.make_aware(datetime.combine(timezone.localdate()+timedelta(days=1),datetime.min.time()))
+        raise PublicDataError("Limite diário de consultas climáticas atingido; aguardando o próximo dia.", code="budget", retry_after=max(60,math.ceil((tomorrow-timezone.now()).total_seconds())))
     IntegrationSyncState.objects.filter(pk=state.pk).update(records_count=F("records_count")+1, last_started_at=timezone.now())
 
 
 @sensitive_variables()
-def collect_month(uf, period, integration, *, client=None):
+def collect_month(uf, period, integration, *, client=None, job=None):
     cfg = configured_weather(integration)
     start, end = month_bounds(period.strftime("%Y-%m"))
     # Archive has delayed availability; the current month is explicitly partial.
@@ -225,14 +226,26 @@ def collect_month(uf, period, integration, *, client=None):
         return cache
     client = client or PublicDataClient(cfg.get("timeout",15), cfg.get("retries",1), weather_endpoint=cfg["endpoint"])
     secret = weather_secret(integration,cfg)
+    fingerprint = f"{source}:{MODEL}:{METHOD}:{start}:{end}"
+    progress = job.progress if job and job.progress.get("fingerprint")==fingerprint else {}
+    completed = dict(progress.get("samples", {}))
     cells = {}
-    for point in sampling_points(uf):
-        params = {"latitude":point["latitude"], "longitude":point["longitude"], "start_date":start.isoformat(), "end_date":end.isoformat(),
-                  "daily":",".join(VARIABLES), "wind_speed_unit":"kmh", "timezone":"America/Sao_Paulo", "models":MODEL}
-        if secret:
-            params["apikey"] = secret
-        payload = client.get(cfg["endpoint"], params, before_attempt=lambda:_count_request(integration,cfg))
-        sample = parse_daily(payload,start,end)
+    for index, point in enumerate(sampling_points(uf)):
+        if str(index) in completed:
+            sample = completed[str(index)]
+        else:
+            if job and not WeatherCollectionJob.objects.filter(pk=job.pk,status="running").exists():
+                raise PublicDataError("Coleta pausada pelo operador.", code="paused")
+            params = {"latitude":point["latitude"], "longitude":point["longitude"], "start_date":start.isoformat(), "end_date":end.isoformat(),
+                      "daily":",".join(VARIABLES), "wind_speed_unit":"kmh", "timezone":"America/Sao_Paulo", "models":MODEL}
+            if secret:
+                params["apikey"] = secret
+            payload = client.get(cfg["endpoint"], params, before_attempt=lambda:_count_request(integration,cfg))
+            sample = parse_daily(payload,start,end)
+            completed[str(index)] = sample
+            if job:
+                job.progress = {"fingerprint":fingerprint,"samples":completed}
+                WeatherCollectionJob.objects.filter(pk=job.pk).update(progress=job.progress,updated_at=timezone.now())
         cell_key = tuple(sample["cell"])
         if cell_key in cells:
             cells[cell_key]["area_km2"] += point["area_km2"]
@@ -298,7 +311,7 @@ def cached_weather(ufs, period):
     except PublicDataError:
         return {}
     sources = weather_sources(cfg)
-    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source__in=sources,model=MODEL,method__in=("area-grid-v1",METHOD)).order_by("uf","method","collected_at")
+    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source__in=sources,model=MODEL,method__in=("area-grid-v1",METHOD)).defer("samples").order_by("uf","method","collected_at")
     result = {}
     # Current method always wins over v1, then use the latest collection.
     for row in rows:
@@ -315,19 +328,34 @@ def worker_tick():
     stop, thread = lease.keep_alive()
     try:
         now = timezone.now()
+        cooldown, _ = IntegrationSyncState.objects.get_or_create(key="weather-cooldown")
+        if cooldown.change_cursor and cooldown.change_cursor > now:
+            return
+        turn,_ = IntegrationSyncState.objects.get_or_create(key="weather-turn",defaults={"records_count":0})
+        local_due = WeatherLocalCache.objects.filter(status="pending",next_attempt_at__lte=now).exists()
+        if local_due and (turn.records_count or 0)%2==0:
+            from .weather_local import local_worker_tick
+            local_worker_tick()
+            IntegrationSyncState.objects.filter(pk=turn.pk).update(records_count=F("records_count")+1)
+            return
         WeatherCollectionJob.objects.filter(status="running",updated_at__lt=now-timedelta(minutes=10)).update(status="pending",next_attempt_at=now)
         job = WeatherCollectionJob.objects.filter(status="pending",next_attempt_at__lte=now).order_by("created_at").first()
         if not job:
+            from .weather_local import local_worker_tick
+            local_worker_tick()
             return
         job.status, job.attempts = "running",job.attempts+1
         job.save()
+        IntegrationSyncState.objects.filter(pk=turn.pk).update(records_count=F("records_count")+1)
         integration = get_geo_integration("open_meteo")
         try:
-            collect_month(job.uf,job.period,integration)
+            collect_month(job.uf,job.period,integration,job=job)
             job.status, job.last_error = "success",""
             integration.last_success_at, integration.last_error = timezone.now(),""
             integration.health = "available"
         except Exception as error:
+            if getattr(error,"code","") == "paused":
+                return
             # Never persist provider response bodies, raw exception strings or URLs.
             job.last_error = str(error)[:240] if isinstance(error,PublicDataError) else "Falha climática; cache anterior preservado."
             job.status = "pending" if job.attempts < 3 else "error"
@@ -337,9 +365,15 @@ def worker_tick():
                 # An unrepresentable provider delay requires operator review, never an earlier automatic retry.
                 job.status = "error"
                 job.next_attempt_at = datetime.max.replace(tzinfo=datetime_timezone.utc)
+            if getattr(error,"code","") in {"budget","rate_limited"}:
+                job.attempts=max(0,job.attempts-1)
+                if job.next_attempt_at.year<9999: job.status="pending"
+                cooldown.change_cursor = job.next_attempt_at
+                cooldown.save(update_fields=("change_cursor",))
             if integration:
                 integration.last_error, integration.health = job.last_error,"error"
-        job.save()
+        # A pause/cancel request made while the final HTTP response arrived wins.
+        WeatherCollectionJob.objects.filter(pk=job.pk,status="running").update(status=job.status,attempts=job.attempts,next_attempt_at=job.next_attempt_at,last_error=job.last_error,updated_at=timezone.now())
         if integration:
             integration.save(update_fields=("last_success_at","last_error","health","updated_at"))
             ExternalAPIHealthCheck.objects.create(integration=integration,status="success" if job.status=="success" else "error",

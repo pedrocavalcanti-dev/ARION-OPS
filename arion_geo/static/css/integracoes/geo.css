@@ -68,3 +68,4 @@
  .geo-integration-kpis > div { padding:13px; }
 }
 @media(prefers-reduced-motion:reduce) { .geo-config-toggle-track::after { transition:none; } }
+.geo-collection-preview { flex-basis:100%; padding:16px; border:1px solid var(--border-primary); border-radius:8px; color:var(--text-secondary); font-size:13px; line-height:1.6; }

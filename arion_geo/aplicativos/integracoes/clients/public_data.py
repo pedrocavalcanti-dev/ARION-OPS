@@ -5,6 +5,7 @@ from io import BytesIO
 import time
 import ipaddress
 import socket
+import re
 from http.client import HTTPSConnection
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -107,7 +108,8 @@ class PublicDataClient:
 
     @sensitive_variables()
     def get(self, endpoint, params=None, before_attempt=None):
-        if endpoint not in ALLOWED_URLS and endpoint != self.weather_endpoint:
+        ibge_local = re.fullmatch(r"https://servicodados\.ibge\.gov\.br/api/(?:v1/localidades/estados/[1-5][0-9]/municipios|v3/malhas/municipios/[1-5][0-9]{6})",endpoint)
+        if endpoint not in ALLOWED_URLS and endpoint != self.weather_endpoint and not ibge_local:
             raise PublicDataError("Destino da integração não permitido.")
         if endpoint == self.weather_endpoint:
             validate_weather_endpoint("self_hosted", endpoint)

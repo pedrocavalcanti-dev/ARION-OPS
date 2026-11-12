@@ -217,17 +217,43 @@ class WeatherConfigurationForm(forms.Form):
             self.add_error("api_key", "Cadastre uma chave para o endpoint comercial selecionado.")
         if cleaned.get("automatic") and not cleaned.get("scheduled_ufs"):
             self.add_error("scheduled_ufs", "Selecione pelo menos uma UF para o agendamento.")
+        if cleaned.get("automatic") and cleaned.get("scheduled_ufs") and all(cleaned.get(key) for key in ("cache_hours","interval_hours","daily_budget")):
+            from .services.weather import sampling_points
+            requests=sum(len(sampling_points(uf)) for uf in cleaned["scheduled_ufs"])
+            days=max(1,min(cleaned["cache_hours"],cleaned["interval_hours"])//24)
+            if requests>days*cleaned["daily_budget"]:
+                self.add_error("daily_budget",f"O recorte prevê {requests} requisições antes de retries e excede a capacidade de {days} dia(s) antes da próxima atualização/expiração. Reduza o recorte ou ajuste os limites autorizados.")
         return cleaned
 
 
 class WeatherCollectionForm(forms.Form):
-    uf = forms.ChoiceField(label="UF")
+    scope = forms.ChoiceField(label="Abrangência", required=False, choices=(("uf","UF"),("region","Macrorregião"),("brazil","Brasil")))
+    region = forms.ChoiceField(label="Macrorregião", required=False)
+    uf = forms.ChoiceField(label="UF", required=False)
     period = forms.CharField(label="Mês da coleta", widget=forms.DateInput(attrs={"type":"month"}))
 
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
         from .services.geo_operations import allowed_weather_ufs
-        self.fields["uf"].choices = [(uf,uf) for uf in sorted(allowed_weather_ufs(user))]
+        from .services.geography import REGIONS
+        self.allowed = sorted(allowed_weather_ufs(user))
+        self.fields["region"].choices = [("","Selecione"),*((r["sigla"],r["nome"]) for r in REGIONS)]
+        self.fields["uf"].choices = [("","Selecione"),*((uf,uf) for uf in self.allowed)]
+
+    def clean(self):
+        from .services.geography import region_states
+        cleaned = super().clean()
+        scope = cleaned.get("scope") or "uf"
+        if scope=="uf":
+            ufs = [cleaned["uf"]] if cleaned.get("uf") else []
+        elif scope=="region":
+            ufs = [uf for uf in region_states(cleaned["region"]) if uf in self.allowed] if cleaned.get("region") else []
+        else:
+            ufs = self.allowed
+        if not ufs:
+            raise forms.ValidationError("Selecione um recorte com UFs no seu escopo autorizado.")
+        cleaned["ufs"] = ufs
+        return cleaned
 
     def clean_period(self):
         from .services.weather import month_bounds

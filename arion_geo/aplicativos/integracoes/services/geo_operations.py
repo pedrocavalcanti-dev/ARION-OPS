@@ -18,6 +18,8 @@ def worker_state():
 
 def allowed_weather_ufs(user):
     from .analytics import LinkQueryService
+    if user.is_superuser:
+        return [s["sigla"] for s in STATES]
     def norm(value):
         return "".join(c for c in unicodedata.normalize("NFD",str(value or "")) if not unicodedata.combining(c)).strip().casefold()
     present = {norm(v) for v in LinkQueryService.base(user).values_list("state",flat=True).distinct()}
