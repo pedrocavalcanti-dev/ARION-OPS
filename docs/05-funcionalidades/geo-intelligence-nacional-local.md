@@ -43,7 +43,11 @@ Não existe confirmação automática de causalidade. O espelho atual não forne
 
 ## Mapa, ícones e filtros
 
-A faixa compacta abaixo do cabeçalho reúne os seis modos, período e acesso aos filtros. Em telas menores, o seletor de período muda para o mesmo drawer, sem duplicação. Análises mantém fechado/resumo/expandido; expandido ocupa a lateral direita em desktop e a parte inferior no mobile, com uma rolagem principal e seções recolhíveis. Abrir detalhes da UF alterna a superfície lateral. A câmera manual e a região selecionada são preservadas.
+O cabeçalho principal preserva logo e perfil, identifica GEO Intelligence e oferece navegação geral e Apresentar aos usuários autorizados, inclusive no mobile. A barra secundária reúne os seis modos, período, busca de UF e acesso aos filtros, com quebra de linha e sem rolagem horizontal. A legenda dinâmica ocupa sua própria faixa superior, fora do palco do Mapa.
+
+O painel Brasil/Região/UF fica à esquerda e pode ser recolhido; análises expandidas, filtros e detalhes de UF alternam uma única superfície direita de 380–460 px no desktop. Abrir filtros suspende a superfície anterior e fechar restaura seu estado. Fechar detalhes retorna à análise anterior e mantém a UF selecionada. O canvas reserva a largura real de ambos os lados, com resize e enquadramento condicionados à exploração manual. No mobile, os painéis usam a superfície inferior e alternam com o resumo contextual. Análises preserva os estados fechado/resumo/expandido.
+
+A apresentação inicia com cliente, projeto pertinente e mês. O cliente permanece fixado no backend e no cabeçalho; os botões globais de cliente não são renderizados. Projetos, ISPs, UFs e catálogos respeitam cliente e Data Scope em cada endpoint. A legenda Base identifica apenas esse cliente; os demais modos usam projetos, escalas e categorias pertinentes. Trocar projeto ou ISP revalida a seleção territorial sem ampliar o cliente. Encerrar usa o fluxo nativo com auditoria e retorna ao Mapa interno.
 
 Ícones Mapbox são opcionais: chuva, calor, frio e vento. No Brasil representam agregados estaduais em posições representativas; região/UF podem exibir localidades com cache municipal. Símbolos usam prevenção de sobreposição e agrupamento. O popover informa período, variáveis, incidentes do recorte (sem inventar raio de proximidade), fonte e precisão. Sem dado ou sem atingir o limiar, não há símbolo. A timeline reutiliza a série local.
 
