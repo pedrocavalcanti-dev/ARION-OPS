@@ -33,13 +33,6 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
   const categoryKeys={Massiva:"massiva",Rompimento:"rompimento",Equipamento:"equipamento",Energia:"energia","Configuração":"configuracao","Reset remoto":"reset_remoto","Demais motivos técnicos":"demais","Sem classificação":"sem_classificacao","Pendência Financeira":"financeiro"};
   const status=$("[data-weather-status]");
   const timeline=$("[data-geo-timeline]");
-  const periodControl=$("[data-period-control]"),periodMedia=window.matchMedia("(max-width:1100px)");
-  function placePeriod(){
-    if(!periodControl)return;
-    if(periodMedia.matches)month?.closest(".geo-filter-fields")?.prepend(periodControl);
-    else page.querySelector(".geo-analysis-controls")?.insertBefore(periodControl,page.querySelector(".geo-search-wrap"));
-  }
-  periodMedia.addEventListener("change",placePeriod);placePeriod();
   function setPanelState(value){
     panel.dataset.panelState=value;
     page.classList.toggle("has-analytics-drawer",value==="expanded");
@@ -63,7 +56,10 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
   }).observe(panel);
   function syncControls(){
     region.value=state.region;
-    const ufs=regions[state.region]||allUF;
+    const ufs=current?.summary?.presentation?current.summary.allowed_ufs:(regions[state.region]||allUF);
+    if(current?.summary?.presentation){
+      region.innerHTML='<option value="">Brasil</option>'+current.catalog.regions.map(r=>`<option value="${r.sigla}">${escape(r.nome)}</option>`).join("");region.value=state.region;
+    }
     uf.innerHTML='<option value="">Todas as UFs</option>'+ufs.map(code=>`<option value="${code}">${code}</option>`).join("");
     uf.value=state.selectedUF;
     if(month){month.value=/^\d{4}-\d{2}$/.test(state.period)?state.period:state.period==="this_month"?root.dataset.currentPeriod:root.dataset.defaultPeriod;month.max=root.dataset.currentPeriod||"";}
@@ -76,13 +72,13 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
     syncControls();
     const own=++sequence;
     controller?.abort();controller=new AbortController();
-    const link=$("[data-present-action]");if(link)link.href=urlFor(link.getAttribute("href"),{period:state.period}).href;
+    const link=document.querySelector("[data-present-action]");if(link)link.href=urlFor(link.getAttribute("href"),{period:state.period}).href;
     try{
       const response=preloaded?null:await fetch(urlFor(panel.dataset.url),{headers:{"X-Requested-With":"XMLHttpRequest"},signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});
       const payload=preloaded||await response.json();
       if(own!==sequence)return;
       if(response&&!response.ok)throw new Error(payload.error?.message||payload.error||"Análise mensal indisponível.");
-      current=payload;pause();
+      current=payload;syncControls();pause();
       syncMode();
       if(state.day&&!payload.daily.some(r=>r.date===state.day))state.day="";
       dayInput.max=payload.daily.length;
@@ -224,5 +220,5 @@ export function mountGeoIntelligence({page,root,state,urlFor,refresh,onWeather,f
     }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
   });
   syncControls();
-  return {update,syncMode,collapse:()=>{if(panel.dataset.panelState==="expanded")setPanelState("summary");},allowedUFs:()=>regions[state.region]||allUF};
+  return {update,syncMode,collapse:()=>{if(panel.dataset.panelState==="expanded")setPanelState("summary");},allowedUFs:()=>current?.summary?.presentation?current.summary.allowed_ufs:(regions[state.region]||allUF)};
 }

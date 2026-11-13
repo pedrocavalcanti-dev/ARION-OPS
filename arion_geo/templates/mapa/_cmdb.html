@@ -7,9 +7,9 @@
     <div class="geo-heading" hidden><h1 id="geo-title">Base de links</h1><span data-source-badge></span></div>
     <div class="map-more-filters-content" data-more-filters-content>
       <details class="geo-filter-section" open><summary>Cliente e projeto</summary><div class="geo-filter-fields">
-        <div class="operator-control"><span class="control-caption">Cliente</span><div class="geo-filters" role="group" aria-label="Filtrar cliente contratante">
+        {% if not presentation %}<div class="operator-control"><span class="control-caption">Cliente</span><div class="geo-filters" role="group" aria-label="Filtrar cliente contratante">
           <button class="filter-chip is-selected" type="button" data-client="all" aria-pressed="true">Todas</button><button class="filter-chip" type="button" data-client="Claro" aria-pressed="false">Claro</button><button class="filter-chip" type="button" data-client="Vivo" aria-pressed="false">Vivo</button><button class="filter-chip" type="button" data-client="Algar" aria-pressed="false">Algar</button><button class="filter-chip" type="button" data-client="other" aria-pressed="false">Outras</button>
-        </div></div>
+        </div></div>{% endif %}
         {% if presentation %}<p class="geo-fixed-client">Cliente fixado: {{ presentation_client }}</p>{% endif %}
         <label>Projeto<select data-project-filter aria-label="Filtrar projeto"><option value="">Todos os projetos</option></select></label>
       </div></details>
@@ -39,11 +39,11 @@
     <div class="geo-search-wrap"><label class="map-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8"/><path d="m13.2 13.2 4 4"/></svg><input type="search" data-state-search placeholder="Buscar UF..." autocomplete="off" aria-label="Buscar estado por nome ou sigla" role="combobox" aria-expanded="false" aria-controls="state-search-results" aria-autocomplete="list"><kbd>UF</kbd></label><div id="state-search-results" class="state-search-results" data-state-search-results role="listbox" aria-label="Estados correspondentes" hidden></div></div>
   </div>
   <div class="map-active-filters" data-active-filters role="group" aria-label="Filtros aplicados" hidden></div>
+  <div class="geo-legend geo-mode-legend" data-legend aria-live="polite"></div>
 <main class="geo-map-stage" data-map-config data-token="{{ mapbox_token }}" data-geojson-url="{% static 'geo/brasil_estados.geojson' %}" data-default-period="{{ default_period }}" data-current-period="{{ current_period }}" data-presentation="{{ presentation|yesno:'true,false' }}" data-fixed-client="{{ presentation_client }}" data-fixed-project="{{ presentation_project }}" data-fixed-period="{{ presentation_period }}" data-api-url="{% if presentation %}{{ presentation_api }}{% else %}{% url 'base_links:map-aggregates' %}{% endif %}" data-detail-url="{% if presentation %}{{ presentation_detail }}{% else %}{% url 'base_links:map-state-detail' %}{% endif %}" data-base-url="{% url 'base_links:index' %}" data-cockpit-url="{% url 'cockpit' %}">
   <div id="brazil-map" class="geo-map-canvas" role="application" aria-label="Mapa interativo do Brasil por estado"></div>
   <div class="state-hover-tooltip" data-state-hover-tooltip role="tooltip" hidden></div>
   <nav class="map-breadcrumb" data-breadcrumb aria-label="Localização atual" hidden><button type="button" data-brazil-link>Brasil</button><span aria-hidden="true">/</span><span data-selected-name></span></nav>
-  <div class="geo-legend geo-legend--overlay" data-legend aria-live="polite"></div>
   <div class="map-message" data-map-message role="status" aria-live="polite"><span class="map-message-spinner" data-map-spinner aria-hidden="true"></span><div><strong data-message-title>Preparando mapa</strong><span data-message-description>Carregando dados locais do CMDB e OTRS.</span></div></div>
   <aside class="national-panel" data-national-panel aria-label="Resumo nacional do Brasil"><header class="national-header"><div><span class="section-kicker">BRASIL</span><span class="national-subtitle">Visão nacional</span></div><button class="national-collapse" type="button" data-national-collapse aria-label="Recolher resumo nacional" aria-expanded="true">&#8249;</button></header><div class="national-content" data-national-content><div class="national-tabs" role="tablist" aria-label="Resumo nacional"><button type="button" role="tab" data-national-tab="summary" aria-selected="true">Resumo</button><button type="button" role="tab" data-national-tab="ranking" aria-selected="false">Ranking</button><button type="button" role="tab" data-national-tab="distribution" aria-selected="false">Distribuição</button></div><div class="national-view" data-national-view role="tabpanel"></div></div></aside>
   <button class="national-expand" type="button" data-national-expand aria-label="Expandir resumo nacional" hidden><span aria-hidden="true">&#8250;</span><span>Resumo</span></button>

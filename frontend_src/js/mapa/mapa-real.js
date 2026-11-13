@@ -66,7 +66,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
     "[data-panel-total]", "[data-panel-scope]", "[data-panel-context]", "[data-panel-overview]", "[data-panel-projects]", "[data-panel-providers]", "[data-panel-reasons]", "[data-panel-recurrence]", "[data-panel-tickets]", "[data-state-tab='overview']", "[data-state-tab='tickets']", "[data-panel-ticket-search]", "[data-panel-ticket-size]", "[data-panel-ticket-pagination]",
     "[data-ticket-filters]", "[data-status-filter]", "[data-priority-filter]",
     "[data-open-base]", "[data-open-cockpit]", "[data-map-announcement]", "[data-state-search]", "[data-state-search-results]",
-    "[data-mode]", "[data-client]", "[data-project-filter]", "[data-period-control]", "[data-period-filter]",
+    "[data-mode]", ...(root.dataset.presentation==="true"?[]:["[data-client]"]), "[data-project-filter]", "[data-period-control]", "[data-period-filter]",
     "[data-provider-filter]", "[data-motives-select]", "[data-motive-filter]", "[data-custom-period]", "[data-arion-status-filter]", "[data-assignee-filter]", "[data-active-filters]",
     "[data-date-from]", "[data-date-to]", "[data-apply-period]", "[data-legend]",
   ];
@@ -106,7 +106,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
   if(isPresentation){state.mode=initialParams.get("mode")||"calls";state.client=root.dataset.fixedClient;state.project=initialParams.get("project")??root.dataset.fixedProject;state.period=initialParams.get("period")||root.dataset.fixedPeriod;state.layer=initialParams.get("layer")||"analysis";}
   ui.period.disabled = true;
   ui.reasonWrap.hidden = true;
-  let map = null, geojson = null, data = null, mapLoaded = false, requestSequence = 0, searchIndex = -1, periodHideTimer = 0, panelHideTimer = 0, panelSearchTimer = 0, moreFiltersTimer = 0, tooltipMoveFrame = 0;
+  let map = null, geojson = null, data = null, mapLoaded = false, requestSequence = 0, searchIndex = -1, panelHideTimer = 0, panelSearchTimer = 0, moreFiltersTimer = 0, tooltipMoveFrame = 0;
   let requestController = null, detailController = null, detailSequence = 0, hoveredUF = "", appliedSelectedUF = "";
   let tooltipKey = "", tooltipCloseTimer = 0, tooltipPoint = null;
   const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
@@ -142,7 +142,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
     else if(key==="provider")state.provider="";
     else if(key==="uf"){clearSelection();return;}
     else if(key==="reason")state.reason="";
-    else if(key==="period"){state.period="this_month";state.dateFrom="";state.dateTo="";}
+    else if(key==="period"){state.period="last_month";state.dateFrom="";state.dateTo="";}
     else if(key==="status")state.status="";
     else if(key==="priority")state.priority="";
     else if(key==="arionStatus")state.arionStatus="";
@@ -170,11 +170,26 @@ import { mountWeatherIcons } from "./weather-icons.js";
     tooltipPoint=null;ui.hoverTooltip.hidden=true;ui.hoverTooltip.innerHTML="";tooltipKey="";
   }
   function deferCloseTooltip(){clearTimeout(tooltipCloseTimer);tooltipCloseTimer=setTimeout(()=>{if(!hoveredUF)closeTooltip();},90);}
+  let rightSurface="", previousSurface="";
+  function syncRightSurface(){
+    const analytics=page.querySelector("[data-geo-intelligence]");
+    const surface=ui.moreFilters.open?"filters":rightSurface;
+    page.dataset.rightSurface=surface;
+    analytics.hidden=surface==="filters"||surface==="details";
+    panel.hidden=surface!=="details";
+    panel.inert=surface!=="details";
+    panel.setAttribute("aria-hidden",String(surface!=="details"));
+    panel.classList.toggle("is-open",surface==="details");
+    panelBackdrop.classList.remove("is-visible");
+    page.classList.toggle("has-analytics-drawer",surface==="analysis");
+    updateMapLayout();
+    page.dispatchEvent(new CustomEvent("geo:layout"));
+  }
   function syncMoreFiltersOpen(){
     const open=ui.moreFilters.open,toolbar=page.querySelector(".geo-toolbar--map");
     toolbar.classList.toggle("is-more-filters-open",open);
     ui.moreFilters.querySelector("summary").setAttribute("aria-expanded",String(open));
-    page.dispatchEvent(new CustomEvent("geo:layout"));
+    syncRightSurface();
     if(!open)clearTimeout(moreFiltersTimer);
   }
 
@@ -249,16 +264,9 @@ import { mountWeatherIcons } from "./weather-icons.js";
   function updateModeControls(){
     geoController.syncMode();
     const temporal=["projects","calls","repeat","motives","climate"].includes(state.mode);
-    if(ui.periodControl){
-      if(temporal){
-        clearTimeout(periodHideTimer);ui.periodControl.hidden=false;
-        requestAnimationFrame(()=>ui.periodControl.classList.add("is-visible"));
-      }else{
-        ui.periodControl.classList.remove("is-visible");
-        clearTimeout(periodHideTimer);periodHideTimer=setTimeout(()=>{if(!["projects","calls","repeat","motives","climate"].includes(state.mode))ui.periodControl.hidden=true;},180);
-      }
-    }
-    ui.period.disabled=!temporal;
+    ui.period.disabled=false;
+    ui.periodControl.hidden=false;
+    ui.periodControl.classList.add("is-visible");
     ui.dates.hidden=!(temporal&&state.period==="custom");
     const incidents=["calls","repeat","motives","climate"].includes(state.mode);
     ui.reasonWrap.hidden=!incidents;
@@ -491,7 +499,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
       return;
     }
     if(state.layer==="motives"){
-      ui.legend.innerHTML=Object.entries(causeColors).filter(([label])=>!isPresentation||label!=="Pendência Financeira").map(([label,color])=>`<span class="legend-item"><i class="legend-dot" style="background:${color}"></i>${esc(label)}</span>`).join("");return;
+      ui.legend.innerHTML=Object.entries(causeColors).filter(([label])=>!isPresentation||((data?.category_counts?.[label]||0)>0&&label!=="Pendência Financeira")).map(([label,color])=>`<span class="legend-item"><i class="legend-dot" style="background:${color}"></i>${esc(label)}</span>`).join("");return;
     }
     if(geoRamps[state.layer]||state.layer==="calls"){
       const ramps=geoRamps[state.layer]||quantitative.calls,colors=ramps[theme()],labels={temperature:"Temperatura média · °C",temperature_min:"Temperatura mínima · °C",temperature_max:"Temperatura máxima · °C",wind_speed:"Vento máximo · km/h",direction:"Direção dominante · graus",rain:"Chuva estimada · mm",wind:"Rajada máxima · km/h",correlation:"Dias com chuva ≥ 1 mm e incidentes técnicos · sem causalidade",calls:"Incidentes válidos"};
@@ -500,7 +508,9 @@ import { mountWeatherIcons } from "./weather-icons.js";
       }
       ui.legend.innerHTML=`<span class="legend-scale-label">${esc(labels[state.layer])}</span><span class="legend-scale" style="background:linear-gradient(90deg,${colors.join(",")})"></span><span class="legend-scale-label">${state.layer.startsWith("temperature")?"−15":"0"} — ${state.layer.startsWith("temperature")?"45":number.format(maxMetric())} · ${state.day?esc(state.day):"Mês"} · Cinza: sem dados</span>`;return;
     }
-    if (state.mode === "base") {
+    if (state.mode === "base" && isPresentation) {
+      ui.legend.innerHTML=`<span class="legend-item"><i class="legend-dot" style="background:${brandPalettes[theme()][norm(state.client)]?.[2]||"#768ba5"}"></i>${esc(state.client)} · links CMDB</span>`;
+    } else if (state.mode === "base") {
       ui.legend.classList.remove("geo-legend--scale");
       const colors=brandPalettes[theme()];
       ui.legend.innerHTML=`<span class="legend-item"><i class="legend-dot" style="background:${colors.claro[2]}"></i>Claro</span><span class="legend-item"><i class="legend-dot" style="background:${colors.vivo[2]}"></i>Vivo</span><span class="legend-item"><i class="legend-dot" style="background:${colors.algar[2]}"></i>Algar</span><span class="legend-item"><i class="legend-dot" style="background:${colors.other[2]}"></i>Outras</span><span class="legend-item"><i class="legend-dot" style="background:${colors.unidentified}"></i>N\u00e3o identificado</span>`;
@@ -515,6 +525,8 @@ import { mountWeatherIcons } from "./weather-icons.js";
   }
   function renderNational() {
     if (!data || !ui.nationalView) return;
+    national.querySelector(".section-kicker").textContent=state.selectedUF||state.region||"BRASIL";
+    national.querySelector(".national-subtitle").textContent=state.selectedUF?stateNames[state.selectedUF]:state.region?"Visão regional":"Visão nacional";
     if(state.mode==="climate"){
       const c=data.geo_climate||{};
       const value=v=>v==null?"Indisponível":number.format(v);
@@ -706,7 +718,10 @@ import { mountWeatherIcons } from "./weather-icons.js";
     root.style.setProperty("--map-national-width",`${nationalWidth}px`);
     root.style.setProperty("--map-control-inset",`${drawerWidth+16}px`);
     const analytics=page.querySelector("[data-geo-intelligence]");
-    const side=window.innerWidth>760?(page.classList.contains("has-analytics-drawer")?panelWidth(analytics,480)+36:state.selectedUF?drawerWidth+36:0):0;
+    const surface=page.dataset.rightSurface;
+    const side=window.innerWidth>760&&surface?panelWidth(surface==="filters"?page.querySelector(".geo-toolbar--map"):surface==="analysis"?analytics:panel,420)+18:0;
+    const left=window.innerWidth>760&&!state.collapsed?nationalWidth+18:0;
+    page.style.setProperty("--geo-left-space",`${left}px`);
     page.style.setProperty("--geo-side-space",`${side}px`);
     root.classList.toggle("national-collapsed",state.collapsed);
     root.classList.toggle("has-selection",Boolean(state.selectedUF));
@@ -719,7 +734,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
       const drawerHeight=focused?Math.min(panelHeight(),stageHeight*.48):0;
       padding={top:24,right:24,bottom:drawerHeight+24,left:24};
     }else{
-      const left=ui.moreFilters.open?ui.moreFilters.querySelector(".geo-toolbar").getBoundingClientRect().width+36:state.collapsed?28:panelWidth(national,300)+28;
+      const left=24;
       const analyticsExpanded=page.classList.contains("has-analytics-drawer");
       const right=24; // The side panel now has its own layout space outside the canvas.
       const maxOccupied=Math.max(0,stageWidth*.62),occupied=left+right;
@@ -751,11 +766,20 @@ import { mountWeatherIcons } from "./weather-icons.js";
     else{national.hidden=false;national.inert=false;national.removeAttribute("aria-hidden");requestAnimationFrame(()=>national.classList.remove("is-collapsed"));$('[data-national-expand]').hidden=true;$("[data-national-collapse]").setAttribute("aria-expanded","true");}
     updateMapLayout();requestAnimationFrame(()=>{map?.resize();refitCurrentMap(280);});
   }
-  function openPanel(){panel.hidden=false;panel.inert=false;panel.setAttribute("aria-hidden","false");panelBackdrop.classList.add("is-visible");updateMapLayout();requestAnimationFrame(()=>panel.classList.add("is-open"));}
-  function closePanel(){detailSequence++;detailController?.abort();panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");updateMapLayout();setTimeout(()=>{if(!state.selectedUF)panel.hidden=true;},220);}
+  function openPanel(){
+    if(rightSurface!=="details")return;
+    syncRightSurface();
+  }
+  function closePanel(){
+    detailSequence++;detailController?.abort();
+    if(rightSurface==="details")rightSurface=previousSurface==="analysis"?"analysis":"";
+    syncRightSurface();
+  }
   function selectState(code,zoom=true){
     if(!stateNames[code]||!geoController.allowedUFs().includes(code))return;
-    manualCamera=false;page.dispatchEvent(new CustomEvent("geo:details"));closeTooltip();
+    manualCamera=false;closeMoreFilters();closeTooltip();
+    if(rightSurface!=="details")previousSurface=rightSurface;
+    rightSurface="details";syncRightSurface();
     if(state.selectedUF!==code){state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";}
     state.selectedUF=code;syncUrl();ui.breadcrumb.hidden=false;ui.selectedName.textContent=stateNames[code];
     renderActiveFilters();updateMapLayout();renderMap();
@@ -774,19 +798,21 @@ import { mountWeatherIcons } from "./weather-icons.js";
     if(!geojson){closeSearch();return;}
     const query=norm(ui.search.value);
     if(!query){closeSearch();return;}
-    const found=geojson.features.filter(feature=>(!state.region||(data?.allowed_ufs||[]).includes(feature.properties.sigla))&&(norm(stateNames[feature.properties.sigla]||feature.properties.nome).includes(query)||feature.properties.sigla.toLowerCase().startsWith(query))).slice(0,8);
+    const found=geojson.features.filter(feature=>(!(state.region||isPresentation)||(data?.allowed_ufs||[]).includes(feature.properties.sigla))&&(norm(stateNames[feature.properties.sigla]||feature.properties.nome).includes(query)||feature.properties.sigla.toLowerCase().startsWith(query))).slice(0,8);
     ui.results.innerHTML=found.map(feature=>{const code=feature.properties.sigla,name=stateNames[code]||code;return `<button id="state-search-option-${code}" type="button" class="state-search-option" role="option" aria-selected="false" data-search-code="${code}"><img src="${esc(flags[code]||"")}" alt="" width="22" height="15" loading="lazy"><span>${esc(name)}</span><small>${code}</small></button>`;}).join("");
     ui.results.hidden=!found.length;ui.search.setAttribute("aria-expanded",String(found.length>0));searchIndex=-1;page.classList.toggle("is-search-open",found.length>0);updateSearchActive();
   }
   function chooseSearchResult(code){closeSearch(true);closeTooltip();selectState(code);}
 
   function bind(){
-    page.addEventListener("geo:analysis",event=>{if(event.detail.expanded){panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");}else if(state.selectedUF)openPanel();updateMapLayout();});
-    page.addEventListener("geo:details",()=>geoController.collapse());
+    page.addEventListener("geo:analysis",event=>{
+      rightSurface=event.detail.expanded?"analysis":"";
+      closeMoreFilters();syncRightSurface();
+    });
     page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
     page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;state.provider="";$("[data-filter-notice]").textContent="Projeto e ISP revalidados para o cliente selecionado.";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
-    ui.project.addEventListener("change",()=>{state.project=ui.project.value;state.provider="";$("[data-filter-notice]").textContent="ISP revalidado para o projeto selecionado.";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
-    ui.provider.addEventListener("change",()=>{state.provider=ui.provider.value;fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
+    ui.project.addEventListener("change",()=>{state.project=ui.project.value;state.provider="";if(isPresentation){state.selectedUF="";state.region="";ui.breadcrumb.hidden=true;closePanel();}$("[data-filter-notice]").textContent="ISP revalidado para o projeto selecionado.";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
+    ui.provider.addEventListener("change",()=>{state.provider=ui.provider.value;if(isPresentation){state.selectedUF="";ui.breadcrumb.hidden=true;closePanel();}fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
     ui.period.addEventListener("change",()=>{state.period=ui.period.value;if(state.period==="custom"){ui.moreFilters.open=true;syncMoreFiltersOpen();}state.dateFrom="";state.dateTo="";ui.dates.hidden=state.period!=="custom";if(state.period!=="custom")fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
     $("[data-apply-period]").addEventListener("click",()=>{state.dateFrom=ui.dateFrom.value;state.dateTo=ui.dateTo.value;if(state.dateFrom&&state.dateTo&&state.dateFrom>state.dateTo){ui.dateTo.setCustomValidity("A data final deve ser igual ou posterior à inicial.");ui.dateTo.reportValidity();return;}ui.dateTo.setCustomValidity("");fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
     ui.reason.addEventListener("change",()=>{state.reason=ui.reason.value;fetchData().catch(()=>showError("Não foi possível filtrar os motivos."));});
@@ -794,7 +820,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
     ui.priority.addEventListener("change",()=>{state.priority=ui.priority.value;fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel filtrar a prioridade."));});
     ui.arionStatus.addEventListener("change",()=>{state.arionStatus=ui.arionStatus.value;fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel filtrar o status ARION."));});
     ui.assignee.addEventListener("change",()=>{state.assignee=ui.assignee.value;fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel filtrar o respons\u00e1vel."));});
-    ui.activeFilters.addEventListener("click",event=>{const clear=event.target.closest("[data-clear-filter]");if(clear){clearFilterValue(clear.dataset.clearFilter);return;}if(event.target.closest("[data-clear-all-filters]")){closeMoreFilters();state.mode="base";state.region="";state.category="";state.layer="analysis";state.client=isPresentation?root.dataset.fixedClient:"all";state.project="";state.provider="";state.period="this_month";state.reason="";state.status="";state.priority="";state.arionStatus="";state.assignee="";state.dateFrom="";state.dateTo="";ui.project.value="";ui.provider.value="";ui.reason.value="";ui.status.value="";ui.priority.value="";ui.arionStatus.value="";ui.assignee.value="";ui.dateFrom.value="";ui.dateTo.value="";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client==="all";item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});clearSelection();updateModeControls();fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel limpar os filtros."));}});
+    ui.activeFilters.addEventListener("click",event=>{const clear=event.target.closest("[data-clear-filter]");if(clear){clearFilterValue(clear.dataset.clearFilter);return;}if(event.target.closest("[data-clear-all-filters]")){closeMoreFilters();state.mode="base";state.region="";state.category="";state.layer="analysis";state.client=isPresentation?root.dataset.fixedClient:"all";state.project="";state.provider="";state.period="last_month";state.reason="";state.status="";state.priority="";state.arionStatus="";state.assignee="";state.dateFrom="";state.dateTo="";ui.project.value="";ui.provider.value="";ui.reason.value="";ui.status.value="";ui.priority.value="";ui.arionStatus.value="";ui.assignee.value="";ui.dateFrom.value="";ui.dateTo.value="";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client==="all";item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});clearSelection();updateModeControls();fetchData().catch(()=>showError("N\u00e3o foi poss\u00edvel limpar os filtros."));}});
     ui.moreFilters.addEventListener("toggle",syncMoreFiltersOpen);
     page.querySelectorAll("[data-filters-close]").forEach(button=>button.addEventListener("click",()=>closeMoreFilters(true)));
     $("[data-filters-apply]").addEventListener("click",()=>{closeMoreFilters(true);fetchData().catch(error=>showError(error.message));});
@@ -819,8 +845,8 @@ import { mountWeatherIcons } from "./weather-icons.js";
     $("[data-national-collapse]").addEventListener("click",()=>setNationalCollapsed(true));
     $("[data-national-expand]").addEventListener("click",()=>setNationalCollapsed(false));
     page.querySelectorAll("[data-national-tab]").forEach(button=>button.addEventListener("click",()=>setPanelTab(button.dataset.nationalTab)));
-    $("[data-brazil-link]").addEventListener("click",clearSelection);$("[data-panel-close]").addEventListener("click",clearSelection);
-    const moveState=step=>{const order=stateOrder.filter(code=>!state.region||(data?.allowed_ufs||[]).includes(code));const index=order.indexOf(state.selectedUF);if(index<0)return;selectState(order[(index+step+order.length)%order.length]);};
+    $("[data-brazil-link]").addEventListener("click",clearSelection);$("[data-panel-close]").addEventListener("click",closePanel);
+    const moveState=step=>{const order=stateOrder.filter(code=>!(state.region||isPresentation)||(data?.allowed_ufs||[]).includes(code));const index=order.indexOf(state.selectedUF);if(index<0)return;selectState(order[(index+step+order.length)%order.length]);};
     ui.ufPrevious.addEventListener("click",()=>moveState(-1));ui.ufNext.addEventListener("click",()=>moveState(1));
     $("[data-map-retry]").addEventListener("click",initialize);
     window.addEventListener("arion:themechange",event=>{const next=event.detail?.theme||theme();if(map?.getLayer("arion-background"))map.setPaintProperty("arion-background","background-color",next==="light"?"#e5eae6":"#0c0d0d");renderMap();renderLegend();});
@@ -1003,7 +1029,17 @@ import { mountWeatherIcons } from "./weather-icons.js";
   }});
   updateModeControls();
   page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client===state.client;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});
-  bind();setNationalCollapsed(true);initialize();
+  bind();setNationalCollapsed(window.innerWidth<=760);initialize();
+  const resizeBand=()=>{
+    const controls=page.querySelector(".geo-analysis-controls"),legend=ui.legend;
+    const offset=isPresentation?64:0;
+    const top=controls.offsetTop+controls.offsetHeight+8;
+    legend.style.top=`${top}px`;
+    page.style.setProperty("--geo-band-height",`${top+legend.offsetHeight+10-offset}px`);
+    updateMapLayout();
+  };
+  new ResizeObserver(resizeBand).observe(page.querySelector(".geo-analysis-controls"));
+  new ResizeObserver(resizeBand).observe(ui.legend);
   if(window.ResizeObserver){
     let layoutFrame=0;
     new ResizeObserver(()=>{cancelAnimationFrame(layoutFrame);layoutFrame=requestAnimationFrame(()=>{if(map){map.resize();refitCurrentMap(0);}});}).observe(mapElement);

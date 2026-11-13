@@ -55,9 +55,10 @@
       {% if perms.configuracoes.view_ari %}<a href="{% url 'ari:index' %}" class="header-link{% if request.resolver_match.app_name == 'ari' %} is-active{% endif %}"><svg class="header-link-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 14.2 9.8 21.2 12l-7 2.2-2.2 7-2.2-7L2.8 12l7-2.2z"/><path d="m19 2 .8 2.2L22 5l-2.2.8L19 8l-.8-2.2L16 5l2.2-.8z"/></svg><span>ARI I.A</span></a>{% endif %}
     </nav>
     {% endif %}
+    {% block header_context %}{% endblock %}
     <details class="user-menu">
       {% with display_name=user.get_full_name|default:user.get_username %}
-      <summary aria-haspopup="true" aria-expanded="false"><span class="user-indicator" aria-hidden="true"></span><span>{{ display_name }}</span><span class="menu-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></summary>
+      <summary aria-label="Menu do usuário: {{ display_name }}" aria-haspopup="true" aria-expanded="false"><span class="user-indicator" aria-hidden="true"></span><span>{{ display_name }}</span><span class="menu-chevron" aria-hidden="true"><svg viewBox="0 0 12 12"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span></summary>
       <div class="user-menu-popover">
         <div class="menu-account"><span class="menu-avatar" aria-hidden="true">{{ display_name|slice:":1"|upper }}</span><span class="menu-account-copy"><strong>{{ display_name }}</strong><small>{{ user.email|default:user.get_username }}</small></span></div>
         <div class="menu-divider" role="presentation"></div>
