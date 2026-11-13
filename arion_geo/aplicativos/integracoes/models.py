@@ -222,7 +222,19 @@ class GeographyCatalog(models.Model):
     synced_at = models.DateTimeField()
 
 
-class WeatherMonth(models.Model):
+class WeatherHistoryFields(models.Model):
+    history_checked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    consolidated_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    history_complete = models.BooleanField(default=False)
+    revision = models.PositiveIntegerField(default=1)
+    content_digest = models.CharField(max_length=64, blank=True)
+    stored_bytes = models.PositiveBigIntegerField(default=0)
+
+    class Meta:
+        abstract = True
+
+
+class WeatherMonth(WeatherHistoryFields):
     uf = models.CharField(max_length=2)
     region = models.CharField(max_length=2)
     period = models.DateField()
@@ -248,6 +260,7 @@ class WeatherCollectionJob(models.Model):
     period = models.DateField()
     status = models.CharField(max_length=12, default="pending", choices=(("pending", "Pendente"), ("running", "Coletando"), ("success", "Concluído"), ("error", "Falhou"), ("paused", "Pausado"), ("cancelled", "Cancelado")))
     progress = models.JSONField(default=dict, blank=True)
+    refresh_request = models.JSONField(default=dict, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     next_attempt_at = models.DateTimeField(default=timezone.now)
@@ -260,7 +273,7 @@ class WeatherCollectionJob(models.Model):
         indexes = [models.Index(fields=("status", "next_attempt_at"), name="weather_job_due_idx")]
 
 
-class WeatherLocalCache(models.Model):
+class WeatherLocalCache(WeatherHistoryFields):
     """Shared municipal/model-cell cache and progressive task, never a CMDB coordinate."""
     location_key = models.CharField(max_length=220)
     city = models.CharField(max_length=200)
@@ -274,6 +287,9 @@ class WeatherLocalCache(models.Model):
     model = models.CharField(max_length=30, default="era5")
     status = models.CharField(max_length=12, default="pending", db_index=True)
     payload = models.JSONField(default=dict, blank=True)
+    method = models.CharField(max_length=40, default="municipal-point-v1")
+    refresh_request = models.JSONField(default=dict, blank=True)
+    progress = models.JSONField(default=dict, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
     next_attempt_at = models.DateTimeField(default=timezone.now)
     last_error = models.CharField(max_length=240, blank=True)
@@ -284,6 +300,7 @@ class WeatherLocalCache(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=("location_key", "period", "source", "model"), name="weather_local_period_unique")]
+        indexes = [models.Index(fields=("uf", "period", "source", "model"), name="weather_local_uf_period_idx")]
 
 
 class CMDBOperatorMirror(models.Model):
@@ -596,7 +613,7 @@ class OTRSOperationalTicketSnapshot(models.Model):
         verbose_name = "ticket no snapshot OTRS"
 
 
-class WeatherGridCache(models.Model):
+class WeatherGridCache(WeatherHistoryFields):
     """Validated daily cells, independent of UF weights and operational tickets."""
     identity = models.CharField(max_length=64, unique=True)
     source = models.CharField(max_length=30, db_index=True)
@@ -621,6 +638,23 @@ class WeatherRequestLog(models.Model):
     locations = models.PositiveIntegerField(default=1)
     estimated_units = models.FloatField(default=1)
     status = models.CharField(max_length=24, default="attempted")
+
+
+class WeatherHistoryRevision(models.Model):
+    """Immutable snapshots written by the history service before/after revisions."""
+    kind = models.CharField(max_length=8)
+    object_id = models.PositiveBigIntegerField()
+    version = models.PositiveIntegerField()
+    snapshot = models.JSONField(default=dict)
+    digest = models.CharField(max_length=64)
+    stored_bytes = models.PositiveBigIntegerField(default=0)
+    reason = models.CharField(max_length=240)
+    request_id = models.CharField(max_length=36, blank=True, db_index=True)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("kind", "object_id", "version"), name="weather_history_version_unique")]
 
 
 class OTRSOperationalConfigItemSnapshot(models.Model):

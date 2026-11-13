@@ -23,7 +23,7 @@ def provider_monitor(integration):
             "status":last.status if last else "Não testado", "last_attempt":last.started_at if last else None,
             "http":recent.count(),"locations":recent.aggregate(n=Sum("locations"))["n"] or 0,
             "units":round(recent.aggregate(n=Sum("estimated_units"))["n"] or 0,2),
-            "grids":WeatherGridCache.objects.filter(source=source,expires_at__gt=timezone.now()).count(),
+            "grids":WeatherGridCache.objects.filter(source=source).count(),
             "months":WeatherMonth.objects.filter(source=source).count(),"info":weather_source_info(config),
             "limits":"Público: 600/min · 5.000/h · 10.000/dia; uso sujeito às condições. Comercial/self-hosted: contrato próprio." if provider=="open_meteo" else "Uma célula por vez; deduplicação da grade nativa. Quota externa restante não informada pela API."})
     return rows

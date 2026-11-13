@@ -11,6 +11,7 @@ WEATHER_DEFAULTS = {
     "cache_hours": 720, "daily_budget": 1000, "batch_size": 8,
     "preferred_provider": "open_meteo", "secondary_provider": "", "allow_fallback": False,
     "supplier_daily_budget": 5000,
+    "history_revision_days": "", "history_provisional_days": 7,
 }
 ATTRIBUTION = "Open-Meteo / Copernicus ERA5"
 TERMS_URL = "https://open-meteo.com/en/terms"

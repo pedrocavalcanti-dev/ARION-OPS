@@ -16,6 +16,7 @@ from ..models import ExternalAPIHealthCheck, ExternalAPIIntegration, Integration
 from .external_apis import decrypt_external_api_secret
 from .geography import STATE_BY_UF
 from .sync_lock import Lease
+from .weather_history import consolidate, needs_collection, persist, saved_requests
 from .geo_configuration import get_geo_integration, weather_configuration, weather_source, weather_sources, weather_source_info, weather_model
 
 VARIABLES = {"precipitation_sum": "mm", "wind_speed_10m_max": "km/h", "wind_gusts_10m_max": "km/h",
@@ -244,11 +245,26 @@ def collect_month(uf, period, integration, *, client=None, job=None):
     from .weather_grid import seed_months, fetch_samples
     adapter = get_adapter(cfg)
     source, model = weather_source(cfg), adapter.model
-    cache = WeatherMonth.objects.filter(uf=uf, period=start, source__in=weather_sources(cfg), model=model, method=METHOD, expires_at__gt=timezone.now()).order_by("-collected_at").first()
+    refresh=job.refresh_request if job else {}
+    if refresh:
+        from .weather_history import validate_refresh
+        validate_refresh(refresh,uf)
+    if refresh and (refresh.get("source")!=source or refresh.get("model")!=model or refresh.get("method")!=METHOD):
+        raise PublicDataError("Fonte da revisão histórica mudou; refaça a solicitação.",code="history_conflict")
+    cache=WeatherMonth.objects.filter(uf=uf,period=start,source__in=weather_sources(cfg),model=model,method=METHOD).order_by("-collected_at").first()
     if cache:
-        return cache
+        cache=consolidate(cache,cfg)
+        if cache.consolidated_at and not cache.history_complete and not refresh:
+            raise PublicDataError("Integridade do histórico consolidado exige revisão manual.",code="history_locked")
+        if not refresh and not needs_collection(cache,cfg):
+            saved_requests(len(sampling_points(uf)),min(cfg["batch_size"],adapter.batch_size))
+            return cache
+    baseline=refresh.get("expected_revision") if refresh else cache.revision if cache else None
     seed_months(cfg, adapter, start)
-    fingerprint = f"{source}:{model}:{METHOD}:{start}:{end}"
+    fingerprint = f"{source}:{model}:{METHOD}:{start}:{end}"+(":"+refresh["id"] if refresh else "")
+    if cache and cache.history_complete and not refresh and needs_collection(cache,cfg):
+        from .weather_history import review_date
+        fingerprint+=":final:"+review_date(start,source,cfg).isoformat()
     original = job.progress if job else {}
     variants = dict(original.get("variants",{}))
     if original.get("fingerprint"):
@@ -262,7 +278,7 @@ def collect_month(uf, period, integration, *, client=None, job=None):
             WeatherCollectionJob.objects.filter(pk=job.pk,status="running").update(progress=job.progress,updated_at=timezone.now())
     checkpoint(completed)
     points = sampling_points(uf)
-    completed = fetch_samples(integration,cfg,points,start,end,client=client,completed=completed,checkpoint=checkpoint)
+    completed = fetch_samples(integration,cfg,points,start,end,client=client,completed=completed,checkpoint=checkpoint,force_refresh=bool(refresh),refresh=refresh)
     cells = {}
     for index, point in enumerate(points):
         sample = completed[str(index)]
@@ -273,7 +289,7 @@ def collect_month(uf, period, integration, *, client=None, job=None):
             cells[cell_key]["area_km2"] += point["area_km2"]
             cells[cell_key]["requested_coordinates"].append([point["latitude"],point["longitude"]])
         else:
-            cells[cell_key] = {**sample,"area_km2":point["area_km2"],"requested_coordinates":[[point["latitude"],point["longitude"]]],"model":model,"source":source,"collected_at":timezone.now().isoformat()}
+            cells[cell_key] = {**sample,"area_km2":point["area_km2"],"requested_coordinates":[[point["latitude"],point["longitude"]]],"model":model,"source":source,"collected_at":sample.get("verified_at") or timezone.now().isoformat()}
     samples = list(cells.values())
     summary = summarize(samples)
     summary["partial"] = end < start.replace(day=calendar.monthrange(start.year,start.month)[1])
@@ -281,11 +297,17 @@ def collect_month(uf, period, integration, *, client=None, job=None):
     summary["supported_variables"] = samples[0].get("supported_variables",list(VARIABLES))
     summary["missing_capabilities"] = samples[0].get("missing_capabilities",[])
     summary["provider_metadata"] = samples[0].get("provider_metadata",{})
+    summary["verified_at"]=min(p["collected_at"] for p in samples)
     summary["supported_completeness"] = sum(v is not None for sample in samples for var in summary["supported_variables"] for v in sample["daily"][var])/(len(samples)*len(samples[0]["daily"]["time"])*len(summary["supported_variables"]))
     now = timezone.now()
-    row, _ = WeatherMonth.objects.update_or_create(uf=uf, period=start, source=source, model=model, method=METHOD, defaults={
-        "region":str(STATE_BY_UF[uf]["region_id"]), "samples":samples, "summary":summary, "completeness":summary["completeness"],
-        "collected_at":now, "expires_at":now+timedelta(hours=int(cfg.get("cache_hours",720)) if not summary["partial"] else min(24,int(cfg.get("cache_hours",720))))})
+    values={"region":str(STATE_BY_UF[uf]["region_id"]),"samples":samples,"summary":summary,"completeness":summary["completeness"],
+        "collected_at":now,"expires_at":now+timedelta(hours=int(cfg.get("cache_hours",720)) if not summary["partial"] else min(24,int(cfg.get("cache_hours",720))))}
+    if cache:
+        row=persist(cache,values,cfg,refresh=refresh,expected_revision=baseline)
+    else:
+        row,created=WeatherMonth.objects.get_or_create(uf=uf,period=start,source=source,model=model,method=METHOD,defaults=values)
+        if not created: raise PublicDataError("Outra coleta publicou este recorte; reutilize o histórico.",code="history_conflict")
+        row=consolidate(row,cfg)
     return row
 
 
@@ -295,7 +317,7 @@ def test_weather(integration):
     cfg = configured_weather(integration)
     first,end = month_bounds()
     from .weather_grid import fetch_samples
-    result = fetch_samples(integration,cfg,[sampling_points("SP")[0]],first,end,force_refresh=True)
+    result = fetch_samples(integration,cfg,[sampling_points("SP")[0]],first,end,force_refresh=True,store=False)
     return len(result["0"]["daily"]["time"])
 
 
@@ -311,8 +333,11 @@ def request_collection(ufs, period, user):
         for uf in sorted(set(ufs)):
             if uf not in STATE_BY_UF:
                 raise ValueError("UF inválida.")
-            cached = WeatherMonth.objects.filter(uf=uf,period=start,source__in=weather_sources(cfg),model=weather_model(cfg),method=METHOD,expires_at__gt=now).exists()
-            if cached:
+            cached=WeatherMonth.objects.filter(uf=uf,period=start,source__in=weather_sources(cfg),model=weather_model(cfg),method=METHOD).first()
+            if cached: cached=consolidate(cached,cfg)
+            if cached and not needs_collection(cached,cfg):
+                from .weather_adapters import get_adapter
+                saved_requests(len(sampling_points(uf)),min(cfg["batch_size"],get_adapter(cfg).batch_size))
                 continue
             job, created = WeatherCollectionJob.objects.get_or_create(uf=uf, period=start, defaults={"requested_by":user})
             if not created and (job.status == "success" or (job.status == "error" and job.next_attempt_at <= now and job.updated_at < now-timedelta(minutes=5))):
@@ -336,11 +361,13 @@ def cached_weather(ufs, period):
     if cfg.get("allow_fallback") and cfg.get("secondary_provider") and cfg["secondary_provider"]!=cfg["preferred_provider"]:
         alternative = {**cfg,"preferred_provider":cfg["secondary_provider"]}
         for row in WeatherMonth.objects.filter(uf__in=ufs,period=start,source__in=weather_sources(alternative),model=weather_model(alternative),method=METHOD).defer("samples").order_by("collected_at"):
-            result[row.uf] = {**row.summary,"source":row.source,"model":row.model,"method":row.method,"collected_at":row.collected_at.isoformat(),"stale":row.expires_at<=timezone.now(),"fallback":True}
+            if row.consolidated_at and not row.history_complete: continue
+            result[row.uf] = {**row.summary,"source":row.source,"model":row.model,"method":row.method,"revision":row.revision,"consolidated":bool(row.consolidated_at),"collected_at":row.collected_at.isoformat(),"stale":needs_collection(row,cfg),"fallback":True}
     # Current method always wins over v1, then use the latest collection.
     for row in rows:
-        result[row.uf] = {**row.summary, "source":row.source, "model":row.model, "method":row.method,
-                          "collected_at":row.collected_at.isoformat(), "stale":row.expires_at<=timezone.now() or row.method!=METHOD}
+        if row.consolidated_at and not row.history_complete: continue
+        result[row.uf] = {**row.summary, "source":row.source, "model":row.model, "method":row.method,"revision":row.revision,"consolidated":bool(row.consolidated_at),
+                          "collected_at":row.collected_at.isoformat(), "stale":needs_collection(row,cfg) or row.method!=METHOD}
     return result
 
 
@@ -379,7 +406,7 @@ def worker_tick():
                 cfg = configured_weather(integration)
                 secondary = cfg.get("secondary_provider")
                 # Only transport/5xx failure. Never quotas, auth, contract or licensing.
-                if primary_error.code!="unavailable" or not cfg.get("allow_fallback") or not secondary or secondary==cfg["preferred_provider"]:
+                if job.refresh_request or primary_error.code!="unavailable" or not cfg.get("allow_fallback") or not secondary or secondary==cfg["preferred_provider"]:
                     raise
                 from copy import copy
                 alternative = copy(integration)
@@ -409,7 +436,7 @@ def worker_tick():
             if integration:
                 integration.last_error, integration.health = job.last_error,"error"
         # A pause/cancel request made while the final HTTP response arrived wins.
-        WeatherCollectionJob.objects.filter(pk=job.pk,status="running").update(status=job.status,attempts=job.attempts,next_attempt_at=job.next_attempt_at,last_error=job.last_error,updated_at=timezone.now())
+        WeatherCollectionJob.objects.filter(pk=job.pk,status="running").update(status=job.status,attempts=job.attempts,next_attempt_at=job.next_attempt_at,last_error=job.last_error,refresh_request={} if job.status=="success" else job.refresh_request,updated_at=timezone.now())
         if integration:
             integration.save(update_fields=("last_success_at","last_error","health","updated_at"))
             ExternalAPIHealthCheck.objects.create(integration=integration,status="success" if job.status=="success" else "error",

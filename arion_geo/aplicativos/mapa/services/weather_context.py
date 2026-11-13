@@ -5,6 +5,7 @@ from django.utils import timezone
 from aplicativos.integracoes.models import WeatherLocalCache
 from aplicativos.integracoes.services.geo_configuration import get_geo_integration, weather_configuration, weather_sources
 from aplicativos.integracoes.services.weather_local import incident_window, locality_key
+from aplicativos.integracoes.services.weather_history import needs_collection
 from aplicativos.integracoes.clients.public_data import PublicDataError
 
 
@@ -32,7 +33,7 @@ def correlate(events, first, end, eligible):
         if not e["at"]:
             continue
         cache = caches.get((key,timezone.localtime(e["at"]).date().replace(day=1)))
-        if not cache or cache.status!="success":
+        if not cache or (cache.status!="success" and not cache.collected_at):
             continue
         info["cache"] = cache
         observed_date=e["at"].astimezone(ZoneInfo(cache.payload.get("timezone","UTC"))).date().isoformat()
@@ -67,7 +68,7 @@ def correlate(events, first, end, eligible):
                        "coordinates":[cache.longitude,cache.latitude] if cache else None,
                        "precision":"Estimativa municipal IBGE · ERA5 aproximadamente 0,25°; não representa a posição ou o trajeto do link.",
                        "weather":cache.payload.get("summary") if cache else None,"source":cache.source if cache else None,
-                       "stale":bool(cache and cache.expires_at and cache.expires_at<=timezone.now())})
+                       "stale":bool(cache and needs_collection(cache,cfg))})
     return {"eligible_tickets":eligible,"located_tickets":len(totals["located"]),"covered_tickets":len(totals["covered"]),
             "insufficient":max(0,eligible-len(totals["covered"])),**{k:len(v) for k,v in totals.items() if k!="located" and k!="covered"},
             "rain_localities":sum(bool(x["rain_incidents"]) for x in output),"localities":output,

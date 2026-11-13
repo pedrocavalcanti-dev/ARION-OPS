@@ -30,7 +30,8 @@ def weather_range(ufs, first, end):
         summary.update(points=max(row["points"] for row in rows),source=rows[-1]["source"],model=rows[-1]["model"],method=rows[-1]["method"],
             collected_at=max(row["collected_at"] for row in rows),stale=any(row["stale"] for row in rows),
             completeness=min(row["completeness"] for row in rows)*len(series)/((end-first).days+1),
-            partial=len(series)<(end-first).days+1,source_info=rows[-1].get("source_info",{}))
+            partial=len(series)<(end-first).days+1,source_info=rows[-1].get("source_info",{}),
+            month_versions=[{"month":r["daily"][0]["date"][:7],"revision":r.get("revision",1),"consolidated":r.get("consolidated",False)} for r in rows if r.get("daily")])
         result[uf]=summary
     return result
 

@@ -141,10 +141,11 @@ def local_weather(request):
             AuditService.record(request=request,category="integration",action="weather.local_requested",description="Coleta meteorológica municipal solicitada.",metadata={"uf":uf,"period":first.strftime("%Y-%m")})
         else:
             row=WeatherLocalCache.objects.filter(location_key=locality_key(city,uf),period=first,source__in=weather_sources(cfg)).order_by("collected_at").last()
-        data={"city":city,"uf":uf,"status":row.status if row else "unavailable","precision":"Estimativa municipal IBGE; não representa o trajeto físico do link.","weather":row.payload.get("summary") if row and row.status=="success" else None,
+        data={"city":city,"uf":uf,"status":row.status if row else "unavailable","precision":"Estimativa municipal IBGE; não representa o trajeto físico do link.","weather":row.payload.get("summary") if row and (row.status=="success" or row.collected_at) else None,
               "resolution":row.payload.get("resolution") if row else None,"timezone":row.payload.get("timezone") if row else None,
-              "last_error":row.last_error if row else "","source":row.source if row else None,"ibge_code":row.ibge_code if row else None}
-        if row and row.status=="success" and values.get("ticket"):
+              "last_error":row.last_error if row else "","source":row.source if row else None,"ibge_code":row.ibge_code if row else None,
+              "model":row.model if row else None,"method":row.method if row else None,"revision":row.revision if row else None,"consolidated":bool(row and row.consolidated_at)}
+        if row and (row.status=="success" or row.collected_at) and values.get("ticket"):
             if not values["ticket"].isdigit(): raise ValueError("TicketID inválido.")
             ticket=IncidentRules.valid(TicketQueryService.base(request.user,links=links)).filter(external_id=int(values["ticket"]),config_items__cmdb_link__in=links,config_items__is_present_in_source=True).first()
             if not ticket or IncidentRules.category(ticket.closing_code_raw) in {None,"financeiro","sem_classificacao"}: raise PermissionDenied

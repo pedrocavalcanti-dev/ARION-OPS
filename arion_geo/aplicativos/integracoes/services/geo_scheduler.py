@@ -48,6 +48,20 @@ def scheduler_tick():
                 thread.join(timeout=2)
                 lease.release()
     weather = ExternalAPIIntegration.objects.filter(provider="open_meteo",enabled=True).first()
+    if weather:
+        state,_=IntegrationSyncState.objects.get_or_create(key="weather-history")
+        if not state.last_started_at or state.last_started_at<now-timedelta(hours=1):
+            from .weather_history import maintain_history
+            try:
+                cfg=weather_configuration(weather)
+                # No new territory is inferred. Automatic jobs remain bounded
+                # by explicitly scheduled UFs and already stored periods.
+                maintain_history(ufs=cfg.get("scheduled_ufs",[]) if cfg.get("automatic") else None,
+                    enqueue=bool(cfg.get("automatic") and cfg.get("scheduled_ufs")),limit=500)
+                state.last_error=""
+            except PublicDataError as error:
+                state.last_error=str(error)[:240]
+            state.last_started_at=now;state.save()
     if weather and weather.config.get("automatic"):
         state,_ = IntegrationSyncState.objects.get_or_create(key="weather-schedule")
         if not state.last_started_at or state.last_started_at < now-timedelta(hours=int(weather.config.get("interval_hours",168))):

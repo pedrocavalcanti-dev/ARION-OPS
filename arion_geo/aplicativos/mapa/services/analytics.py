@@ -68,6 +68,8 @@ def _bounds(params):
         return end.replace(day=1), end
     if period == "last_30":
         return today - timedelta(days=29), today
+    if period == "last_60":
+        return today - timedelta(days=59), today
     if period == "last_90":
         return today - timedelta(days=89), today
     if len(period) == 7 and period[4] == "-":

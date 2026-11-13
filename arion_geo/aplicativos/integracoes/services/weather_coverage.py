@@ -7,19 +7,19 @@ import math
 from .weather import cached_weather, month_bounds, sampling_points
 
 
-def plan_identity(user, ufs, period):
+def plan_identity(user, ufs, period, purpose="collect"):
     cfg=weather_configuration(get_geo_integration("open_meteo"))
     return {"user":user.pk,"ufs":sorted(ufs),"period":period,"source":weather_source(cfg),"model":weather_model(cfg),
-            "secondary":cfg.get("secondary_provider",""),"fallback":bool(cfg.get("allow_fallback")),"method":"area-grid-v2"}
+            "secondary":cfg.get("secondary_provider",""),"fallback":bool(cfg.get("allow_fallback")),"method":"area-grid-v2","purpose":purpose}
 
 
-def plan_token(user, ufs, period):
-    return signing.dumps(plan_identity(user,ufs,period),salt="weather-plan")
+def plan_token(user, ufs, period, purpose="collect"):
+    return signing.dumps(plan_identity(user,ufs,period,purpose),salt="weather-plan")
 
 
-def verify_plan(token, user, ufs, period):
+def verify_plan(token, user, ufs, period, purpose="collect"):
     try:
-        return signing.loads(token,salt="weather-plan",max_age=1800)==plan_identity(user,ufs,period)
+        return signing.loads(token,salt="weather-plan",max_age=1800)==plan_identity(user,ufs,period,purpose)
     except signing.BadSignature:
         return False
 
@@ -42,8 +42,15 @@ def collection_plan(ufs, period):
     adapter=get_adapter(cfg)
     batch=min(cfg["batch_size"],adapter.batch_size)
     end=month_bounds(period)[1]
+    from django.db.models import Q
+    from .weather_history import review_date
+    from datetime import datetime
+    boundary=review_date(first,weather_source(cfg),cfg)
+    eligible=Q(history_complete=True)
+    if timezone.localdate()>=boundary:
+        eligible &= Q(collected_at__gte=timezone.make_aware(datetime.combine(boundary,datetime.min.time())))
     grids={(r.latitude,r.longitude) for r in WeatherGridCache.objects.filter(source=weather_source(cfg),model=adapter.model,
-        context=context_for(adapter),date_from__lte=first,date_to__gte=end,expires_at__gt=timezone.now()).only("latitude","longitude")}
+        context=context_for(adapter),date_from__lte=first,date_to__gte=end).filter(eligible).only("latitude","longitude")}
     remaining=[]
     for uf in missing:
         job=next((j for j in jobs if j.uf==uf and uf in checkpoints),None)

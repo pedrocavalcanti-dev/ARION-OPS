@@ -76,7 +76,13 @@ def _render(request, provider, integration, form, status=200, collection_form=No
     if provider=="open_meteo":
         from .services.weather_coverage import collection_plan
         from .services.geo_operations import allowed_weather_ufs
-        context["geo_coverage"] = collection_plan(allowed_weather_ufs(request.user),month_bounds()[0].strftime("%Y-%m"))
+        from .services.weather_history import history_metrics
+        allowed=allowed_weather_ufs(request.user)
+        context["geo_coverage"] = collection_plan(allowed,month_bounds()[0].strftime("%Y-%m"))
+        context["geo_history"]=history_metrics(allowed,include_grid=request.user.is_superuser)
+        if request.user.is_superuser:
+            from .models import IntegrationSyncState
+            context["geo_history"]["saved_requests"]=IntegrationSyncState.objects.filter(key="weather-history-saved").values_list("records_count",flat=True).first() or 0
     return render(request,"integracoes/geography_weather.html",context,status=status)
 
 
@@ -179,10 +185,43 @@ def sync(request,provider):
                 values=form.cleaned_data
                 from .services.weather_coverage import collection_plan, control_jobs, plan_token, verify_plan
                 operation = request.POST.get("operation","collect")
-                if operation=="preview":
+                if operation in {"preview","preview_revision"}:
                     preview = collection_plan(values["ufs"],values["period"])
-                    preview["token"] = plan_token(request.user,values["ufs"],values["period"])
+                    purpose="revision" if operation=="preview_revision" else "collect"
+                    if purpose=="revision":
+                        if not request.user.has_perm("configuracoes.manage_integrations"): raise PermissionDenied
+                        from .services.weather import sampling_points
+                        from .services.geo_configuration import weather_configuration,weather_sources,weather_model
+                        from .models import WeatherMonth
+                        import math
+                        cfg=weather_configuration(get_geo_integration(provider))
+                        filters={"uf__in":values["ufs"],"period":month_bounds(values["period"])[0],"source__in":weather_sources(cfg),"model":weather_model(cfg)}
+                        months=WeatherMonth.objects.filter(**filters,method="area-grid-v2")
+                        locals_=WeatherLocalCache.objects.filter(**filters,collected_at__isnull=False)
+                        preview["estimated_requests"]=sum(math.ceil(len(sampling_points(uf))/preview["batch_size"]) for uf in months.values_list("uf",flat=True))+3*locals_.count()
+                        preview["estimated_locations"]=sum(len(sampling_points(uf)) for uf in months.values_list("uf",flat=True))+locals_.count()
+                        preview["label"]="Revisão versionada: recortes armazenados e localidades do período; valores anteriores preservados."
+                    preview["purpose"]=purpose
+                    preview["token"] = plan_token(request.user,values["ufs"],values["period"],purpose)
                     return _render(request,provider,get_geo_integration(provider),None,collection_form=form,preview=preview)
+                if operation in {"maintain","revise"}:
+                    if not request.user.has_perm("configuracoes.manage_integrations"): raise PermissionDenied
+                    from .services.weather_history import maintain_history,request_revision
+                    if operation=="revise":
+                        if not verify_plan(request.POST.get("preview_token",""),request.user,values["ufs"],values["period"],"revision"):
+                            raise ValueError("Estime a revisão histórica antes de autorizar a nova versão.")
+                        count=request_revision(values["ufs"],values["period"],request.user,request.POST.get("revision_reason",""))
+                        message=f"Revisão solicitada: {count} tarefas. Versão ativa preservada até validação."
+                    else:
+                        # Existing stored slices only. Empty territory still uses
+                        # the ordinary signed collection preview/authorization.
+                        from .models import WeatherMonth
+                        known=list(WeatherMonth.objects.filter(uf__in=values["ufs"],period=month_bounds(values["period"])[0]).values_list("uf",flat=True).distinct())
+                        result=maintain_history(ufs=known,period=month_bounds(values["period"])[0],user=request.user,enqueue=True)
+                        message=f"Manutenção local: {result['inspected']} registros verificados; {result['queued']} tarefas necessárias solicitadas."
+                    AuditService.record(request=request,category="integration",action="weather.history_"+operation,description=message,metadata={"ufs":values["ufs"],"period":values["period"]})
+                    messages.success(request,message)
+                    return redirect("configuracoes:integracoes:geo-detail",provider=provider)
                 if operation in {"pause","resume","cancel"}:
                     count = control_jobs(values["ufs"],values["period"],operation)
                     messages.success(request,f"Fila atualizada: {count} tarefa(s). Cache e progresso preservados.")

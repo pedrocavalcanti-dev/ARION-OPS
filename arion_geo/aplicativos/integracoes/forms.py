@@ -182,6 +182,8 @@ class GeographyConfigurationForm(forms.Form):
 
 
 class WeatherConfigurationForm(forms.Form):
+    history_revision_days = forms.IntegerField(label="Janela de revisão histórica (dias após fim do mês)",required=False,min_value=90,max_value=730,help_text="Vazio: 90 dias ERA5/Open-Meteo; 120 NASA POWER. A coleta deve ser posterior à janela para consolidar.")
+    history_provisional_days = forms.IntegerField(label="Dias provisórios revalidados no mês atual",required=False,min_value=1,max_value=31,initial=7,help_text="Somente após o intervalo de atualização; dados ausentes são buscados incrementalmente.")
     preferred_provider = forms.ChoiceField(label="Fornecedor preferencial", required=False, choices=(("open_meteo","Open-Meteo · ERA5"),("nasa_power","NASA POWER · diário UTC")))
     secondary_provider = forms.ChoiceField(label="Fornecedor secundário", required=False, choices=(("","Sem fallback"),("open_meteo","Open-Meteo · ERA5"),("nasa_power","NASA POWER · diário UTC")))
     allow_fallback = forms.BooleanField(label="Autorizar fonte secundária em falha de conexão", required=False, help_text="Um recorte completo por fonte. Nunca alterna após quota, autenticação ou contrato inválido. Séries de modelos/fusos diferentes não são agregadas.")

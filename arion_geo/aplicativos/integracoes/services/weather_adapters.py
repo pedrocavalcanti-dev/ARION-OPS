@@ -1,6 +1,7 @@
 """Provider contracts. A daily mean wind is never substituted for a gust/maximum."""
 import math
 from datetime import timedelta
+from django.utils import timezone
 
 from ..clients.public_data import PublicDataError
 
@@ -77,7 +78,8 @@ class NASAPowerAdapter:
             return [{"cell":[lat,lon], "daily":daily, "units":dict(VARIABLES),
                      "supported_variables":list(NASA_PARAMETERS.values()),
                      "provider_metadata":{"sources":header.get("sources", []), "title":str(header.get("title", ""))[:200],
-                         "time_standard":"UTC", "resolution":"0.5° × 0.625°", "provisional":True},
+                         "time_standard":"UTC", "resolution":"0.5° × 0.625°",
+                         "provisional":end+timedelta(days=int(cfg.get("history_revision_days") or 120))>=timezone.localdate()},
                      "missing_capabilities":["wind_speed_10m_max", "wind_gusts_10m_max", "wind_direction_10m_dominant", "hourly"]}]
         except (KeyError, TypeError, ValueError, OverflowError):
             raise PublicDataError("Contrato NASA POWER inválido: período, unidades ou referência UTC incompatíveis.", code="contract") from None

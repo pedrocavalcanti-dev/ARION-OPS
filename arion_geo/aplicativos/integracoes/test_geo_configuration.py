@@ -149,7 +149,11 @@ class GeoConfigurationTests(TestCase):
     def test_legacy_public_cache_is_readable_in_production(self):
         from django.utils import timezone
         from datetime import timedelta
-        WeatherMonth.objects.create(uf="SP",period=date(2026,10,1),source="open_meteo_evaluation",method="area-grid-v2",summary={"daily":[],"points":1},collected_at=timezone.now(),expires_at=timezone.now()+timedelta(days=1))
+        from .test_geo_intelligence import weather_response
+        from .services.weather import parse_daily,summarize
+        # Reuse now requires actual complete observations, not an empty "cache".
+        sample=parse_daily(weather_response(),date(2026,10,1),date(2026,10,31));sample["area_km2"]=100
+        WeatherMonth.objects.create(uf="SP",period=date(2026,10,1),source="open_meteo_evaluation",method="area-grid-v2",samples=[sample],summary=summarize([sample]),completeness=1,collected_at=timezone.now(),expires_at=timezone.now()+timedelta(days=1))
         self.assertIn("SP",cached_weather(["SP"],"2026-10"))
         self.assertEqual(request_collection(["SP"],"2026-10",None),[])
         client=Mock()
