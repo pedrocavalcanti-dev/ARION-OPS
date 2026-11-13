@@ -39,8 +39,9 @@ STATUSES = {"PEDIDO": {"NOVO"}, "SOLICITACAO": {"NOVO"}, "PENDENCIA": {"PENDENCI
 PENDING_KINDS = {"mensalidades_atrasadas": "OVERDUE", "multa_contrato": "CONTRACT_FINE",
                  "multa_equipamento": "EQUIPMENT_FINE", "outros": "OTHER"}
 PENDING_STATUSES = {"ABERTA": "OPEN", "RESOLVIDA": "RESOLVED", "DESCARTADA": "DISCARDED"}
-MONEY_FIELDS = {"valor_multa_rescisao": ("CONTRACT", "multa_contrato"),
-                "valor_equipamento": ("EQUIPMENT", "multa_equipamento"), "valor_outros": ("OTHER", "outros")}
+MONEY_FIELDS = {"valor_multa_rescisao": ("CONTRACT", ("multa_contrato",)),
+                "valor_equipamento": ("EQUIPMENT", ("multa_equipamento",)),
+                "valor_outros": ("OTHER", ("outros", "mensalidades_atrasadas"))}
 HISTORY_TYPES = {"CRIACAO", "APROPRIACAO", "ALTERACAO_STATUS", "OBSERVACAO", "MUDANCA_FILA", "LIBERACAO",
                  "PENDENCIA_CRIADA", "VALOR_ALTERADO", "PENDENCIA_RESOLVIDA", "CONCLUSAO", "EDICAO"}
 
@@ -356,11 +357,11 @@ def _apply_record(source, item, run):
         "historical_completion_needs_review": row["fila"] == "CONCLUIDO" and not row["concluido_em"],
         "opening_date_needs_review": bool(row["data_criacao_chamado"] and not process.ticket_opened_on)})
     pending_rows = [r for r in source["tables"][PREFIX + "pendenciacancelamento"] if r["cancelamento_id"] == row["id"]]
-    for field, (kind, pending_kind) in MONEY_FIELDS.items():
+    for field, (kind, pending_kinds) in MONEY_FIELDS.items():
         if row[field] is not None:
             FinancialObligation.objects.create(process=process, kind=kind, description=f"Valor histórico ArionBroker — {field}",
                 estimated_amount=Decimal(str(row[field])), legacy_field=field,
-                reconciliation_state="POSSIBLE_DUPLICATE" if any(p["tipo"] == pending_kind for p in pending_rows) else "UNRECONCILED",
+                reconciliation_state="POSSIBLE_DUPLICATE" if any(p["tipo"] in pending_kinds for p in pending_rows) else "UNRECONCILED",
                 provider=link.operator if link else None, provider_snapshot=row["isp"],
                 reference_number=f"ArionBroker:{row['id']}:{field}", created_at=process.created_at)
     for table, rows in source["tables"].items():

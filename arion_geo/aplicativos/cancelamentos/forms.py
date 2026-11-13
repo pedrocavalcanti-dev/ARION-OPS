@@ -9,6 +9,7 @@ from aplicativos.integracoes.models import CMDBLinkMirror
 
 from .models import (CancellationProcess, ISPTreatment, CancellationPending, CancellationEquipment,
                      FinancialObligation, CancellationEvidence, FinancialHandoff, IntakeSettings)
+from .services.financial_totals import format_brl
 
 
 class OperationalForm(forms.Form):
@@ -135,13 +136,42 @@ class EquipmentForm(forms.ModelForm):
 
 
 class ObligationForm(forms.ModelForm):
+    estimated_amount = BRLAmountField(label="Valor previsto (R$)", required=False, max_digits=14, decimal_places=2, min_value=0,
+                                      widget=forms.TextInput(attrs={"inputmode": "decimal", "placeholder": "0,00"}))
+    charged_amount = BRLAmountField(label="Valor cobrado (R$)", required=False, max_digits=14, decimal_places=2, min_value=0,
+                                    widget=forms.TextInput(attrs={"inputmode": "decimal", "placeholder": "0,00"}))
+
     class Meta:
         model = FinancialObligation
-        fields = ("kind", "description", "estimated_amount", "charged_amount", "due_date", "reference_number", "document_status", "document_reference")
+        fields = ("kind", "source_pending", "description", "estimated_amount", "charged_amount",
+                  "due_date", "reference_number", "document_status", "document_reference")
         widgets = {"due_date": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")}
+
+    def __init__(self, *args, process=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.process = process or (self.instance.process if self.instance and self.instance.process_id else None)
+        for name in ("estimated_amount", "charged_amount"):
+            self.fields[name].localize = True
+            self.fields[name].widget.is_localized = True
+            self.fields[name].widget.attrs.update(inputmode="decimal", placeholder="0,00")
+        pending_field = self.fields["source_pending"]
+        pending_field.required = False
+        pending_field.empty_label = "Sem pendência vinculada (cobrança independente)"
+        if self.process is not None and self.process.pk:
+            pending_field.queryset = self.process.pendings.exclude(status="DISCARDED").order_by("status", "pk")
+            pending_field.label_from_instance = (
+                lambda p: f"#{p.pk} {p.get_kind_display()}"
+                + (f" · {format_brl(p.amount)}" if p.amount is not None else "")
+                + f" ({p.get_status_display()})"
+            )
+        else:
+            pending_field.queryset = CancellationPending.objects.none()
 
     def clean(self):
         data = super().clean()
+        source_pending = data.get("source_pending")
+        if source_pending is not None and self.process is not None and source_pending.process_id != self.process.pk:
+            self.add_error("source_pending", "A pendência selecionada pertence a outro processo.")
         if data.get("document_status") == "AVAILABLE" and not data.get("document_reference"):
             self.add_error("document_reference", "Informe onde consultar o documento.")
         return data

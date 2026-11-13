@@ -232,6 +232,8 @@ class FinancialObligation(models.Model):
         PAID = "PAID", "Pagamento confirmado pelo Financeiro"
 
     process = models.ForeignKey(CancellationProcess, on_delete=models.CASCADE, related_name="obligations")
+    source_pending = models.ForeignKey(CancellationPending, null=True, blank=True, on_delete=models.SET_NULL,
+                                       related_name="obligations", verbose_name="Pendência vinculada")
     kind = models.CharField("Tipo", max_length=16, choices=Kind.choices)
     description = models.CharField("Descrição", max_length=500)
     estimated_amount = models.DecimalField("Valor previsto (R$)", max_digits=14, decimal_places=2,

@@ -30,7 +30,7 @@ def query_module(user, params):
                             | Q(ticket__config_items__cmdb_link__designation__icontains=q)
                             | Q(client_snapshot__icontains=q) | Q(link__operator__name__icontains=q))
             process_search = (Q(intake__ticket_number__icontains=q) | Q(ticket_number__icontains=q) | Q(designation__icontains=q)
-                              | Q(contracting_client__icontains=q) | Q(isp__icontains=q))
+                              | Q(contracting_client__icontains=q) | Q(final_client__icontains=q) | Q(isp__icontains=q))
             numeric = q.upper().removeprefix("CANC-")
             if numeric.isdecimal() and len(numeric) <= 18:
                 entry_search |= Q(ticket_external_id=int(numeric))

@@ -5,15 +5,16 @@ from decimal import Decimal
 
 from django import forms
 from django.core.exceptions import PermissionDenied
-from django.db.models import Count, Max, Q, Sum
+from django.db.models import Exists, Max, OuterRef, Q
 from django.utils import timezone
 
 from aplicativos.base_links.services.cmdb.excel_provider import normalize_provider
 from aplicativos.integracoes.services.link_business_identity import BusinessIdentityRules, comparison_key
 from aplicativos.integracoes.services.project_names import canonical_project_name, display_project_name
-from ..models import CancellationProcess, FinancialObligation
+from ..models import CancellationPending, CancellationProcess, FinancialObligation, LegacyCancellationReference
 from .data_scope import CancellationScope
-from .financial_totals import format_brl, principal_amount_expression, principal_kind_expression
+from .financial_totals import (format_brl, money_columns, obligation_effective_amount,
+                               pending_principal_kind, principal_kind)
 
 DIMENSIONS = ("contracting_client", "project", "final_client", "isp", "link__operator__name")
 KINDS = ("CONTRACT", "EQUIPMENT", "OTHER")
@@ -73,7 +74,8 @@ class DashboardFilterForm(forms.Form):
 
 def _bucket():
     return {"count": 0, "completed": 0, "amounts": {k: None for k in KINDS},
-            "known": defaultdict(int), "nulls": defaultdict(int)}
+            "known": defaultdict(int), "nulls": defaultdict(int),
+            "estimated": None, "paid": None, "open": None}
 
 
 def _finish(bucket):
@@ -82,6 +84,9 @@ def _finish(bucket):
     total = sum(known, Decimal(0)) if known else None
     return {"count": bucket["count"], "completed": bucket["completed"], "partial": partial,
             "total": total, "total_label": format_brl(total),
+            "estimated": bucket["estimated"], "estimated_label": format_brl(bucket["estimated"]),
+            "paid": bucket["paid"], "paid_label": format_brl(bucket["paid"]),
+            "open": bucket["open"], "open_label": format_brl(bucket["open"]),
             **{k.lower(): bucket["amounts"][k] for k in KINDS},
             **{k.lower() + "_label": format_brl(bucket["amounts"][k]) for k in KINDS}}
 
@@ -134,32 +139,53 @@ def build_dashboard(user, params):
     can_finance = user.has_perm("cancelamentos.view_cancellation_finance")
     total, months, providers, clients = _bucket(), defaultdict(_bucket), defaultdict(_bucket), defaultdict(_bucket)
     stages = {stage: 0 for stage, _ in CancellationProcess.Stage.choices}
-    # Group raw timestamps in SQL, then combine months in the application's timezone.
-    # TruncMonth/CONVERT_TZ requires MySQL timezone tables which may not be installed.
-    for row in (processes.order_by().values("created_at", "stage", *DIMENSIONS)
-                .annotate(n=Count("pk")).iterator()):
+    # Group raw timestamps in Python, preserving local timezone without requiring MySQL TZ tables.
+    proc_rows = list(processes.order_by().values("pk", "created_at", "stage", *DIMENSIONS))
+    obligations_by_proc = defaultdict(list)
+    pendings_by_proc = defaultdict(list)
+    if can_finance and proc_rows:
+        for ob in (FinancialObligation.objects.filter(process__in=processes)
+                   .values("process_id", "kind", "estimated_amount", "charged_amount",
+                           "paid_amount", "financial_status", "legacy_field",
+                           "reconciliation_state", "source_pending_id").iterator()):
+            obligations_by_proc[ob["process_id"]].append(ob)
+        legacy_ref = LegacyCancellationReference.objects.filter(pending_id=OuterRef("pk"))
+        for pend in (CancellationPending.objects.filter(process__in=processes)
+                     .annotate(_has_legacy=Exists(legacy_ref))
+                     .values("pk", "process_id", "kind", "status", "amount", "_has_legacy").iterator()):
+            pendings_by_proc[pend["process_id"]].append(pend)
+    for row in proc_rows:
         item = dimension(row)
         key = _month_key(row["created_at"])
         provider, client = providers[item["isp_key"]], clients[item["context_key"]]
         provider["label"], client["label"] = isps[item["isp_key"]], contexts[item["context_key"]]
-        stages[row["stage"]] += row["n"]
-        for bucket in (total, provider, client, *([months[key]] if key else [])):
-            bucket["count"] += row["n"]
-            bucket["completed"] += row["n"] if row["stage"] == "COMPLETED" else 0
-    if can_finance:
-        dimensions = ["process__" + f for f in DIMENSIONS]
-        ledger = FinancialObligation.objects.filter(process__in=processes).annotate(
-            amount=principal_amount_expression(), category=principal_kind_expression())
-        for row in (ledger.order_by().values("process__created_at", "category", *dimensions).annotate(
-                value=Sum("amount"), known_processes=Count("process_id", distinct=True, filter=Q(amount__isnull=False)),
-                nulls=Count("pk", filter=Q(amount__isnull=True))).iterator()):
-            item, category = dimension(row, "process__"), row["category"]
-            key = _month_key(row["process__created_at"])
-            for bucket in (total, providers[item["isp_key"]], clients[item["context_key"]], *([months[key]] if key else [])):
-                if row["value"] is not None:
-                    bucket["amounts"][category] = (bucket["amounts"][category] or Decimal(0)) + row["value"].quantize(Decimal("0.01"))
-                bucket["known"][category] += row["known_processes"]
-                bucket["nulls"][category] += row["nulls"]
+        stages[row["stage"]] += 1
+        targets = (total, provider, client, *([months[key]] if key else []))
+        for bucket in targets:
+            bucket["count"] += 1
+            bucket["completed"] += 1 if row["stage"] == "COMPLETED" else 0
+        if can_finance:
+            proc_obs = obligations_by_proc.get(row["pk"], ())
+            fin = money_columns(proc_obs, pendings_by_proc.get(row["pk"], ()))
+            proc_cats = {"CONTRACT": fin["fine"], "EQUIPMENT": fin["equipment"], "OTHER": fin["other"]}
+            for up in fin["unlinked_pendings"]:
+                cat = pending_principal_kind(up["kind"])
+                proc_cats[cat] = (proc_cats[cat] if proc_cats[cat] is not None else Decimal(0)) + up["amount"]
+            null_cats = {principal_kind(ob["kind"]) for ob in proc_obs if obligation_effective_amount(ob) is None}
+            for bucket in targets:
+                for category in KINDS:
+                    if proc_cats[category] is not None:
+                        bucket["amounts"][category] = (
+                            (bucket["amounts"][category] or Decimal(0)) + proc_cats[category].quantize(Decimal("0.01"))
+                        )
+                        bucket["known"][category] += 1
+                    if category in null_cats:
+                        bucket["nulls"][category] += 1
+                for metric_key in ("estimated", "paid", "open"):
+                    if fin[metric_key] is not None:
+                        bucket[metric_key] = (
+                            (bucket[metric_key] or Decimal(0)) + fin[metric_key].quantize(Decimal("0.01"))
+                        )
     # Calendar gaps are zero counts; absent monetary fields stay NULL, never zero.
     keys = []
     if valid:

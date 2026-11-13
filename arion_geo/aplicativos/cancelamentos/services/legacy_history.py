@@ -56,6 +56,9 @@ EVENT_TITLES = {
     "move": "Etapa alterada", "start": "Tratativa iniciada", "status": "Status alterado",
     "treatment": "Tratativa com o ISP registrada", "complete": "Atendimento concluído", "reopen": "Atendimento reaberto",
     "triage_approve": "Pedido aprovado", "triage_reject": "Entrada rejeitada", "triage_wait": "Análise mantida pendente",
+    "link": "Vínculo CMDB atualizado",
+    "equipment_add": "Equipamento adicionado", "equipment_update": "Equipamento atualizado",
+    "obligation_add": "Cobrança adicionada", "obligation_update": "Cobrança atualizada",
     "update": "Dados atualizados", "handoff": "Encaminhado ao Financeiro", "evidence": "Evidência registrada",
 }
 

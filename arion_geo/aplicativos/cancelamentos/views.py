@@ -233,12 +233,12 @@ def _process_context(request, pk):
     if can_pending:
         for item in equipment:
             dialogs.append(_dialog("equipment_update", f"Atualizar {item.description}", forms.EquipmentForm(instance=item), key=f"equipment-{item.pk}", child=item.pk))
-    obligations = list(process.obligations.all()) if can_finance else []
+    obligations = list(process.obligations.select_related("source_pending").all()) if can_finance else []
     if manage_finance:
-        dialogs += [_dialog("obligation_add", "Registrar obrigação financeira", forms.ObligationForm()),
+        dialogs += [_dialog("obligation_add", "Registrar obrigação financeira", forms.ObligationForm(process=process)),
                     _dialog("handoff", "Registrar encaminhamento já realizado", forms.HandoffForm(), button="Registrar envio manual")]
         for item in obligations:
-            dialogs.append(_dialog("obligation_update", f"Atualizar obrigação #{item.pk}", forms.ObligationForm(instance=item), key=f"obligation-{item.pk}", child=item.pk))
+            dialogs.append(_dialog("obligation_update", f"Atualizar obrigação #{item.pk}", forms.ObligationForm(instance=item, process=process), key=f"obligation-{item.pk}", child=item.pk))
     if request.user.has_perm("cancelamentos.complete_cancellations"):
         dialogs.append(_dialog("complete", "Concluir responsabilidade operacional NOC", forms.CompletionForm(), button="Concluir operacionalmente"))
     events = process.events.select_related("actor")
@@ -380,7 +380,8 @@ def export(request):
     financial = data["tab"] != "intake" and request.user.has_perm("cancelamentos.view_cancellation_finance")
     header = ["Origem", "TicketID", "Ticket#", "Pedido", "Situação", "Cliente", "Projeto", "Designação", "ISP", "Responsável", "Conclusão operacional"]
     if financial:
-        header += ["Multa (R$)", "Equipamento (R$)", "Outros (R$)", "Total informado (R$)", "Total parcial", "Conciliação financeira"]
+        header += ["Multa (R$)", "Equipamento (R$)", "Outros (R$)", "Total informado (R$)", "Total parcial",
+                   "Conciliação financeira", "Pendências s/ vínculo (R$)", "Em aberto (R$)", "Pago (R$)"]
     writer.writerow(header)
     for batch in batched(rows.iterator(chunk_size=200), 200):
         for obj in prepare_rows(batch, request.user) if financial else batch:
@@ -392,8 +393,12 @@ def export(request):
                 values = (obj.get_origin_display(), obj.external_ticket_id, obj.display_ticket_number, obj.code,
                           obj.get_stage_display(), obj.contracting_client, obj.project, obj.designation, obj.isp, obj.owner or "", obj.completed_at)
             if financial:
-                values += tuple(format_brl(obj.finance[key]) for key in ("fine", "equipment", "other", "total")) + (
-                    "Sim" if obj.finance["partial"] else "Não", "A conferir" if obj.finance["review"] else "Sem divergência indicada")
+                review_label = "A conferir" if obj.finance["review"] else "Sem divergência indicada"
+                values += (
+                    tuple(format_brl(obj.finance[key]) for key in ("fine", "equipment", "other", "total"))
+                    + ("Sim" if obj.finance["partial"] else "Não", review_label)
+                    + tuple(format_brl(obj.finance[key]) for key in ("pending_unlinked", "open", "paid"))
+                )
             writer.writerow([_csv_value(value) for value in values])
     AuditService.record(request=request, category="cancellation", module="cancelamentos", action="export",
                         description="Exportação operacional de Cancelamentos.", metadata={"count": count, "tab": data["tab"]})

@@ -13,7 +13,7 @@ from django.urls import reverse
 from aplicativos.base_links.models import Operadora, Projeto
 from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.integracoes.models import CMDBLinkMirror
-from .models import CancellationProcess, CancellationPending, FinancialObligation
+from .models import CancellationProcess, CancellationPending, FinancialObligation, LegacyCancellationReference
 from .services.dashboard import build_dashboard, _month_key
 from .services.financial_totals import money_columns
 
@@ -31,7 +31,10 @@ class CancellationDashboardTests(TestCase):
         for process, amounts in ((self.a, ("10.25", "20.00", "0.00")), (self.b, ("0.00", "0.00", "0.00"))):
             for kind, value in zip(("CONTRACT", "EQUIPMENT", "OTHER"), amounts):
                 FinancialObligation.objects.create(process=process, kind=kind, estimated_amount=Decimal(value))
-        CancellationPending.objects.create(process=self.a, kind="CONTRACT_FINE", amount="10.25", description="Mesmo valor; não somar")
+        p_dup = CancellationPending.objects.create(process=self.a, kind="CONTRACT_FINE", amount="10.25", description="Mesmo valor legado")
+        LegacyCancellationReference.objects.create(process=self.a, pending=p_dup, source="arionbroker",
+                                                   entity="pendenciacancelamento", legacy_pk="999", reconciliation={})
+        FinancialObligation.objects.filter(process=self.a, kind="CONTRACT").update(legacy_field="valor_multa_rescisao")
         self.params = {"period": "custom", "start": "2026-01-01", "end": "2026-02-28"}
 
     def test_official_counts_finance_null_zero_months_and_legacy_dates(self):
@@ -45,8 +48,23 @@ class CancellationDashboardTests(TestCase):
         self.assertEqual(sum(row["value"] for row in result["charts"]["stages"]), 3)
         self.assertEqual(result["charts"]["providers"][0]["count"], 2)
         self.assertEqual(result["client_rows"][0]["count"], 2)
-        exact = sum((money_columns(p.obligations.all())["total"] or Decimal(0) for p in (self.a, self.b, self.c)), Decimal(0))
+        exact = sum((money_columns(p.obligations.all(), p.pendings.select_related("legacy_reference").all())["total"] or Decimal(0)
+                     for p in (self.a, self.b, self.c)), Decimal(0))
         self.assertEqual(result["metrics"]["total"], exact)
+
+    def test_unlinked_monetary_pending_enters_dashboard_and_matches_process_totals(self):
+        proc = CancellationProcess.objects.create(
+            origin="ARIONBROKER", ticket_number="900099", stage="PENDING",
+            created_at=datetime(2026, 2, 20, 12, tzinfo=utc.utc),
+            contracting_client="Claro", project="BDN", isp="ISP A",
+        )
+        CancellationPending.objects.create(process=proc, kind="OVERDUE", amount=Decimal("22.00"), description="Mensalidade R$ 22,00")
+        result = build_dashboard(self.admin, self.params)
+        self.assertEqual(result["metrics"]["total"], Decimal("52.25"))
+        self.assertEqual(result["metrics"]["other"], Decimal("22.00"))
+        self.assertEqual(result["metrics"]["total_label"], "R$ 52,25")
+        self.assertEqual(result["charts"]["finance"][1]["other"], Decimal("22.00"))
+        self.assertEqual(result["charts"]["finance"][1]["total_label"], "R$ 22,00")
 
     def test_historical_dashboard_without_database_timezone_definitions(self):
         message = "Database returned an invalid datetime value. Are time zone definitions for your database installed?"

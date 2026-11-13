@@ -673,7 +673,9 @@ class CancellationTests(TestCase):
         FinancialObligation.objects.create(process=process, kind="CONTRACT", description="Multa", estimated_amount=Decimal("1234.50"),
             legacy_field="valor_multa_rescisao", reconciliation_state="POSSIBLE_DUPLICATE")
         FinancialObligation.objects.create(process=process, kind="EQUIPMENT", description="Equipamento", estimated_amount=Decimal("0"))
-        CancellationPending.objects.create(process=process, kind="CONTRACT_FINE", description="Descrição longa privada " * 100, amount=Decimal("1234.50"))
+        pending = CancellationPending.objects.create(process=process, kind="CONTRACT_FINE", description="Descrição longa privada " * 100, amount=Decimal("1234.50"))
+        LegacyCancellationReference.objects.create(process=process, pending=pending, source="arionbroker",
+                                                   entity="pendenciacancelamento", legacy_pk="777", reconciliation={})
         row = prepare_rows(query_module(self.admin, {"tab": "pending"})["queryset"], self.admin)[0]
         self.assertEqual(row.finance["fine"], Decimal("1234.50"))
         self.assertEqual(row.finance["equipment"], Decimal("0"))

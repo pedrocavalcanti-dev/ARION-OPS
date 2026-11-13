@@ -179,29 +179,54 @@ def pending_is_financial(pending):
 
 def financial_summary(process):
     treatment = process.treatment
-    obligations = list(process.obligations.order_by("pk"))
-    totals = money_columns(obligations, list(process.pendings.filter(status="OPEN", amount__isnull=False).values("amount")))
-    lines = [f"Assunto: Cancelamento {process.display_ticket_number} | {process.code} | {process.isp} | {process.designation}",
-             "", f"Cliente: {process.contracting_client}", f"Cliente final: {process.final_client or 'Não informado'}",
-             f"Projeto: {process.project}", f"Circuito: {process.designation}", f"Localidade: {process.city} / {process.state}",
-             f"Data efetiva: {treatment.effective_date or 'Não confirmada'}",
-             f"Encerramento de faturamento: {'Confirmado' if treatment.billing_closed else 'Não confirmado'}",
-             f"Evidência ISP: {treatment.evidence_reference or 'Não informada'}", "", "Valores principais informados:",
-             f"Multa contratual: {format_brl(totals['fine'])}", f"Equipamento: {format_brl(totals['equipment'])}",
-             f"Outros: {format_brl(totals['other'])}",
-             f"Total informado: {format_brl(totals['total'])}" + (" (parcial; há valores ausentes)" if totals["partial"] else ""),
-             "Conciliação financeira: " + ("A conferir" if totals["review"] else "Sem divergência indicada"),
-             "Valores informados não comprovam pagamento. Pendências não são somadas novamente.", "", "Obrigações registradas:"]
+    obligations = list(process.obligations.select_related("source_pending").order_by("pk"))
+    pendings = list(process.pendings.select_related("legacy_reference").order_by("pk"))
+    totals = money_columns(obligations, pendings)
+    review_note = (
+        "A conferir (possível duplicidade sem vínculo formal entre obrigação e pendência)"
+        if totals["possible_duplicate"]
+        else ("A conferir" if totals["review"] else "Sem divergência indicada")
+    )
+    lines = [
+        f"Assunto: Cancelamento {process.display_ticket_number} | {process.code} | {process.isp} | {process.designation}",
+        "", f"Cliente: {process.contracting_client}", f"Cliente final: {process.final_client or 'Não informado'}",
+        f"Projeto: {process.project}", f"Circuito: {process.designation}", f"Localidade: {process.city} / {process.state}",
+        f"Data efetiva: {treatment.effective_date or 'Não confirmada'}",
+        f"Encerramento de faturamento: {'Confirmado' if treatment.billing_closed else 'Não confirmado'}",
+        f"Evidência ISP: {treatment.evidence_reference or 'Não informada'}", "", "Valores financeiros identificados:",
+        f"Multa contratual: {format_brl(totals['fine']) if totals['fine'] is not None else 'Não informada'}",
+        f"Equipamento: {format_brl(totals['equipment']) if totals['equipment'] is not None else 'Não informado'}",
+        f"Outros valores: {format_brl(totals['other']) if totals['other'] is not None else 'Não informado'}",
+        f"Pendências monetárias sem cobrança vinculada: {format_brl(totals['pending_unlinked']) if totals['pending_unlinked'] is not None else 'Nenhuma'}",
+        f"Total informado: {format_brl(totals['total']) if totals['total'] is not None else 'Não informado'}"
+        + (" (parcial; há componentes não informados)" if totals["partial"] and totals["has_values"] else ""),
+        f"Previsto em cobranças: {format_brl(totals['estimated']) if totals['estimated'] is not None else 'Não informado'}",
+        f"Em aberto: {format_brl(totals['open']) if totals['open'] is not None else 'Não informado'}",
+        f"Pago: {format_brl(totals['paid']) if totals['paid'] is not None else 'Não confirmado'}",
+        f"Conciliação financeira: {review_note}",
+        "Valores informados não comprovam pagamento. Pendências já vinculadas a cobranças são contabilizadas uma única vez.",
+        "", "Obrigações registradas:",
+    ]
     for obligation in obligations:
-        lines.append(f"- #{obligation.pk} {obligation.get_kind_display()}: {obligation.description}; "
-                     f"previsto {format_brl(obligation.estimated_amount)}; "
-                     f"cobrado {format_brl(obligation.charged_amount)}; "
-                     f"vencimento {obligation.due_date or 'não informado'}; {obligation.get_document_status_display()}; "
-                     f"documento {obligation.document_reference or 'não disponível'}; referência {obligation.reference_number or 'não informada'}.")
+        link_note = f" | vinculada à pendência #{obligation.source_pending_id}" if obligation.source_pending_id else ""
+        lines.append(
+            f"- #{obligation.pk} {obligation.get_kind_display()}: {obligation.description}; "
+            f"previsto {format_brl(obligation.estimated_amount)}; "
+            f"cobrado {format_brl(obligation.charged_amount)}; "
+            f"vencimento {obligation.due_date or 'não informado'}; {obligation.get_document_status_display()}; "
+            f"documento {obligation.document_reference or 'não disponível'}; referência {obligation.reference_number or 'não informada'}{link_note}."
+        )
         if obligation.legacy_field:
-            lines.append(f"  Origem histórica: {obligation.legacy_field}; {obligation.get_reconciliation_state_display()}. Não somar com pendências sem conciliação.")
+            lines.append(f"  Origem histórica: {obligation.legacy_field}; {obligation.get_reconciliation_state_display()}.")
     if not obligations:
         lines.append("- Nenhuma obrigação registrada.")
+    if totals["unlinked_pendings"]:
+        lines += ["", "Pendências monetárias sem cobrança vinculada:"]
+        for pending in totals["unlinked_pendings"]:
+            lines.append(
+                f"- #{pending.pk} {pending.get_kind_display()} ({pending.get_status_display()}): "
+                f"{format_brl(pending.amount)} — {pending.description}"
+            )
     lines += ["", "Documentos e evidências:"]
     lines += [f"- {e.label}: {e.reference}" for e in process.evidence.order_by("pk")]
     lines += ["", "Observações operacionais:"]
@@ -375,6 +400,7 @@ def act_on_process(*, request, pk, action, data):
         pending.evidence_reference = values["evidence_reference"]
         pending.resolved_at = timezone.now()
         pending.save()
+        metadata["pending_id"] = pending.pk
         description = f"Pendência #{pending.pk}: {pending.get_status_display()}. {pending.resolution}"
     elif action in ("equipment_add", "equipment_update"):
         equipment = get_object_or_404(process.equipment, pk=child_id) if action.endswith("update") else None
@@ -388,7 +414,7 @@ def act_on_process(*, request, pk, action, data):
         obligation = get_object_or_404(process.obligations, pk=child_id) if action.endswith("update") else None
         previous_amounts = {"Valor previsto anterior": str(obligation.estimated_amount) if obligation.estimated_amount is not None else "Não informado",
                             "Valor cobrado anterior": str(obligation.charged_amount) if obligation.charged_amount is not None else "Não informado"} if obligation else {}
-        form = forms.ObligationForm(data, instance=obligation)
+        form = forms.ObligationForm(data, instance=obligation, process=process)
         valid(form)
         obligation = form.save(commit=False)
         obligation.process = process
@@ -396,10 +422,14 @@ def act_on_process(*, request, pk, action, data):
         obligation.provider_snapshot = process.isp
         obligation.save()
         financial = True
+        metadata["obligation_id"] = obligation.pk
+        if obligation.source_pending_id:
+            metadata["source_pending_id"] = obligation.source_pending_id
         details = {**previous_amounts, "Valor previsto registrado": str(obligation.estimated_amount) if obligation.estimated_amount is not None else "Não informado",
                    "Valor cobrado registrado": str(obligation.charged_amount) if obligation.charged_amount is not None else "Não informado",
+                   "Pendência vinculada": f"#{obligation.source_pending_id}" if obligation.source_pending_id else "Nenhuma",
                    "Vencimento registrado": obligation.due_date.strftime("%d/%m/%Y") if obligation.due_date else "Não informado"}
-        # No amount, document contents or banking reference is logged, even in the local event.
+        # No document contents or banking reference is logged; details stay local to financial timeline.
         description = f"Obrigação #{obligation.pk} registrada/atualizada. Pagamento não confirmado."
     elif action == "evidence":
         form = forms.EvidenceForm(data)

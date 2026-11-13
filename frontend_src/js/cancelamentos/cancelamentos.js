@@ -87,8 +87,12 @@
     const response = await fetch(location.href, { credentials: "same-origin", cache: "no-store" });
     if (!response.ok) throw new Error("refresh");
     const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+    const openIds = new Set([...document.querySelectorAll(".canc-detail-sections details[id][open]")].map((el) => el.id));
+    const header = doc.querySelector(".canc-detail-header");
+    if (header) document.querySelector(".canc-detail-header")?.replaceWith(header);
     const section = doc.querySelector(".canc-detail-sections");
     if (!section) throw new Error("refresh");
+    section.querySelectorAll("details[id]").forEach((el) => { if (openIds.has(el.id)) el.open = true; });
     document.querySelector(".canc-detail-sections")?.replaceWith(section);
     doc.querySelectorAll(".canc-dialog").forEach((dialog) => {
       if (dialog.id === active.id) return;

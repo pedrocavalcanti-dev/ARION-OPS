@@ -24,7 +24,7 @@
     <div><dt>Equipamentos</dt><dd class="canc-dashboard-locked">Restrito</dd><small>Requer acesso financeiro</small></div>
     {% endif %}
   </dl>
-  {% if can_finance %}<p class="canc-muted canc-dashboard-reference">Valores informados não comprovam pagamento. Campos ausentes permanecem desconhecidos; pendências individuais não são somadas novamente. A conciliação financeira permanece separada.</p>{% endif %}
+  {% if can_finance %}<p class="canc-muted canc-dashboard-reference">Valores identificados consideram obrigações e pendências monetárias ainda sem cobrança vinculada, sem duplicar vínculos formais e sem comprovar pagamento. Campos ausentes permanecem desconhecidos.</p>{% endif %}
   <div class="canc-dashboard-grid">
     <article class="canc-section"><header><h2>Cancelamentos por mês</h2><p class="canc-muted">Quantidade por mês de cadastro.</p></header>{% if not is_empty %}<div class="canc-dashboard-chart" data-cancellation-chart="months" role="img" aria-label="Quantidade de cancelamentos por mês"></div>{% else %}<p class="canc-empty">Nenhum processo encontrado neste recorte.</p>{% endif %}</article>
     <article class="canc-section"><header><h2>Valores informados por mês</h2><p class="canc-muted">Referência: cadastro do processo. Não há data financeira validada para este indicador.</p></header>{% if can_finance %}{% if not is_empty %}<div class="canc-dashboard-chart" data-cancellation-chart="finance" role="img" aria-label="Multas, equipamentos e outros valores informados por mês"></div>{% else %}<p class="canc-empty">Sem valores a apresentar neste recorte.</p>{% endif %}{% else %}<p class="canc-empty">Acesso financeiro restrito.</p>{% endif %}</article>
