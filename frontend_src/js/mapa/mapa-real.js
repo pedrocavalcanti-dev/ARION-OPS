@@ -269,7 +269,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
     ui.arionStatus.value=temporal?state.arionStatus:"";
     ui.assignee.value=temporal?state.assignee:"";
     page.querySelectorAll("[data-mode]").forEach(item=>{const selected=item.dataset.mode===state.mode;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});
-    if(["this_month","last_month","last_30","last_90","custom"].includes(state.period))ui.period.value=state.period;
+    if(["this_month","last_month","last_30","last_60","last_90","custom"].includes(state.period))ui.period.value=state.period;
     else if(/^\d{4}-\d{2}$/.test(state.period)){
       let option=ui.period.querySelector('[data-month-option]');
       if(!option){option=document.createElement("option");option.dataset.monthOption="true";ui.period.append(option);}
