@@ -356,3 +356,39 @@ class GeoIntelligenceTests(TestCase):
         self.assertIn("Nordeste",data["summary"]["region_category_counts"])
         self.assertIn("df_included",data["climate"])
         self.assertIn("coverage_headline",data["climate"])
+
+    def test_previous_period_bounds_calendar_edge_cases_and_policy_labels(self):
+        from datetime import date
+        from aplicativos.integracoes.services.incidents import IncidentRules
+        from .services.analytics import MapAnalyticsService
+        self.assertEqual(
+            MapAnalyticsService.previous_period_bounds(date(2026,10,1),date(2026,10,31)),
+            (date(2026,9,1),date(2026,9,30),"Mês anterior completo",False),
+        )
+        self.assertEqual(
+            MapAnalyticsService.previous_period_bounds(date(2024,3,1),date(2024,3,31)),
+            (date(2024,2,1),date(2024,2,29),"Mês anterior completo",False),
+        )
+        self.assertEqual(
+            MapAnalyticsService.previous_period_bounds(date(2026,1,1),date(2026,1,31)),
+            (date(2025,12,1),date(2025,12,31),"Mês anterior completo",False),
+        )
+        self.assertEqual(
+            MapAnalyticsService.previous_period_bounds(date(2026,10,1),date(2026,10,15)),
+            (date(2026,9,1),date(2026,9,15),"Janela equivalente do mês anterior",True),
+        )
+        self.assertEqual(IncidentRules.operator_policy("")["label"],"Todas as operadoras")
+        self.assertEqual(IncidentRules.operator_policy("Claro")["label"],"Claro")
+        self.assertEqual(IncidentRules.operator_policy("Vivo")["label"],"Vivo")
+
+    def test_presentation_intelligence_hides_budget_and_separates_territorial_coverage(self):
+        key=self.start()
+        data=self.client.get(reverse("mapa:presentation-intelligence",args=[key]),{"period":"2026-10"}).json()
+        self.assertNotIn("requests_today",data["collection"])
+        self.assertNotIn("daily_budget",data["collection"])
+        self.assertIn("ERA5 estadual",data["climate"]["territorial_coverage_label"])
+        self.assertIn("state_climate_summary",data)
+        self.assertIn("climate_highlights",data)
+        raw=json.dumps(data).casefold()
+        for reserved in ("financeir","closing_code_raw","assignees","account_counts"):
+            self.assertNotIn(reserved,raw)

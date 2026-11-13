@@ -91,7 +91,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     reasons: $("[data-panel-reasons]"), links: $("[data-panel-links]"), tickets: $("[data-panel-tickets]"),
     ticketFilters: $("[data-ticket-filters]"), status: $("[data-status-filter]"), priority: $("[data-priority-filter]"), arionStatus: $("[data-arion-status-filter]"), assignee: $("[data-assignee-filter]"), activeFilters: $("[data-active-filters]"),
     moreFilters: $("[data-more-filters]"), moreFiltersContent: $("[data-more-filters-content]"), hoverTooltip: $("[data-state-hover-tooltip]"),
-    panelOverview: $("[data-panel-overview]"), panelOverviewContext: $("[data-panel-overview-context]"), panelRecurrence: $("[data-panel-recurrence]"), panelTicketSearch: $("[data-panel-ticket-search]"), panelTicketSize: $("[data-panel-ticket-size]"), panelTicketPagination: $("[data-panel-ticket-pagination]"),
+    panelOverview: $("[data-panel-overview]"), panelOverviewContext: $("[data-panel-overview-context]"), panelClimate: $("[data-panel-climate]"), panelBackAnalysis: $("[data-panel-back-analysis]"), panelRecurrence: $("[data-panel-recurrence]"), panelTicketSearch: $("[data-panel-ticket-search]"), panelTicketSize: $("[data-panel-ticket-size]"), panelTicketPagination: $("[data-panel-ticket-pagination]"),
     openBase: $("[data-open-base]"), openCockpit: $("[data-open-cockpit]"), ufPrevious: $("[data-uf-previous]"), ufNext: $("[data-uf-next]"), announce: $("[data-map-announcement]"), legend: $("[data-legend]"),
   };
   const state = { mode:"base", client:"all", project:"", provider:"", period:root.dataset.defaultPeriod||"last_month", region:"", layer:"analysis", category:"", reason:"", status:"", priority:"", arionStatus:"", assignee:"", dateFrom:"", dateTo:"", selectedUF:"", panelTab:"summary", ufTab:"overview", ticketPage:1, ticketPageSize:25, ticketSearch:"", distributionDimension:"status", collapsed:true, day:"" };
@@ -182,6 +182,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     panel.inert=surface!=="details";
     panel.setAttribute("aria-hidden",String(surface!=="details"));
     panel.classList.toggle("is-open",surface==="details");
+    if(ui.panelBackAnalysis)ui.panelBackAnalysis.hidden=!(surface==="details"&&previousSurface.startsWith("analysis-"));
     panelBackdrop.classList.remove("is-visible");
     page.classList.toggle("has-analytics-drawer",surface==="analysis-expanded");
     if(surface&&window.innerWidth<=1180&&!state.collapsed)setNationalCollapsed(true);
@@ -301,7 +302,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     const controller = new AbortController();
     requestController = controller;
     let timedOut = false;
-    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 20000);
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 45000);
     $(`[data-message-title]`).textContent = "Atualizando análise";
     $(`[data-message-description]`).textContent = "Aplicando filtros ao mapa atual.";
     message.hidden = false; errorBox.hidden = true;
@@ -548,8 +549,21 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     const unlinkedNote=unlinkedCount?`<p class="panel-empty">${number.format(unlinkedCount)} tickets sem Link CMDB local somados ao total nacional (sem UF atribuída).</p>`:"";
 
     if(isPresentation){
-      const presRows=rows.filter(row=>(row.row.ticket_count||0)>0).sort((a,b)=>b.row.ticket_count-a.row.ticket_count);
-      ui.nationalView.innerHTML=`<div class="geo-executive-summary"><h3>${esc(state.selectedUF||state.region||"Brasil")} · ${esc(state.client)}</h3><div class="geo-executive-metrics"><div><strong>${number.format(data.filtered_source_total||0)}</strong><span>Links CMDB</span></div><div><strong>${number.format(data.ticket_count||0)}</strong><span>Incidentes válidos</span></div></div><div class="geo-reasons"><h3>Links por macrorregião</h3>${Object.entries(data.region_link_counts||{}).map(([name,count])=>`<p><span>${esc(name)}</span><b>${number.format(count)}</b></p>`).join("")}</div><h3>Principais UFs em incidentes</h3>${presRows.slice(0,5).map(row=>`<button type="button" class="geo-executive-uf" data-ranking-code="${row.code}"><span>${esc(row.name)}</span><strong>${number.format(row.row.ticket_count)}</strong></button>`).join("")||'<p class="panel-empty">Sem incidentes por UF.</p>'}</div>`;
+      const presRows=scopedRows.filter(r=>(r.row.ticket_count||0)>0||r.value>0).sort((a,b)=>(b.row.ticket_count||0)-(a.row.ticket_count||0)||b.value-a.value||a.code.localeCompare(b.code));
+      if(state.panelTab==="ranking"){
+        const rankTotal=presRows.reduce((acc,r)=>acc+(r.row.ticket_count||0),0)||1;
+        ui.nationalView.innerHTML=`<div class="national-view-heading"><span>Ranking territorial · ${esc(state.client)}</span><span class="demo-inline">${presRows.length} UFs</span></div>`
+          +`<ol class="national-ranking">${presRows.slice(0,27).map((row,i)=>`<li><button type="button" class="national-rank-button" data-ranking-code="${row.code}"><span class="national-rank-number">${String(i+1).padStart(2,"0")}</span><img src="${esc(flags[row.code]||"")}" alt="" width="22" height="15" loading="lazy"><span class="national-rank-name">${esc(row.name)} <small>(${((row.row.ticket_count||0)/rankTotal*100).toLocaleString("pt-BR",{maximumFractionDigits:1})}%)</small></span><strong>${number.format(row.row.ticket_count||0)}</strong></button></li>`).join("")||"<li>Sem incidentes por UF neste recorte.</li>"}</ol>${unlinkedNote}`;
+        return;
+      }
+      if(state.panelTab==="distribution"){
+        const catDist=Object.entries(data.category_counts||{}).filter(([lbl,v])=>v>0&&lbl!=="Pendência Financeira").sort((a,b)=>b[1]-a[1]);
+        const catTotal=catDist.reduce((acc,[,v])=>acc+v,0)||1;
+        ui.nationalView.innerHTML=`<div class="national-view-heading"><span>Distribuição por categoria · ${esc(state.client)}</span><span class="demo-inline">${number.format(catTotal)}</span></div>`
+          +`<div class="geo-reasons">${catDist.slice(0,8).map(([lbl,v])=>`<p><span>${esc(lbl)}</span><b>${number.format(v)} (${(v/catTotal*100).toLocaleString("pt-BR",{maximumFractionDigits:1})}%)</b></p>`).join("")||'<p class="panel-empty">Sem categorias classificadas.</p>'}</div>${unlinkedNote}`;
+        return;
+      }
+      ui.nationalView.innerHTML=`<div class="geo-executive-summary"><h3>${esc(state.selectedUF?stateNames[state.selectedUF]:state.region?(macroNames[state.region]||state.region):"Brasil")} · ${esc(state.client)}</h3><div class="geo-executive-metrics"><div><strong>${number.format(data.filtered_source_total||0)}</strong><span>Links CMDB</span></div><div><strong>${number.format(data.ticket_count||0)}</strong><span>Incidentes válidos</span></div></div><div class="geo-reasons"><h3>Links por macrorregião</h3>${Object.entries(data.region_link_counts||{}).map(([name,count])=>`<p><span>${esc(name)}</span><b>${number.format(count)}</b></p>`).join("")}</div><h3>Principais UFs em incidentes</h3><div class="geo-executive-uf-list">${presRows.slice(0,5).map(row=>`<button type="button" class="geo-executive-uf" data-ranking-code="${row.code}"><span>${esc(row.name)} <small>(${row.code})</small></span><strong>${number.format(row.row.ticket_count||0)}</strong></button>`).join("")||'<p class="panel-empty">Sem incidentes por UF.</p>'}</div>${unlinkedNote}</div>`;
       return;
     }
 
@@ -718,15 +732,25 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     ui.announce.textContent=(stateNames[code]||code)+", "+number.format(count)+" "+modeLabels[state.mode]+".";
   }
   function renderClimatePanel(row){
-    if(!climateKeys[state.layer])return;
-    const value=climateValue(row),c=state.day?row.climate?.daily?.find(d=>d.date===state.day):row.climate;
+    const showClimate=Boolean(climateKeys[state.layer]||state.mode==="climate");
+    if(!showClimate){
+      if(ui.panelClimate){ui.panelClimate.hidden=true;ui.panelClimate.innerHTML="";}
+      return;
+    }
+    const c=state.day?row.climate?.daily?.find(d=>d.date===state.day):row.climate;
     const format=(v,unit="")=>Number.isFinite(v)?number.format(v)+(unit?" "+unit:""):"Indisponível";
-    const labels={rain:"Chuva estimada · mm",temperature:"Temperatura média · °C",temperature_min:"Temperatura mínima · °C",temperature_max:"Temperatura máxima · °C",wind:"Rajada máxima · km/h",wind_speed:"Vento máximo · km/h",direction:"Direção de origem · °",correlation:"Dias coincidentes · sem causalidade"};
-    ui.panelTotal.textContent=format(value);
-    ui.panelScope.textContent=labels[state.layer]+" · "+(state.day||state.period);
-    const metrics=[["Chuva estimada",c?.[state.day?"precipitation_sum":"precipitation_mm"],"mm"],["Temperatura média",c?.[state.day?"temperature_2m_mean":"temperature_mean_c"],"°C"],["Vento máximo",c?.[state.day?"wind_speed_10m_max":"wind_max_kmh"],"km/h"],["Rajada máxima",c?.[state.day?"wind_gusts_10m_max":"gust_max_kmh"],"km/h"]];
-    ui.panelOverview.innerHTML=metrics.map(([label,n,unit])=>`<div class="panel-overview-kpi"><strong>${format(n,unit)}</strong><span>${label}</span></div>`).join("");
-    ui.panelOverviewContext.textContent=c?"Estimativa territorial · fonte, modelo e cobertura nas análises.":"Sem cache climático neste recorte. Os chamados permanecem disponíveis.";
+    if(climateKeys[state.layer]){
+      const value=climateValue(row);
+      const labels={rain:"Chuva estimada · mm",temperature:"Temperatura média · °C",temperature_min:"Temperatura mínima · °C",temperature_max:"Temperatura máxima · °C",wind:"Rajada máxima · km/h",wind_speed:"Vento máximo · km/h",direction:"Direção de origem · °",correlation:"Dias coincidentes · sem causalidade"};
+      ui.panelTotal.textContent=format(value);
+      ui.panelScope.textContent=(labels[state.layer]||"Clima estimado")+" · "+(state.day||state.period);
+    }
+    if(ui.panelClimate){
+      const metrics=[["Chuva estimada",c?.[state.day?"precipitation_sum":"precipitation_mm"],"mm"],["Temperatura média",c?.[state.day?"temperature_2m_mean":"temperature_mean_c"],"°C"],["Vento máximo",c?.[state.day?"wind_speed_10m_max":"wind_max_kmh"],"km/h"],["Rajada máxima",c?.[state.day?"wind_gusts_10m_max":"gust_max_kmh"],"km/h"]];
+      ui.panelClimate.hidden=false;
+      ui.panelClimate.innerHTML=`<div class="panel-climate-head"><strong>Contexto climático estadual (ERA5)</strong><span>${c?"Estimativa territorial": "Sem cache no recorte"}</span></div>`
+        +`<div class="panel-climate-grid">${metrics.map(([label,n,unit])=>`<div class="panel-climate-tile"><strong>${format(n,unit)}</strong><span>${esc(label)}</span></div>`).join("")}</div>`;
+    }
   }
   function panelWidth(element,fallback){const width=parseFloat(getComputedStyle(element).width);return Number.isFinite(width)&&width>0?width:fallback;}
   function updateMapLayout(){
@@ -788,16 +812,38 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     if(rightSurface!=="details")return;
     syncRightSurface();
   }
+  function returnToAnalysis(){
+    const target=previousSurface;
+    previousSurface="";
+    if(target==="analysis-expanded")geoController.openExpanded?.();
+    else if(target==="analysis-summary")geoController.openSummary?.();
+    else closePanel();
+  }
   function closePanel(){
     detailSequence++;detailController?.abort();
-    if(rightSurface==="details")rightSurface=previousSurface&&previousSurface.startsWith("analysis-")?previousSurface:"";
+    const backTarget=rightSurface==="details"&&previousSurface.startsWith("analysis-")?previousSurface:"";
+    previousSurface="";
+    if(backTarget==="analysis-expanded"){geoController.openExpanded?.();return;}
+    if(backTarget==="analysis-summary"){geoController.openSummary?.();return;}
+    if(rightSurface==="details")rightSurface="";
     syncRightSurface();
   }
   function selectState(code,zoom=true){
     if(!stateNames[code]||!geoController.allowedUFs().includes(code))return;
     manualCamera=false;closeMoreFilters();closeTooltip();
     if(rightSurface!=="details")previousSurface=rightSurface;
-    rightSurface="details";syncRightSurface();
+    rightSurface="details";
+    ui.panelCode.textContent=code;ui.panelName.textContent=stateNames[code]||code;ui.panelFlag.src=flags[code]||"";
+    const previewRow=data?.states?.[code];
+    if(previewRow){
+      ui.panelTotal.textContent=number.format(metricValue(previewRow));
+      ui.panelScope.textContent=(modeLabels[state.mode]||"Incidentes válidos")+" · "+(state.mode==="base"?"Atual":periodLabel(data?.period));
+      ui.panelContext.textContent=number.format(previewRow.total_links||0)+" links CMDB · "+number.format(previewRow.ticket_count||0)+" incidentes";
+    }else{
+      ui.panelTotal.textContent="—";
+      ui.panelContext.textContent="Carregando dados da unidade…";
+    }
+    syncRightSurface();
     if(state.selectedUF!==code){state.ufTab="overview";state.ticketPage=1;state.ticketSearch="";}
     state.selectedUF=code;syncUrl();ui.breadcrumb.hidden=false;ui.selectedName.textContent=stateNames[code];
     renderActiveFilters();updateMapLayout();renderMap();
@@ -865,7 +911,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     $("[data-national-collapse]").addEventListener("click",()=>setNationalCollapsed(true));
     $("[data-national-expand]").addEventListener("click",()=>setNationalCollapsed(false));
     page.querySelectorAll("[data-national-tab]").forEach(button=>button.addEventListener("click",()=>setPanelTab(button.dataset.nationalTab)));
-    $("[data-brazil-link]").addEventListener("click",clearSelection);$("[data-panel-close]").addEventListener("click",closePanel);
+    $("[data-brazil-link]").addEventListener("click",clearSelection);$("[data-panel-close]").addEventListener("click",closePanel);ui.panelBackAnalysis?.addEventListener("click",returnToAnalysis);
     const moveState=step=>{const order=stateOrder.filter(code=>!(state.region||isPresentation)||(data?.allowed_ufs||[]).includes(code));const index=order.indexOf(state.selectedUF);if(index<0)return;selectState(order[(index+step+order.length)%order.length]);};
     ui.ufPrevious.addEventListener("click",()=>moveState(-1));ui.ufNext.addEventListener("click",()=>moveState(1));
     $("[data-map-retry]").addEventListener("click",initialize);

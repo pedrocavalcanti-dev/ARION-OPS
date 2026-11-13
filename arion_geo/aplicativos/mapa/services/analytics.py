@@ -1,3 +1,4 @@
+import calendar
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 import unicodedata
@@ -691,15 +692,28 @@ class MapAnalyticsService:
             "period": {"date_from": start.isoformat() if start else "", "date_to": end.isoformat() if end else ""},
         }
 
+    @staticmethod
+    def previous_period_bounds(start, end):
+        if start.year == end.year and start.month == end.month and start.day == 1:
+            month_last = calendar.monthrange(start.year, start.month)[1]
+            prev_month_end = start - timedelta(days=1)
+            prev_start = prev_month_end.replace(day=1)
+            if end.day >= month_last:
+                return prev_start, prev_month_end, "Mês anterior completo", False
+            prev_end = prev_month_end.replace(day=min(end.day, prev_month_end.day))
+            return prev_start, prev_end, "Janela equivalente do mês anterior", True
+        span_days = (end - start).days + 1
+        prev_end = start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=span_days - 1)
+        return prev_start, prev_end, "Período anterior equivalente", False
+
     @classmethod
     def _previous_period_comparison(
         cls, *, user, scoped, ticket_candidates, start, end, mode, monthly_motives,
         client, project, provider, uf_filter, region, status_filter, priority_filter,
         reason_filter, arion_status, assignee, provenance, params, current_total,
     ):
-        span_days = (end - start).days + 1
-        prev_end = start - timedelta(days=1)
-        prev_start = prev_end - timedelta(days=span_days - 1)
+        prev_start, prev_end, criterion, is_partial = cls.previous_period_bounds(start, end)
         if prev_start.year < 2020:
             return {}
         prev_start_at, prev_end_exclusive = _datetime_bounds(prev_start, prev_end)
@@ -778,6 +792,12 @@ class MapAnalyticsService:
         return {
             "date_from": prev_start.isoformat(),
             "date_to": prev_end.isoformat(),
+            "current_from": start.isoformat(),
+            "current_to": end.isoformat(),
+            "current_days": (end - start).days + 1,
+            "previous_days": (prev_end - prev_start).days + 1,
+            "criterion": criterion,
+            "is_partial": is_partial,
             "ticket_count": prev_total,
             "delta": delta,
             "delta_percent": round(delta / prev_total * 100, 1) if prev_total else None,

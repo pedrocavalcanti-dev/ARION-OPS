@@ -64,20 +64,41 @@ class IncidentRules:
         operator = cls.canonical_operator(client)
         excluded_keys = cls.excluded_keys_for_client(operator)
         excludes_sem_intervencao = "sem_intervencao_tecnica" in excluded_keys
+        excluded_groups = ["Cancelados", "Improcedentes", "Sem atuação / desconhecidos"]
         if operator == "Claro":
+            label = "Claro"
+            keeps_sem_intervencao = True
             summary = "Claro: exclui Cancelados e Improcedentes; mantém Sem intervenção."
         elif operator == "Vivo":
+            label = "Vivo"
+            keeps_sem_intervencao = False
+            excluded_groups.append("Sem intervenção")
             summary = "Vivo: exclui Cancelados, Improcedentes e Sem intervenção."
+        elif operator == "other":
+            label = "Outras operadoras"
+            keeps_sem_intervencao = False
+            excluded_groups.append("Sem intervenção")
+            summary = "Demais operadoras: preserva a política padrão documentada."
         elif operator:
+            label = operator
+            keeps_sem_intervencao = not excludes_sem_intervencao
+            if excludes_sem_intervencao:
+                excluded_groups.append("Sem intervenção")
             summary = f"{operator}: preserva a política padrão documentada."
         else:
-            summary = "Política padrão por operadora: Vivo exclui Sem intervenção; Claro mantém Sem intervenção; demais preservam regra padrão."
+            label = "Todas as operadoras"
+            keeps_sem_intervencao = False
+            excluded_groups.append("Sem intervenção (Vivo e demais; Claro mantém)")
+            summary = "Política por operadora: Vivo e demais excluem Sem intervenção; Claro mantém Sem intervenção."
         return {
             "operator": operator or "Padrão",
+            "label": label,
             "excludes_canceled": True,
             "excludes_improcedent": True,
             "excludes_sem_intervencao": excludes_sem_intervencao,
+            "keeps_sem_intervencao": keeps_sem_intervencao,
             "excluded_keys": list(excluded_keys),
+            "excluded_groups": excluded_groups,
             "summary": summary,
         }
 

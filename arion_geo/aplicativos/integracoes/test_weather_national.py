@@ -103,3 +103,45 @@ class NationalWeatherTests(TestCase):
         form=WeatherConfigurationForm({**values,"daily_budget":250},user=self.user)
         self.assertTrue(form.is_valid(),form.errors)
         self.assertFalse(WeatherCollectionJob.objects.exists())
+
+    def test_municipal_ibge_normalization_never_guesses_ambiguous_or_routes(self):
+        from django.utils import timezone
+        from .models import GeographyCatalog
+        from .services.weather_local import load_municipal_catalogs, resolve_municipality
+        now=timezone.now()
+        GeographyCatalog.objects.create(key="municipios-SP",states=[{"id":"3536208","nome":"Pariquera-Açu"},{"id":"3550308","nome":"São Paulo"}],source="ibge",synced_at=now)
+        GeographyCatalog.objects.create(key="municipios-ES",states=[{"id":"3200201","nome":"Alegre"}],source="ibge",synced_at=now)
+        GeographyCatalog.objects.create(key="municipios-BA",states=[{"id":"2925303","nome":"Porto Seguro"}],source="ibge",synced_at=now)
+        GeographyCatalog.objects.create(key="municipios-AL",states=[{"id":"2704302","nome":"Maceió"}],source="ibge",synced_at=now)
+        catalogs=load_municipal_catalogs(["SP","ES","BA","AL"])
+        for raw,uf,expected_code in (("PARIQUERA - AÇU","SP","3536208"),("Alegre/ES","ES","3200201"),("CIDADE: Alegre","ES","3200201"),("São Paulo - SP","SP","3550308")):
+            res=resolve_municipality(raw,uf,catalogs=catalogs)
+            self.assertEqual(res["status"],"matched")
+            self.assertEqual(res["ibge_code"],expected_code)
+            self.assertTrue(res["eligible_for_collection"])
+        for bad,uf,expected_status in (
+            ("PONTA A: SÃO PAULO | PONTA B: SANTOS","SP","ambiguous_route"),
+            ("N/A","SP","placeholder"),
+            ("TRANCOSO","BA","unmatched"),
+            ("ANTARES","AL","unmatched"),
+        ):
+            res=resolve_municipality(bad,uf,catalogs=catalogs)
+            self.assertEqual(res["status"],expected_status)
+            self.assertFalse(res["eligible_for_collection"])
+
+    def test_enqueue_prioritized_locals_orders_by_incidents_and_skips_ineligible(self):
+        from django.utils import timezone
+        from .models import GeographyCatalog, WeatherLocalCache
+        from .services.weather_local import enqueue_prioritized_locals
+        now=timezone.now()
+        GeographyCatalog.objects.create(key="municipios-SP",states=[{"id":"3550308","nome":"São Paulo"}],source="ibge",synced_at=now)
+        GeographyCatalog.objects.create(key="municipios-RJ",states=[{"id":"3304557","nome":"Rio de Janeiro"}],source="ibge",synced_at=now)
+        localities=[
+            {"city":"Rio de Janeiro","uf":"RJ","incidents":1,"available":False,"eligible_for_collection":True},
+            {"city":"TRANCOSO","uf":"BA","incidents":20,"available":False,"eligible_for_collection":False,"normalization_status":"unmatched"},
+            {"city":"São Paulo","uf":"SP","incidents":9,"available":False,"eligible_for_collection":True},
+        ]
+        res=enqueue_prioritized_locals(self.user,localities,"2026-10",limit=20)
+        self.assertEqual(res["queued"],2)
+        self.assertEqual(res["items"][0]["uf"],"SP")
+        self.assertEqual(WeatherLocalCache.objects.get(uf="SP",ibge_code="3550308").progress["priority_incidents"],9)

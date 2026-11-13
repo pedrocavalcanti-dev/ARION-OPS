@@ -10,6 +10,7 @@ urlpatterns = [
     path("intelligence/",geo_views.intelligence,name="intelligence"),
     path("clima/coletar/",geo_views.collect,name="weather-collect"),
     path("clima/local/",geo_views.local_weather,name="weather-local"),
+    path("clima/local/lote/",geo_views.local_weather_batch,name="weather-local-batch"),
     path("apresentar/",geo_views.start,name="presentation-start"),
     path("apresentacao/<str:key>/",geo_views.presentation,name="presentation"),
     path("apresentacao/<str:key>/dados/",geo_views.presentation_data,name="presentation-data"),

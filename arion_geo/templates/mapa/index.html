@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="{% static 'css/mapa/intelligence.css' %}">
 {% endblock %}
 {% block header_context %}
-  <nav class="geo-header-context" aria-label="Navegação GEO"><strong>GEO Intelligence</strong><a href="{% url 'painel:index' %}" aria-label="Voltar à navegação geral">← <span>Navegação geral</span></a>{% if perms.configuracoes.present_geo %}<a class="geo-present-action" data-present-action href="{% url 'mapa:presentation-start' %}">Apresentar ↗</a>{% endif %}</nav>
+  <nav class="geo-header-context" aria-label="Navegação GEO"><strong>GEO Inteligência</strong><a href="{% url 'painel:index' %}" aria-label="Voltar à navegação geral">← <span>Navegação geral</span></a>{% if perms.configuracoes.present_geo %}<a class="geo-present-action" data-present-action href="{% url 'mapa:presentation-start' %}">Apresentar ↗</a>{% endif %}</nav>
 {% endblock %}
 {% block content %}
 <section class="geo-page" aria-labelledby="geo-title">

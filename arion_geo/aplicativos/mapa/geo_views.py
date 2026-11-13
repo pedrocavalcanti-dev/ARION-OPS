@@ -4,6 +4,7 @@ from datetime import timedelta
 from django import forms
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.templatetags.static import static
@@ -115,8 +116,18 @@ def collect(request):
 @access_required("view_map")
 @require_http_methods(["GET","POST"])
 def local_weather(request):
+    from aplicativos.integracoes.clients.public_data import PublicDataError
     from aplicativos.integracoes.models import WeatherLocalCache
-    from aplicativos.integracoes.services.weather_local import normalize_city, locality_key, request_local, incident_window
+    from aplicativos.integracoes.services.weather_local import (
+        clean_cmdb_city,
+        ibge_norm,
+        incident_window,
+        load_municipal_catalogs,
+        locality_key,
+        normalize_city,
+        request_local,
+        resolve_municipality,
+    )
     from aplicativos.integracoes.services.geo_configuration import get_geo_integration, weather_configuration, weather_sources
     from aplicativos.integracoes.services.geography import state_query
     from aplicativos.integracoes.services.analytics import TicketQueryService
@@ -131,7 +142,19 @@ def local_weather(request):
     if values.get("provider"):
         if not values["provider"].isdigit(): return geo_json({"error":"ISP inválido."},status=400)
         links=links.filter(operator_id=int(values["provider"]))
-    cities = [name for name in links.exclude(city="").values_list("city",flat=True).distinct() if normalize_city(name)==normalize_city(city)]
+    catalogs = load_municipal_catalogs([uf])
+    target_res = resolve_municipality(city, uf, catalogs)
+    target_cleaned = ibge_norm(clean_cmdb_city(city, uf)[0] or city)
+    cities = []
+    for name in links.exclude(city="").values_list("city", flat=True).distinct():
+        if normalize_city(name) == normalize_city(city):
+            cities.append(name)
+            continue
+        if ibge_norm(clean_cmdb_city(name, uf)[0] or name) == target_cleaned:
+            cities.append(name)
+            continue
+        if target_res["ibge_code"] and resolve_municipality(name, uf, catalogs)["ibge_code"] == target_res["ibge_code"]:
+            cities.append(name)
     if not cities:
         raise PermissionDenied("Localidade fora do recorte autorizado.")
     links=links.filter(city__in=cities)
@@ -143,10 +166,14 @@ def local_weather(request):
             row=request_local(cities[0],uf,first.strftime("%Y-%m"),request.user)
             AuditService.record(request=request,category="integration",action="weather.local_requested",description="Coleta meteorológica municipal solicitada.",metadata={"uf":uf,"period":first.strftime("%Y-%m")})
         else:
-            row=WeatherLocalCache.objects.filter(location_key=locality_key(city,uf),period=first,source__in=weather_sources(cfg)).order_by("collected_at").last()
-        data={"city":city,"uf":uf,"status":row.status if row else "unavailable","precision":"Estimativa municipal IBGE; não representa o trajeto físico do link.","weather":row.payload.get("summary") if row and (row.status=="success" or row.collected_at) else None,
+            key_candidates = {locality_key(city, uf), target_res["location_key"]} - {""}
+            cache_q = Q(location_key__in=key_candidates)
+            if target_res["ibge_code"]:
+                cache_q = cache_q | Q(uf=uf, ibge_code=target_res["ibge_code"])
+            row=WeatherLocalCache.objects.filter(cache_q,period=first,source__in=weather_sources(cfg)).order_by("collected_at").last()
+        data={"city":target_res["canonical_city"] or city,"uf":uf,"status":row.status if row else "unavailable","precision":"Estimativa municipal IBGE; não representa o trajeto físico do link.","weather":row.payload.get("summary") if row and (row.status=="success" or row.collected_at) else None,
               "resolution":row.payload.get("resolution") if row else None,"timezone":row.payload.get("timezone") if row else None,
-              "last_error":row.last_error if row else "","source":row.source if row else None,"ibge_code":row.ibge_code if row else None,
+              "last_error":row.last_error if row else "","source":row.source if row else None,"ibge_code":(row.ibge_code if row else "") or target_res["ibge_code"],
               "model":row.model if row else None,"method":row.method if row else None,"revision":row.revision if row else None,"consolidated":bool(row and row.consolidated_at)}
         if row and (row.status=="success" or row.collected_at) and values.get("ticket"):
             if not values["ticket"].isdigit(): raise ValueError("TicketID inválido.")
@@ -161,8 +188,44 @@ def local_weather(request):
             if not ticket or not IncidentRules.is_valid_ticket(ticket,ticket_client) or IncidentRules.category(ticket.closing_code_raw) in {None,"financeiro","sem_classificacao"}: raise PermissionDenied
             data["window"]=incident_window(row,ticket.source_created_at)
         return geo_json(data,status=202 if request.method=="POST" and row.status in {"pending","running"} else 200)
+    except PublicDataError as error:
+        return geo_json({"error":str(error)},status=422 if error.code=="invalid_locality" else 409)
     except ValueError as error:
         return geo_json({"error":str(error)},status=400)
+
+
+@login_required
+@access_required("view_map")
+@require_POST
+def local_weather_batch(request):
+    if not request.user.has_perm("configuracoes.run_integrations"):
+        return geo_json({"status": "unauthorized", "message": "Sem autorização para enfileirar coletas municipais."}, status=403)
+    from aplicativos.integracoes.clients.public_data import PublicDataError
+    from aplicativos.integracoes.services.weather_local import enqueue_prioritized_locals
+    try:
+        payload = intelligence_payload(request.user, request.POST)
+        readiness = collection_readiness()
+        if readiness["status"] != "ready":
+            return geo_json(readiness, status=409)
+        localities = payload.get("correlation", {}).get("localities", [])
+        result = enqueue_prioritized_locals(request.user, localities, payload["period"]["month"], limit=20)
+    except PublicDataError as error:
+        return geo_json({"status": error.code or "unavailable", "message": str(error)}, status=409)
+    except ValueError as error:
+        return geo_json({"status": "invalid", "message": str(error)}, status=400)
+    AuditService.record(
+        request=request,
+        category="integration",
+        action="weather.local_batch_requested",
+        description="Enfileiramento prioritário de localidades municipais solicitado.",
+        metadata={"queued": result["queued"], "period": payload["period"]["month"]},
+    )
+    msg = (
+        f"{result['queued']} localidade(s) prioritária(s) adicionada(s) à fila."
+        if result["queued"]
+        else "Nenhuma nova localidade elegível aguardando enfileiramento neste recorte."
+    )
+    return geo_json({"status": "queued" if result["queued"] else "idle", "message": msg, **result}, status=202 if result["queued"] else 200)
 
 
 class PresentationForm(forms.Form):

@@ -1,13 +1,13 @@
-<aside id="geo-intelligence-panel" class="geo-intelligence thin-scroll" aria-label="Análises GEO Intelligence" data-geo-intelligence data-panel-state="collapsed" hidden {% if not presentation %}data-local-url="{% url 'mapa:weather-local' %}"{% endif %} data-url="{% if presentation %}{{ intelligence_url }}{% else %}{% url 'mapa:intelligence' %}{% endif %}" {% if not presentation and perms.configuracoes.run_integrations %}data-collect-url="{% url 'mapa:weather-collect' %}"{% endif %}>
+<aside id="geo-intelligence-panel" class="geo-intelligence thin-scroll" aria-label="Análises GEO Inteligência" data-geo-intelligence data-panel-state="collapsed" hidden {% if not presentation %}data-local-url="{% url 'mapa:weather-local' %}"{% endif %} data-url="{% if presentation %}{{ intelligence_url }}{% else %}{% url 'mapa:intelligence' %}{% endif %}" {% if not presentation and perms.configuracoes.run_integrations %}data-collect-url="{% url 'mapa:weather-collect' %}" data-local-batch-url="{% url 'mapa:weather-local-batch' %}"{% endif %}>
   <header class="geo-analysis-drawer-header">
-    <div class="geo-analysis-heading"><strong>GEO Intelligence</strong><span data-geo-context>Carregando recorte…</span></div>
+    <div class="geo-analysis-heading"><strong>GEO Inteligência</strong><span data-geo-context>Carregando recorte…</span></div>
     <div class="geo-intelligence-actions">
       <button class="geo-text-action" type="button" data-analysis-expand aria-expanded="false" aria-controls="geo-intelligence-content" hidden>Expandir</button>
       <button class="geo-text-action" type="button" data-analysis-close aria-label="Fechar análises" hidden>Fechar</button>
     </div>
   </header>
   <div id="geo-analysis-body" class="geo-analysis-body" hidden>
-    <section class="geo-drawer-section geo-drawer-section--summary" aria-label="Resumo analítico">
+    <section class="geo-drawer-section geo-drawer-section--summary" aria-label="Síntese analítica">
       <div class="geo-climate-status">
         <p class="geo-status" data-weather-status role="status">Consultando cobertura analítica…</p>
         <div class="geo-intelligence-actions">
@@ -36,19 +36,37 @@
       </section>
 
       <section class="geo-drawer-section" aria-label="Inteligência climática" data-climate-intelligence-section>
-        <div class="geo-section-head"><h3>Inteligência climática</h3><span class="geo-section-note" data-climate-section-note>Territorial e próximo aos incidentes</span></div>
-        <details class="geo-weather-section" data-weather-territorial open>
-          <summary>Clima territorial · ranking de UFs</summary>
-          <label>Indicador territorial<select data-climate-ranking><option value="precipitation_mm">Precipitação · mm</option><option value="rainy_days">Dias chuvosos</option><option value="gust_max_kmh">Rajada máxima · km/h</option><option value="temperature_max_c">Maior temperatura · °C</option><option value="temperature_min_c">Menor temperatura · °C</option></select></label>
-          <div data-weather-ranking></div>
-        </details>
-        <details class="geo-weather-section" data-weather-correlation-section open>
-          <summary>Clima próximo aos incidentes · diagnóstico e localidades</summary>
-          <div data-weather-correlation></div>
-          <label class="geo-local-metric-select">Ranking municipal<select data-local-ranking-metric><option value="rain_day_incidents">Incidentes em dia chuvoso</option><option value="ruptures_rain">Rompimentos em chuva</option><option value="massives_rain">Massivas em chuva</option><option value="equipment_weather">Equipamento / energia com clima</option><option value="precipitation_mm">Maior precipitação · mm</option><option value="rainy_days">Mais dias chuvosos</option></select></label>
-          <div data-weather-localities></div>
-          <div data-local-weather-result role="status"></div>
-        </details>
+        <div class="geo-section-head"><h3>Inteligência climática</h3><span class="geo-section-note" data-climate-section-note>Territorial ERA5 · recorte estadual</span></div>
+        <div class="geo-climate-highlights" data-weather-highlights></div>
+        <div class="geo-climate-controls">
+          <label>Indicador estadual<select data-climate-ranking><option value="precipitation_mm">Precipitação · mm</option><option value="rainy_days">Dias chuvosos</option><option value="gust_max_kmh">Rajada máxima · km/h</option><option value="wind_max_kmh">Vento máximo · km/h</option><option value="temperature_max_c">Maior temperatura · °C</option><option value="temperature_min_c">Menor temperatura · °C</option></select></label>
+          <button type="button" class="geo-text-action" data-climate-ranking-toggle hidden>Ver todas as 27 UFs</button>
+        </div>
+        <div data-weather-ranking></div>
+      </section>
+
+      <section class="geo-drawer-section" aria-label="Coincidências climáticas e operacionais" data-weather-correlation-section>
+        <div class="geo-section-head"><h3>Coincidências</h3><span class="geo-section-note">Chuva, vento e eventos · sem causalidade</span></div>
+        <div data-weather-correlation></div>
+      </section>
+
+      <section class="geo-drawer-section" aria-label="Ranking municipal" data-weather-local-section>
+        <div class="geo-section-head"><h3>Ranking municipal</h3><span class="geo-section-note" data-local-coverage-note>Cache local IBGE</span></div>
+        <div class="geo-local-tabs" role="tablist" aria-label="Visões do ranking municipal" data-local-tabs>
+          <button type="button" class="geo-tab-btn" role="tab" aria-selected="true" data-local-tab="incidents">Mais incidentes</button>
+          <button type="button" class="geo-tab-btn" role="tab" aria-selected="false" data-local-tab="coincident">Coincidentes com chuva</button>
+          <button type="button" class="geo-tab-btn" role="tab" aria-selected="false" data-local-tab="pending">Aguardando análise</button>
+        </div>
+        <div class="geo-local-controls">
+          <label class="geo-local-search"><span>Buscar município</span><input type="search" data-local-search placeholder="Cidade, IBGE ou texto CMDB…"></label>
+          <label><span>UF</span><select data-local-uf-filter><option value="">Todas</option></select></label>
+          <label class="geo-local-metric-select"><span>Ordenar / indicador</span><select data-local-ranking-metric><option value="rain_day_incidents">Incidentes em dia chuvoso</option><option value="coincident_incidents">Coincidentes (chuva ou vento)</option><option value="ruptures_rain">Rompimentos em chuva</option><option value="massives_rain">Massivas em chuva</option><option value="equipment_weather">Equipamento / energia com clima</option><option value="precipitation_mm">Maior precipitação · mm</option><option value="rainy_days">Mais dias chuvosos</option></select></label>
+          <label class="geo-local-queue-select" hidden><span>Situação</span><select data-local-queue-filter><option value="all">Todas</option><option value="pending">Na fila</option><option value="running">Em processamento</option><option value="error">Com erro</option><option value="awaiting_queue">Aguardando fila</option><option value="validation_pending">Pendente validação</option></select></label>
+          {% if not presentation and perms.configuracoes.run_integrations %}<button type="button" class="geo-text-action" data-local-batch hidden>Enfileirar prioritárias</button>{% endif %}
+        </div>
+        <div data-weather-localities></div>
+        <div class="geo-local-pagination" data-local-pagination hidden></div>
+        <div data-local-weather-result role="status"></div>
       </section>
 
       <details class="geo-method-note">

@@ -160,3 +160,71 @@ class WeatherContextTests(TestCase):
         self.assertFalse(result["causality"])
         self.assertEqual(result["local_rankings"]["ruptures_rain"][0]["city"],"São Paulo")
         self.assertEqual(result["local_rankings"]["precipitation_mm"][0]["value"],45.0)
+
+    def test_evaluable_wind_coincident_uf_and_ibge_dedup(self):
+        from django.utils import timezone
+        from aplicativos.integracoes.models import GeographyCatalog
+        from .services.weather_context import correlate
+        GeographyCatalog.objects.create(
+            key="municipios-SP",
+            states=[{"id": "3550308", "nome": "São Paulo"}],
+            source="ibge",
+            synced_at=timezone.now(),
+        )
+        stamp=datetime(2026,10,14,15,tzinfo=utc.utc)
+        times=[int((stamp-timedelta(hours=6)).timestamp())+i*3600 for i in range(10)]
+        WeatherLocalCache.objects.create(
+            location_key="SP:sao paulo",city="São Paulo",uf="SP",ibge_code="3550308",period=date(2026,10,1),source="open_meteo_public",status="success",
+            payload={"summary":{"precipitation_mm":12.0,"rainy_days":2,"gust_max_kmh":65.0,"wind_max_kmh":42.0,"daily":[{"date":"2026-10-14","precipitation_sum":12.0,"wind_gusts_10m_max":65.0,"wind_speed_10m_max":42.0}]},"hourly":{"time":times,"precipitation":[0.0]*10,"precipitation_probability":[0]*10,"temperature_2m":[21.0]*10,"relative_humidity_2m":[70]*10,"cloud_cover":[20]*10,"wind_speed_10m":[42.0]*10,"wind_gusts_10m":[65.0]*10,"wind_direction_10m":[180]*10}},
+        )
+        events=[
+            {"city":"São Paulo - SP","uf":"SP","at":stamp,"ticket":11,"link":1,"category":"energia"},
+            {"city":"Sao Paulo","uf":"SP","at":stamp,"ticket":12,"link":1,"category":"equipamento"},
+        ]
+        result=correlate(events,date(2026,10,1),date(2026,10,31),2)
+        self.assertEqual(result["by_category"]["energia"]["evaluable"],1)
+        self.assertEqual(result["wind_incidents"],2)
+        self.assertEqual(result["wind_equipment_energy"],2)
+        self.assertEqual(result["coincident_by_uf"][0]["uf"],"SP")
+        self.assertEqual(result["coincident_by_uf"][0]["coincident_incidents"],2)
+        self.assertEqual(result["top_rainy_incident_days"][0]["date"],"2026-10-14")
+        sp_locs=[loc for loc in result["localities"] if loc["uf"]=="SP"]
+        self.assertEqual(len(sp_locs),1)
+        self.assertEqual(sp_locs[0]["ibge_code"],"3550308")
+        self.assertEqual(sp_locs[0]["merged_variants"],2)
+
+    def test_local_weather_batch_respects_permissions_and_enqueues_prioritized(self):
+        from django.contrib.auth import get_user_model
+        from django.contrib.auth.models import Group, Permission
+        from django.utils import timezone
+        from aplicativos.integracoes.models import GeographyCatalog, WeatherLocalCache
+        GeographyCatalog.objects.create(
+            key="municipios-SP",
+            states=[{"id": "3550308", "nome": "São Paulo"}],
+            source="ibge",
+            synced_at=timezone.now(),
+        )
+        GeographyCatalog.objects.create(
+            key="municipios-RJ",
+            states=[{"id": "3304557", "nome": "Rio de Janeiro"}],
+            source="ibge",
+            synced_at=timezone.now(),
+        )
+        self.links["SP"].city="São Paulo";self.links["SP"].save()
+        self.links["RJ"].city="Rio de Janeiro";self.links["RJ"].save()
+        self.ticket(501,"SP");self.ticket(502,"SP");self.ticket(503,"RJ")
+        no_perm=get_user_model().objects.create_user("noperm-batch",password="strong-password")
+        grp=Group.objects.create(name="ViewMapOnly")
+        grp.permissions.add(Permission.objects.get(codename="view_map",content_type__app_label="configuracoes"))
+        no_perm.groups.add(grp);self.client.force_login(no_perm)
+        url=reverse("mapa:weather-local-batch")
+        self.assertEqual(self.client.post(url,{"period":"2026-10"}).status_code,403)
+        self.client.force_login(self.user)
+        resp=self.client.post(url,{"period":"2026-10"})
+        self.assertEqual(resp.status_code,202)
+        body=resp.json()
+        self.assertEqual(body["queued"],2)
+        caches=list(WeatherLocalCache.objects.filter(status="pending").order_by("uf"))
+        self.assertEqual(len(caches),2)
+        sp_cache=WeatherLocalCache.objects.get(uf="SP",ibge_code="3550308")
+        self.assertEqual(sp_cache.progress["priority_incidents"],2)

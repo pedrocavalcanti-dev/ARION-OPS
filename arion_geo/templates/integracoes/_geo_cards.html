@@ -1,5 +1,5 @@
 <section class="integration-home-section geo-integrations-section" aria-labelledby="geo-integrations-title">
-  <header class="integration-section-heading"><div><p class="integration-eyebrow">CONTEXTO GEOGRÁFICO</p><h2 id="geo-integrations-title">GEO Intelligence</h2></div><p>Catálogo territorial e histórico climático. Coletas sob demanda ou por agendamento explícito.</p></header>
+  <header class="integration-section-heading"><div><p class="integration-eyebrow">CONTEXTO GEOGRÁFICO</p><h2 id="geo-integrations-title">GEO Inteligência</h2></div><p>Catálogo territorial e histórico climático. Coletas sob demanda ou por agendamento explícito.</p></header>
   <div class="integration-cards integration-cards--portal integration-cards--geo">
     <a class="integration-card integration-card--portal" data-integration-card href="{% url 'configuracoes:integracoes:geo-detail' 'ibge' %}">
       <div class="integration-card-top"><span class="integration-icon" aria-hidden="true">◎</span><span class="integration-source-badge">DADOS PÚBLICOS</span><span class="integration-status integration-status--{{ geo_ibge.health }}"><i></i>{% if geo_ibge.enabled %}Habilitada{% else %}Desabilitada{% endif %}</span></div>

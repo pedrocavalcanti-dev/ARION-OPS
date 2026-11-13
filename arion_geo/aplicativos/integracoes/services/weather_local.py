@@ -1,5 +1,7 @@
 """On-demand municipal weather, shared by locality/month, never per ticket."""
+from collections import defaultdict
 import math
+import re
 import unicodedata
 from datetime import datetime, timedelta, timezone as utc_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -14,15 +16,141 @@ from .weather import MODEL, VARIABLES, _inside, _count_request, configured_weath
 HOURLY = {"precipitation":"mm","temperature_2m":"°C","wind_speed_10m":"km/h","wind_gusts_10m":"km/h","wind_direction_10m":"°"}
 
 
+_PLACEHOLDER_CITIES = {
+    "", "-", "--", "---", ".", "n/a", "na", "null", "none", "nil",
+    "nao informado", "nao identificado", "sem informacao", "sem cidade",
+    "sem localidade", "desconhecido", "indefinido",
+}
+
+
 def normalize_city(value):
     return " ".join("".join(c for c in unicodedata.normalize("NFKD",str(value)) if not unicodedata.combining(c)).casefold().split())
+
+
+def ibge_norm(value):
+    ascii_text = "".join(
+        c for c in unicodedata.normalize("NFKD", str(value or "")) if not unicodedata.combining(c)
+    ).casefold()
+    return " ".join(re.sub(r"[-'’`./_]+", " ", ascii_text).split())
+
+
+def clean_cmdb_city(raw_city, uf=""):
+    raw = " ".join(str(raw_city or "").replace("\xa0", " ").split()).strip(" \"'")
+    norm = normalize_city(raw)
+    if norm in _PLACEHOLDER_CITIES or not re.search(r"[a-zA-ZÀ-ÿ]", raw):
+        return "", "placeholder"
+    if re.search(r"\bponta\s*[ab]\b|\||<->|->|;|\s+/\s+|\s+x\s+", raw, re.IGNORECASE):
+        return "", "ambiguous_route"
+    if re.match(r"^(?:circuito|enlace|trecho|link\s+\d|erb\s+\d)\b", raw, re.IGNORECASE):
+        return "", "circuit_or_site"
+    cleaned = re.sub(r"^(?:cidade|municipio|município)\s*[:\-]\s*", "", raw, flags=re.IGNORECASE).strip()
+    uf_upper = str(uf or "").strip().upper()
+    if uf_upper and uf_upper in STATE_BY_UF:
+        suffix_re = re.compile(rf"(?:\(\s*{re.escape(uf_upper)}\s*\)|[\s,/-]+{re.escape(uf_upper)})$", re.IGNORECASE)
+        while True:
+            updated = suffix_re.sub("", cleaned).strip(" ,/-")
+            if updated == cleaned:
+                break
+            cleaned = updated
+    cleaned = " ".join(cleaned.split())
+    if normalize_city(cleaned) in _PLACEHOLDER_CITIES or not re.search(r"[a-zA-ZÀ-ÿ]", cleaned):
+        return "", "placeholder"
+    return cleaned, ""
+
+
+def build_municipal_catalog_index(states_list):
+    by_exact = defaultdict(list)
+    by_norm = defaultdict(list)
+    by_id = {}
+    for item in states_list or ():
+        mid = str(item.get("id", ""))
+        nome = str(item.get("nome", ""))
+        if not mid or not nome:
+            continue
+        entry = {"id": mid, "nome": nome}
+        by_id[mid] = entry
+        by_exact[normalize_city(nome)].append(entry)
+        by_norm[ibge_norm(nome)].append(entry)
+    return {"by_exact": by_exact, "by_norm": by_norm, "by_id": by_id}
+
+
+def load_municipal_catalogs(ufs):
+    wanted = sorted({uf for uf in ufs if uf in STATE_BY_UF})
+    if not wanted:
+        return {}
+    rows = GeographyCatalog.objects.filter(key__in=[f"municipios-{uf}" for uf in wanted])
+    result = {}
+    for cat in rows:
+        uf = cat.key.removeprefix("municipios-")
+        result[uf] = build_municipal_catalog_index(cat.states)
+    return result
+
+
+def resolve_municipality(raw_city, uf, catalogs=None):
+    cleaned, reason = clean_cmdb_city(raw_city, uf)
+    cat = (catalogs or {}).get(uf)
+    if reason:
+        return {
+            "status": reason,
+            "raw_city": raw_city,
+            "uf": uf,
+            "canonical_city": "",
+            "ibge_code": "",
+            "location_key": "",
+            "eligible_for_collection": False,
+            "catalog_available": bool(cat),
+        }
+    if not cat:
+        return {
+            "status": "catalog_pending",
+            "raw_city": raw_city,
+            "uf": uf,
+            "canonical_city": cleaned,
+            "ibge_code": "",
+            "location_key": locality_key(cleaned, uf),
+            "eligible_for_collection": True,
+            "catalog_available": False,
+        }
+    candidates = None
+    for lookup, term in (
+        ("by_exact", normalize_city(raw_city)),
+        ("by_norm", ibge_norm(raw_city)),
+        ("by_exact", normalize_city(cleaned)),
+        ("by_norm", ibge_norm(cleaned)),
+    ):
+        found = cat[lookup].get(term) or []
+        if len(found) == 1:
+            match = found[0]
+            return {
+                "status": "matched",
+                "raw_city": raw_city,
+                "uf": uf,
+                "canonical_city": match["nome"],
+                "ibge_code": match["id"],
+                "location_key": locality_key(match["nome"], uf),
+                "eligible_for_collection": True,
+                "catalog_available": True,
+            }
+        if len(found) > 1:
+            candidates = found
+            break
+    return {
+        "status": "ambiguous_catalog" if candidates else "unmatched",
+        "raw_city": raw_city,
+        "uf": uf,
+        "canonical_city": cleaned,
+        "ibge_code": "",
+        "location_key": locality_key(cleaned, uf),
+        "eligible_for_collection": False,
+        "catalog_available": True,
+    }
 
 
 def locality_key(city, uf):
     return f"{uf}:{normalize_city(city)}"
 
 
-def request_local(city, uf, period, user):
+def request_local(city, uf, period, user, *, priority_incidents=0):
     if uf not in STATE_BY_UF or not city or len(city)>200:
         raise ValueError("Localidade inválida.")
     integration = get_geo_integration("open_meteo")
@@ -30,12 +158,81 @@ def request_local(city, uf, period, user):
     if cfg.get("preferred_provider","open_meteo")!="open_meteo":
         raise PublicDataError("A fonte selecionada não oferece série horária municipal neste adaptador.",code="capability")
     first, _ = month_bounds(period)
-    row, _ = WeatherLocalCache.objects.get_or_create(location_key=locality_key(city,uf),period=first,source=weather_source(cfg),model=MODEL,
-        defaults={"city":city,"uf":uf,"requested_by":user})
+    catalogs = load_municipal_catalogs([uf])
+    resolved = resolve_municipality(city, uf, catalogs)
+    if resolved["status"] in {"placeholder", "ambiguous_route", "circuit_or_site", "unmatched", "ambiguous_catalog"}:
+        raise PublicDataError("Cidade sem correspondência exata e única no IBGE; mantida apenas a referência de UF.", code="invalid_locality")
+    canonical_city = resolved["canonical_city"] or city
+    ibge_code = resolved["ibge_code"]
+    source = weather_source(cfg)
+    raw_key = locality_key(city, uf)
+    target_key = resolved["location_key"] or raw_key
+    existing = None
+    if ibge_code:
+        existing = WeatherLocalCache.objects.filter(
+            uf=uf, ibge_code=ibge_code, period=first, source=source, model=MODEL
+        ).order_by("-collected_at", "id").first()
+    if not existing:
+        existing = WeatherLocalCache.objects.filter(
+            location_key__in={target_key, raw_key}, period=first, source=source, model=MODEL
+        ).order_by("-collected_at", "id").first()
+    if existing:
+        row = existing
+    else:
+        progress = {"priority_incidents": int(priority_incidents or 0)} if priority_incidents else {}
+        row, _ = WeatherLocalCache.objects.get_or_create(
+            location_key=target_key, period=first, source=source, model=MODEL,
+            defaults={"city": canonical_city, "uf": uf, "ibge_code": ibge_code, "requested_by": user, "progress": progress},
+        )
+    if priority_incidents and int(priority_incidents) > int((row.progress or {}).get("priority_incidents", 0)):
+        progress = dict(row.progress or {})
+        progress["priority_incidents"] = int(priority_incidents)
+        row.progress = progress
+        row.save(update_fields=("progress", "updated_at"))
+    if row.status == "success" and not needs_collection(row, cfg):
+        return row
     if row.status=="error" or (row.status=="success" and needs_collection(row,cfg)):
         row.status,row.attempts,row.next_attempt_at = "pending",0,timezone.now()
         row.save(update_fields=("status","attempts","next_attempt_at","updated_at"))
     return row
+
+
+def enqueue_prioritized_locals(user, localities, period, *, limit=20):
+    integration = get_geo_integration("open_meteo")
+    cfg = configured_weather(integration)
+    if cfg.get("preferred_provider", "open_meteo") != "open_meteo":
+        raise PublicDataError("A fonte selecionada não oferece série horária municipal neste adaptador.", code="capability")
+    first, _ = month_bounds(period)
+    today = timezone.localdate()
+    budget = int(cfg.get("daily_budget") or 0)
+    used_today = IntegrationSyncState.objects.filter(key=f"meteo-{today.isoformat()}").values_list("records_count", flat=True).first() or 0
+    if budget and used_today >= budget:
+        raise PublicDataError("Orçamento diário HTTP atingido para novas coletas municipais.", code="budget")
+    cooldown = IntegrationSyncState.objects.filter(key="weather-cooldown", change_cursor__gt=timezone.now()).first()
+    if cooldown:
+        raise PublicDataError("Fila em espera de liberação da fonte externa; retomará após o intervalo.", code="rate_limited")
+    ordered = sorted(
+        (
+            loc for loc in (localities or [])
+            if not loc.get("available")
+            and (
+                loc.get("normalization_status") in {"matched", "catalog_pending"}
+                or (not loc.get("normalization_status") and loc.get("eligible_for_collection"))
+            )
+            and loc.get("queue_status") not in {"pending", "running"}
+        ),
+        key=lambda r: (-(r.get("incidents") or 0), r.get("uf", ""), r.get("city", "")),
+    )
+    queued = []
+    skipped = 0
+    for loc in ordered[:max(1, min(limit, 50))]:
+        try:
+            row = request_local(loc["city"], loc["uf"], first.strftime("%Y-%m"), user, priority_incidents=loc.get("incidents") or 0)
+            if row.status == "pending":
+                queued.append({"city": row.city, "uf": row.uf, "ibge_code": row.ibge_code, "incidents": loc.get("incidents") or 0})
+        except PublicDataError:
+            skipped += 1
+    return {"queued": len(queued), "skipped": skipped, "items": queued}
 
 
 def municipal_point(row, client):
@@ -49,10 +246,13 @@ def municipal_point(row, client):
         municipalities = [{"id":str(x["id"]),"nome":str(x["nome"])} for x in data
                           if len(str(x.get("id","")))==7 and str(x["id"]).startswith(str(STATE_BY_UF[row.uf]["id"]))]
         catalog,_ = GeographyCatalog.objects.update_or_create(key=key,defaults={"states":municipalities,"source":"ibge","synced_at":timezone.now()})
-    matches = [x for x in catalog.states if normalize_city(x["nome"])==normalize_city(row.city)]
-    if len(matches)!=1:
-        raise PublicDataError("Cidade sem correspondência exata e única no IBGE; mantida apenas a referência de UF.")
-    city = matches[0]
+    index = build_municipal_catalog_index(catalog.states)
+    city = index["by_id"].get(str(row.ibge_code or "")) if row.ibge_code else None
+    if not city:
+        resolved = resolve_municipality(row.city, row.uf, {row.uf: index})
+        if resolved["status"] != "matched":
+            raise PublicDataError("Cidade sem correspondência exata e única no IBGE; mantida apenas a referência de UF.")
+        city = {"id": resolved["ibge_code"], "nome": resolved["canonical_city"]}
     geometry = client.get(f"https://servicodados.ibge.gov.br/api/v3/malhas/municipios/{city['id']}",{"formato":"application/vnd.geo+json","qualidade":"minima"})
     try:
         shape = geometry["features"][0]["geometry"]
@@ -251,10 +451,15 @@ def incident_window(row, occurred_at):
 
 def local_worker_tick():
     now = timezone.now()
-    WeatherLocalCache.objects.filter(status="running",updated_at__lt=now-timedelta(minutes=10)).update(status="pending")
-    row = WeatherLocalCache.objects.filter(status="pending",next_attempt_at__lte=now).order_by("updated_at").first()
-    if not row:
+    cooldown = IntegrationSyncState.objects.filter(key="weather-cooldown", change_cursor__gt=now).first()
+    if cooldown:
         return
+    WeatherLocalCache.objects.filter(status="running",updated_at__lt=now-timedelta(minutes=10)).update(status="pending")
+    due = list(WeatherLocalCache.objects.filter(status="pending", next_attempt_at__lte=now))
+    if not due:
+        return
+    due.sort(key=lambda r: (-(int((r.progress or {}).get("priority_incidents", 0))), r.updated_at))
+    row = due[0]
     row.status,row.attempts = "running",row.attempts+1
     row.save()
     try:

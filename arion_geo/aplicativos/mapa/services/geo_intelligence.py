@@ -3,7 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from django.conf import settings
 
-from aplicativos.integracoes.services.geography import REGIONS, STATES, region_states
+from aplicativos.integracoes.services.geography import REGIONS, STATES, STATE_BY_UF, region_states
 from aplicativos.integracoes.services.weather import cached_weather, collection_readiness, spatial_value, VARIABLES, circular_mean, summarize, sampling_points
 from aplicativos.integracoes.models import WeatherCollectionJob, IntegrationSyncState
 from .analytics import MapAnalyticsService, _bounds
@@ -118,6 +118,15 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
         scope_text = f"Cobertura parcial · {complete_ufs} de {len(ufs)} UFs"
     else:
         scope_text = "Sem UFs com vínculo neste recorte"
+    corr = summary.get("correlation", {}) or {}
+    muni_cov = corr.get("municipal_coverage", {}) or {}
+    if ufs and muni_cov.get("total_localities"):
+        muni_label = (
+            f"Clima municipal local: {muni_cov.get('cache_collected', 0)}/{muni_cov.get('total_localities', 0)} localidades"
+            f" · {corr.get('covered_tickets', 0)}/{corr.get('located_tickets', 0)} incidentes localizados"
+        )
+    else:
+        muni_label = "Clima municipal local: sem localidades com incidentes neste recorte."
     regional.update(
         temporal_partial=any(row.get("partial") for row in weather.values()),
         expected_ufs=len(ufs),
@@ -127,6 +136,8 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
         complete_ufs=complete_ufs,
         territorial_percent=round(100*covered_area/total_area,2) if total_area else 0,
         coverage_label=f"Cobertura {'completa' if complete_ufs==len(ufs) and ufs else 'parcial'}: {complete_ufs} de {len(ufs)} UFs",
+        territorial_coverage_label=f"Clima territorial: {complete_ufs}/{len(ufs)} UFs (ERA5 estadual; não representa coleta municipal)",
+        municipal_coverage_label=muni_label,
         coverage_headline=scope_text,
         partial=complete_ufs<len(ufs),
         estimate_scope="Recorte coberto; não representa todo o território enquanto a cobertura for parcial.",
@@ -173,9 +184,61 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
         pass
     readiness["checkpoint_cells"]=sum(len(p.get("samples",{})) for p in WeatherCollectionJob.objects.filter(uf__in=ufs,period__range=(first.replace(day=1),end),status__in=("running","pending","paused","error")).values_list("progress",flat=True))
     regional["last_update"]=max((row["collected_at"] for row in weather.values()),default=None)
+    local_by_uf = {row["uf"]: row for row in (corr.get("coincident_by_uf") or [])}
+    state_climate_summary = []
+    for uf_code, w_row in weather.items():
+        if not (w_row.get("completeness", 0) >= .99 and not w_row.get("partial") and not w_row.get("stale")):
+            continue
+        st_info = STATE_BY_UF.get(uf_code, {})
+        st_ops = summary.get("states", {}).get(uf_code, {})
+        loc_uf = local_by_uf.get(uf_code)
+        tech_total = sum((st_ops.get("technical_daily_counts") or {}).values())
+        state_climate_summary.append({
+            "uf": uf_code,
+            "name": st_info.get("nome", uf_code),
+            "region_id": st_info.get("region_id"),
+            "precipitation_mm": w_row.get("precipitation_mm"),
+            "rainy_days": w_row.get("rainy_days"),
+            "rainy_days_percent": w_row.get("rainy_days_percent"),
+            "gust_max_kmh": w_row.get("gust_max_kmh"),
+            "wind_max_kmh": w_row.get("wind_max_kmh"),
+            "temperature_max_c": w_row.get("temperature_max_c"),
+            "temperature_min_c": w_row.get("temperature_min_c"),
+            "ticket_count": st_ops.get("ticket_count", 0),
+            "technical_incidents": tech_total,
+            "covered_local_incidents": loc_uf["covered_incidents"] if loc_uf else 0,
+            "coincident_incidents": loc_uf["coincident_incidents"] if loc_uf else None,
+        })
+
+    def _top_highlight(key, *, reverse=True):
+        valid = [r for r in state_climate_summary if r.get(key) is not None]
+        if not valid:
+            return None
+        best = sorted(valid, key=lambda r: (-(r[key] or 0) if reverse else (r[key] or 0), r["uf"]))[0]
+        return {"uf": best["uf"], "name": best["name"], "value": best[key]}
+
+    climate_highlights = {
+        "max_precipitation_mm": _top_highlight("precipitation_mm", reverse=True),
+        "max_rainy_days": (
+            lambda item: (
+                {
+                    "uf": item["uf"],
+                    "name": item["name"],
+                    "value": item["value"],
+                    "rainy_days_percent": next(
+                        (s["rainy_days_percent"] for s in state_climate_summary if s["uf"] == item["uf"]), None
+                    ),
+                }
+                if item else None
+            )
+        )(_top_highlight("rainy_days", reverse=True)),
+        "max_gust_kmh": _top_highlight("gust_max_kmh", reverse=True),
+        "max_temperature_c": _top_highlight("temperature_max_c", reverse=True),
+        "min_temperature_c": _top_highlight("temperature_min_c", reverse=False),
+    }
+
     if presentation:
         readiness={"status":"completed" if weather else "unavailable","message":"Contexto climático disponível." if weather else "Contexto climático indisponível neste recorte."}
-    if presentation:
         for row in weather.values():
             info=row.get("source_info",{})
             row["source_info"]={key:info[key] for key in ("type","attribution","conditions","terms_url") if key in info}
@@ -183,7 +246,8 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
         summary={key:value for key,value in summary.items() if key not in {"projects","providers","clients","priority_options","reasons","reason_options"}}
     catalog_ufs = summary["allowed_ufs"] if presentation else region_states(params.get("region",""))
     catalog_regions = [r for r in REGIONS if any(s["region_id"]==r["id"] and s["sigla"] in catalog_ufs for s in STATES)]
-    return {"summary":summary,"weather":weather,"climate":regional,"daily":series,"comparison_time_compatible":bool(compatible_time),"rankings":climate_rankings(weather),"correlation":summary.get("correlation",{}),
+    return {"summary":summary,"weather":weather,"climate":regional,"daily":series,"comparison_time_compatible":bool(compatible_time),"rankings":climate_rankings(weather),
+            "state_climate_summary":state_climate_summary,"climate_highlights":climate_highlights,"correlation":summary.get("correlation",{}),
             "icon_thresholds":getattr(settings,"GEO_WEATHER_THRESHOLDS",{"rain":1,"heavy_rain":20,"heat":35,"cold":{"N":18,"NE":16,"CO":12,"SE":10,"S":5},"wind":40}),
             "collection":readiness,
             "period":{"month":first.strftime("%Y-%m") if first.replace(day=1)==end.replace(day=1) else f"{first:%d/%m/%Y} – {end:%d/%m/%Y}","date_from":first.isoformat(),"date_to":end.isoformat(),"partial":end>=timezone.localdate()-timedelta(days=5)},

@@ -57,7 +57,7 @@ PERMISSION_LABELS = {
     "view_cockpit": ("Cockpit", "Visualizar"),
     "save_analytics_views": ("Cockpit", "Salvar visões"),
     "view_map": ("Mapa", "Visualizar"),
-    "present_geo": ("Mapa", "Apresentar GEO Intelligence por cliente"),
+    "present_geo": ("Mapa", "Apresentar GEO Inteligência por cliente"),
     "view_rankings": ("Rankings", "Visualizar"),
     "view_base": ("Base", "Visualizar"),
     "view_operational_tickets": ("Chamados", "Visualizar fila operacional"),
