@@ -331,11 +331,22 @@ def presentation_detail(request,key):
     try:
         params = _fixed_params(request,key)
         payload = presentation_payload(request.user,params)
+        uf = params["uf"]
+        state = payload["states"].get(uf,{})
+        detail_params = dict(params)
+        for field in ("tab","ticket_search","ticket_page","ticket_page_size"):
+            if field in request.GET:
+                detail_params[field] = request.GET.get(field,"")
+        detail = MapAnalyticsService.state_detail(
+            request.user,
+            detail_params,
+            fixed_client=True,
+            presentation=True,
+            precomputed_state=state,
+        )
     except ValueError as error:
         return geo_json({"error":str(error)},status=400)
-    uf = params["uf"]
-    state = payload["states"].get(uf,{})
-    return geo_json({"uf":uf,"name":STATE_NAMES.get(uf,uf),"mode":params["mode"],"state":state,"links":[],"link_total":state.get("total_links",0),"tickets":[],"ticket_total":state.get("ticket_count",0),"ticket_page":1,"ticket_pages":1,"ticket_page_size":25,"recurrences":[],"tab":"overview"})
+    return geo_json(detail)
 
 
 @login_required

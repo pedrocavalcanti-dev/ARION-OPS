@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.contrib.auth.models import Permission
 from django.core.management import call_command
+from django.db.models import Q
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -288,6 +289,19 @@ class AccessControlTests(TestCase):
         self.assertTrue(manager_group.permissions.filter(pk=extra_permission.pk).exists())
         self.assertEqual(Group.objects.filter(name__in=(GROUP_SYSTEM_ADMIN, GROUP_MANAGER, GROUP_ANALYST, "Consulta / Auditoria", "Gestão")).count(), 5)
 
+    def test_bootstrap_syncs_new_permissions_to_existing_system_admin_group(self):
+        admin_group = Group.objects.get(name=GROUP_SYSTEM_ADMIN)
+        missing = Permission.objects.filter(
+            Q(content_type__app_label="configuracoes", codename="present_geo")
+            | Q(content_type__app_label="qualidade", codename="delete_qualityorder")
+        )
+        self.assertEqual(missing.count(), 2)
+        admin_group.permissions.remove(*missing)
+        self.assertFalse(admin_group.permissions.filter(codename="present_geo").exists())
+        call_command("bootstrap_access", verbosity=0)
+        self.assertTrue(admin_group.permissions.filter(codename="present_geo").exists())
+        self.assertTrue(admin_group.permissions.filter(codename="delete_qualityorder").exists())
+
     def test_admin_can_create_user_without_setting_a_password(self):
         self.client.force_login(self.admin)
         analyst_group = Group.objects.get(name=GROUP_ANALYST)
@@ -421,9 +435,12 @@ class DataScopeIntegrationTests(TestCase):
         self.assertEqual(all_data.status_code, 200)
         self.assertEqual(all_data.json()["filtered_source_total"], 1)
         self.assertEqual(all_data.json()["clients"], ["Claro"])
+        outside_client = self.client.get(reverse("base_links:map-aggregates"), {"client": "Vivo"})
+        self.assertEqual(outside_client.status_code, 200)
+        self.assertEqual(outside_client.json()["filtered_source_total"], 0)
         outside = self.client.get(reverse("base_links:map-aggregates"), {"provider": self.vivo_mirror.pk})
-        self.assertEqual(outside.status_code, 200)
-        self.assertEqual(outside.json()["filtered_source_total"], 0)
+        self.assertEqual(outside.status_code, 400)
+        self.assertEqual(outside.json()["error"]["code"], "BAD_REQUEST")
 
     def test_custom_scope_with_empty_lists_and_user_without_group_return_no_data(self):
         self.scope.allowed_operators.clear()

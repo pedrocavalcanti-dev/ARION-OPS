@@ -392,3 +392,117 @@ class GeoIntelligenceTests(TestCase):
         raw=json.dumps(data).casefold()
         for reserved in ("financeir","closing_code_raw","assignees","account_counts"):
             self.assertNotIn(reserved,raw)
+
+    def test_presentation_detail_chamados_sanitizes_reconciles_and_checks_permissions(self):
+        isp=CMDBOperatorMirror.objects.create(source_config_item_id="pres-isp",name="FIERCE TELECOM")
+        sp_link=self.links["SP"]
+        sp_link.operator=isp
+        sp_link.source_number="SP-100"
+        sp_link.designation="CTO-SP-100"
+        sp_link.circuit="CKT-9001"
+        sp_link.save(update_fields=["operator","source_number","designation","circuit"])
+        t1=self.ticket(801,"SP",reason="FalhaMassiva",status="RESOLVED")
+        t1.resolved_at=datetime(2026,10,16,tzinfo=dt_timezone.utc)
+        t1.title="CLARO - BRADESCO - ROMPIMENTO FIBRA INTERNO"
+        t1.save(update_fields=["resolved_at","title"])
+        t2=self.ticket(802,"SP",reason="RompimentoFibra",status="OPEN")
+        t3=self.ticket(803,"SP",reason="PendenciaFinanceira",status="RESOLVED")
+        vivo_t=OTRSTicket.objects.create(
+            external_id=804,ticket_number="804",queue_name="NOC - ATACADO",queue_external_id=107,
+            external_state_id=804,external_state_name="RESOLVED",business_status="RESOLVED",
+            responsibility_normalized="PROCEDENTE",source_created_at=datetime(2026,10,15,tzinfo=dt_timezone.utc),
+            terminal_state_at=datetime(2026,10,15,tzinfo=dt_timezone.utc),closing_code_raw="FalhaMassiva",
+            title="VIVO - FUST - PRIVADO",
+        )
+        OTRSTicketConfigItem.objects.create(ticket=vivo_t,cmdb_link=self.other,config_item_id=self.other.source_config_item_id)
+
+        user=get_user_model().objects.create_user("pres-tickets",password="strong-password")
+        group=Group.objects.create(name="Pres tickets")
+        group.permissions.add(*Permission.objects.filter(
+            content_type__app_label="configuracoes",
+            codename__in=("view_map","present_geo","view_operational_tickets"),
+        ))
+        scope=GroupDataScope.objects.create(group=group,mode=GroupDataScope.Mode.ALL)
+        user.groups.add(group)
+        self.client.force_login(user)
+
+        key=self.start()
+        pres_data=self.client.get(reverse("mapa:presentation-data",args=[key]),{"period":"2026-10","mode":"calls"}).json()
+        self.assertEqual(pres_data["states"]["SP"]["ticket_count"],3)
+
+        detail=self.client.get(
+            reverse("mapa:presentation-detail",args=[key]),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"tickets","ticket_page_size":"25"},
+        )
+        self.assertEqual(detail.status_code,200)
+        body=detail.json()
+        self.assertTrue(body["tickets_authorized"])
+        self.assertEqual(body["ticket_total"],pres_data["states"]["SP"]["ticket_count"])
+        self.assertEqual(len(body["tickets"]),3)
+        by_num={row["ticket_number"]:row for row in body["tickets"]}
+        self.assertEqual(by_num["801"]["cmdb"]["designation"],"CTO-SP-100")
+        self.assertEqual(by_num["801"]["cmdb"]["circuit"],"CKT-9001")
+        self.assertEqual(by_num["801"]["cmdb"]["provider"],"FIERCE TELECOM")
+        self.assertEqual(by_num["801"]["identity"]["client"],"Claro")
+        self.assertEqual(by_num["801"]["identity"]["project"],"BRADESCO")
+        self.assertTrue(by_num["801"]["is_recurring"])
+        self.assertEqual(by_num["803"]["closing_reason"],"")
+        raw=json.dumps(body).casefold()
+        for forbidden in ("financeir","pendenciafinanceira","closing_code_raw","title","assignee","arion_status","chamados_url","vivo"):
+            self.assertNotIn(forbidden,raw)
+
+        # Search only scans sanitized presentation fields (never financial code or OTRS title)
+        fin_search=self.client.get(
+            reverse("mapa:presentation-detail",args=[key]),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"tickets","ticket_search":"financeir"},
+        ).json()
+        self.assertEqual(fin_search["ticket_total"],0)
+        title_search=self.client.get(
+            reverse("mapa:presentation-detail",args=[key]),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"tickets","ticket_search":"INTERNO"},
+        ).json()
+        self.assertEqual(title_search["ticket_total"],0)
+        circuit_search=self.client.get(
+            reverse("mapa:presentation-detail",args=[key]),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"tickets","ticket_search":"CTO-SP-100"},
+        ).json()
+        self.assertEqual(circuit_search["ticket_total"],3)
+
+        rec_detail=self.client.get(
+            reverse("mapa:presentation-detail",args=[key]),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"recurrence"},
+        ).json()
+        self.assertEqual(len(rec_detail["recurrences"]),1)
+        self.assertEqual(rec_detail["recurrences"][0]["occurrences"],3)
+
+        # Without view_operational_tickets, aggregate remains but tickets are blocked/empty
+        group.permissions.remove(Permission.objects.get(content_type__app_label="configuracoes",codename="view_operational_tickets"))
+        overview_only=self.client.get(
+            reverse("mapa:presentation-detail",args=[key]),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"overview"},
+        )
+        self.assertEqual(overview_only.status_code,200)
+        self.assertFalse(overview_only.json()["tickets_authorized"])
+        self.assertEqual(overview_only.json()["tickets"],[])
+        self.assertEqual(overview_only.json()["recurrences"],[])
+        self.assertEqual(
+            self.client.get(reverse("mapa:presentation-detail",args=[key]),{"uf":"SP","mode":"calls","period":"2026-10","tab":"tickets"}).status_code,
+            403,
+        )
+        # Active presentation session locks internal endpoints until stopped
+        self.assertEqual(
+            self.client.get(reverse("base_links:map-state-detail"),{"uf":"SP","mode":"calls","period":"2026-10","tab":"overview"}).status_code,
+            403,
+        )
+        self.assertEqual(self.client.post(reverse("mapa:presentation-stop",args=[key])).status_code,302)
+        self.assertEqual(
+            self.client.get(reverse("base_links:map-state-detail"),{"uf":"SP","mode":"calls","period":"2026-10","tab":"tickets"}).status_code,
+            403,
+        )
+        internal_overview=self.client.get(
+            reverse("base_links:map-state-detail"),
+            {"uf":"SP","mode":"calls","period":"2026-10","tab":"overview"},
+        )
+        self.assertEqual(internal_overview.status_code,200)
+        self.assertFalse(internal_overview.json()["tickets_authorized"])
+        self.assertEqual(internal_overview.json()["tickets"],[])

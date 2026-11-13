@@ -3,8 +3,12 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 import unicodedata
 import re
+from urllib.parse import urlencode
 
+from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
 from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.urls import reverse
 from django.utils import timezone
 from django.conf import settings
 
@@ -819,6 +823,401 @@ class MapAnalyticsService:
         } for user_row in get_user_model().objects.filter(
             is_active=True, pk__in=assigned_ids,
         ).order_by("first_name", "last_name", "username")]
+
+    @classmethod
+    def state_detail(
+        cls, user, raw_params, *, fixed_client=False, presentation=False, precomputed_state=None,
+    ):
+        params = raw_params.copy() if hasattr(raw_params, "copy") else dict(raw_params)
+        code = (params.get("uf") or "").strip().upper()
+        if code not in STATE_NAMES:
+            raise ValueError("UF invalida.")
+        params["uf"] = code
+        start, end = _bounds(params)
+        start_at, end_exclusive = _datetime_bounds(start, end)
+        if precomputed_state is None:
+            summary = cls.query(user, params, fixed_client=fixed_client)
+            state = summary.get("states", {}).get(code, {})
+        else:
+            state = precomputed_state
+
+        mode = params.get("mode", "calls" if presentation else "base")
+        if mode == "motives" and params.get("cohort") == "created":
+            mode = "calls"
+        allow_tickets = bool(
+            user.is_superuser or user.has_perm("configuracoes.view_operational_tickets")
+        )
+        requested_tab = (params.get("tab") or "").strip()
+        if requested_tab == "tickets" and not allow_tickets:
+            raise PermissionDenied("Sem autorizacao para consultar chamados operacionais.")
+        default_tab = (
+            "tickets"
+            if (allow_tickets and not presentation and mode in {"projects", "calls", "repeat", "motives"})
+            else "overview"
+        )
+        tab = requested_tab or default_tab
+        if tab not in {"overview", "tickets", "projects", "providers", "reasons", "recurrence"}:
+            raise ValueError("Aba do mapa invalida.")
+        if tab == "tickets" and mode not in {"projects", "calls", "repeat", "motives"}:
+            tab = "overview"
+
+        page_size = str(params.get("ticket_page_size") or "25")
+        if page_size not in {"25", "50", "100"}:
+            page_size = "25"
+        ticket_search = (params.get("ticket_search") or "").strip()[:160]
+        ticket_page_number, ticket_pages = 1, 1
+
+        scoped = LinkQueryService.base(user).select_related("operator")
+        client = params.get("client", "all")
+        project = canonical_project_name(params.get("project", ""))
+        provider = params.get("provider", "")
+        project_scope = _client_filter(scoped, client)
+        if provider.isdigit():
+            scoped = scoped.filter(operator_id=int(provider), operator__is_present_in_source=True)
+            project_scope = project_scope.filter(
+                operator_id=int(provider), operator__is_present_in_source=True,
+            )
+        project_groups = project_alias_groups(
+            project_scope.order_by().exclude(business_project="").values_list(
+                "business_project", flat=True,
+            ).distinct()
+        )
+        if fixed_client or mode not in {"calls", "repeat", "motives"}:
+            scoped = _client_filter(scoped, client)
+            if project:
+                scoped = scoped.filter(business_project__in=project_groups.get(project, ()))
+        state_values = {code, STATE_NAMES[code], STATE_NAMES_ACCENTED.get(code, STATE_NAMES[code])}
+        state_q = Q()
+        for value in state_values:
+            state_q |= Q(state__iexact=value)
+        state_links = scoped.filter(state_q).order_by("city", "source_number")
+
+        ticket_link_ids = set()
+        recurring_link_ids = set()
+        ticket_ids_by_link = {}
+        load_ticket_relations = allow_tickets and (
+            tab == "tickets" or (tab == "recurrence" and mode in {"projects", "calls", "repeat"})
+        )
+        if mode in {"projects", "calls", "repeat", "motives"} and load_ticket_relations:
+            statuses = OPERATIONAL_VALID_STATUSES
+            if tab == "tickets" and mode == "motives":
+                statuses = (RESOLVED_STATUS,)
+                date_field = OPERATIONAL_RESOLUTION_FIELD
+            else:
+                date_field = "ticket__source_created_at"
+            provenance = params.get("provenance")
+            relations = OTRSTicketConfigItem.objects.filter(
+                is_present_in_source=True, cmdb_link__in=state_links,
+                ticket__in=TicketQueryService.noc_tickets(),
+                ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
+            ).filter(business_statuses_query("ticket__business_status", statuses)).select_related(
+                "ticket", "cmdb_link", "cmdb_link__operator",
+            ).order_by("-ticket__source_created_at")
+            relations = IncidentRules.filter(
+                IncidentRules.valid_for_operator(relations, "ticket__", client=client),
+                params,
+                "ticket__",
+            )
+            if mode == "motives":
+                relations = relations.annotate(**{
+                    OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
+                }).exclude(**{f"{OPERATIONAL_RESOLUTION_FIELD}__isnull": True}).exclude(
+                    ticket__closing_code_raw="",
+                )
+                reason = (params.get("reason") or "").strip()
+                if reason:
+                    relations = relations.filter(
+                        ticket__closing_code_raw__in=ClosingReasonCanonicalizer.raw_values(reason),
+                    )
+            if start:
+                relations = relations.filter(**{f"{date_field}__gte": start_at})
+            if end:
+                relations = relations.filter(**{f"{date_field}__lt": end_exclusive})
+            if params.get("status"):
+                relations = relations.filter(business_status_query(
+                    "ticket__business_status", normalize_business_status(params.get("status")),
+                ))
+            if params.get("priority"):
+                relations = relations.filter(ticket__priority_name=params.get("priority").strip()[:160])
+            if not presentation:
+                relations = filter_tracking_relations(
+                    relations,
+                    arion_status=(params.get("arion_status") or "").strip().upper(),
+                    assignee=(params.get("assignee") or "").strip(),
+                )
+            unique = {}
+            ticket_ids_by_link = {}
+            links_by_ticket_id = {}
+            last_occurrence_by_link = {}
+            for relation in relations.iterator(chunk_size=300):
+                ticket = relation.ticket
+                parsed_identity = TicketBusinessIdentityService.parse(ticket.title)
+                ticket_client = (
+                    parsed_identity.client
+                    or BusinessIdentityRules.client_for_token(relation.cmdb_link.contracting_client)
+                    or relation.cmdb_link.contracting_client
+                )
+                if not IncidentRules.is_valid_ticket(ticket, ticket_client):
+                    continue
+                ticket_project = parsed_identity.project or relation.cmdb_link.business_project
+                if not _client_label_matches(ticket_client, client) or (
+                    project and canonical_project_name(ticket_project) != project
+                ):
+                    continue
+                ticket_link_ids.add(relation.cmdb_link_id)
+                ticket_ids_by_link.setdefault(relation.cmdb_link_id, set()).add(ticket.pk)
+                links_by_ticket_id.setdefault(ticket.pk, set()).add(relation.cmdb_link_id)
+                created_at = ticket.source_created_at
+                previous_occurrence = last_occurrence_by_link.get(relation.cmdb_link_id)
+                if created_at and (previous_occurrence is None or created_at > previous_occurrence):
+                    last_occurrence_by_link[relation.cmdb_link_id] = created_at
+                canonical_proj = canonical_project_name(ticket_project) or None
+                reason_category = IncidentRules.category(ticket.closing_code_raw)
+                closing_reason = (
+                    ""
+                    if (presentation and reason_category == "financeiro")
+                    else ClosingReasonCanonicalizer.display(ticket.closing_code_raw)
+                )
+                link_label = (
+                    relation.cmdb_link.source_number
+                    or relation.cmdb_link.designation
+                    or relation.cmdb_link.circuit
+                    or relation.cmdb_link.name[:200]
+                )
+                if presentation:
+                    unique.setdefault(ticket.pk, {
+                        "_ticket_pk": ticket.pk,
+                        "ticket_number": ticket.ticket_number,
+                        "status": normalize_business_status(ticket.business_status),
+                        "created_at": ticket.source_created_at.isoformat() if ticket.source_created_at else None,
+                        "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at else None,
+                        "terminal_at": ticket.terminal_state_at.isoformat() if ticket.terminal_state_at else None,
+                        "closing_reason": closing_reason,
+                        "link": link_label,
+                        "city": relation.cmdb_link.city,
+                        "cmdb": {
+                            "number": relation.cmdb_link.source_number,
+                            "designation": relation.cmdb_link.designation,
+                            "circuit": relation.cmdb_link.circuit,
+                            "city": relation.cmdb_link.city,
+                            "uf": _uf(relation.cmdb_link.state),
+                            "provider": relation.cmdb_link.operator.name if relation.cmdb_link.operator_id else "",
+                        },
+                        "identity": {
+                            "client": ticket_client or "",
+                            "project": canonical_proj,
+                        },
+                    })
+                else:
+                    ticket_identity = parsed_identity.as_dict()
+                    ticket_identity["project"] = canonical_proj
+                    unique.setdefault(ticket.pk, {
+                        "_ticket_pk": ticket.pk,
+                        "external_id": ticket.external_id,
+                        "ticket_number": ticket.ticket_number,
+                        "status": normalize_business_status(ticket.business_status),
+                        "created_at": ticket.source_created_at.isoformat() if ticket.source_created_at else None,
+                        "changed_at": ticket.source_changed_at.isoformat() if ticket.source_changed_at else None,
+                        "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at else None,
+                        "terminal_at": ticket.terminal_state_at.isoformat() if ticket.terminal_state_at else None,
+                        "closing_reason": closing_reason,
+                        "link": relation.cmdb_link.source_number or relation.cmdb_link.name,
+                        "city": relation.cmdb_link.city,
+                        "title": ticket.title[:500],
+                        "priority": ticket.priority_name,
+                        "cmdb": {
+                            "config_item_id": relation.cmdb_link.source_config_item_id,
+                            "number": relation.cmdb_link.source_number,
+                            "name": relation.cmdb_link.name[:200],
+                            "designation": relation.cmdb_link.designation,
+                            "circuit": relation.cmdb_link.circuit,
+                            "city": relation.cmdb_link.city,
+                            "uf": _uf(relation.cmdb_link.state),
+                            "provider": relation.cmdb_link.operator.name if relation.cmdb_link.operator_id else "",
+                        },
+                        "identity": ticket_identity,
+                    })
+            recurring_link_ids = {
+                link_id for link_id, ticket_ids in ticket_ids_by_link.items() if len(ticket_ids) >= 2
+            }
+            recurring_ticket_ids = {
+                ticket_id for ticket_id, link_ids in links_by_ticket_id.items()
+                if link_ids & recurring_link_ids
+            }
+            if mode == "repeat":
+                unique = {
+                    ticket_id: row for ticket_id, row in unique.items()
+                    if ticket_id in recurring_ticket_ids
+                }
+            ticket_rows = list(unique.values())
+            if ticket_search:
+                needle = ticket_search.casefold()
+                if presentation:
+                    ticket_rows = [
+                        row for row in ticket_rows if needle in " ".join(str(value or "") for value in (
+                            row["ticket_number"],
+                            row["closing_reason"],
+                            row["link"],
+                            row["cmdb"].get("designation"),
+                            row["cmdb"].get("circuit"),
+                            row["cmdb"].get("provider"),
+                            row["city"],
+                            row["identity"].get("client"),
+                            row["identity"].get("project"),
+                        )).casefold()
+                    ]
+                else:
+                    ticket_rows = [
+                        row for row in ticket_rows if needle in " ".join(str(value or "") for value in (
+                            row["ticket_number"],
+                            row["title"],
+                            row["closing_reason"],
+                            row["link"],
+                            row["cmdb"].get("designation"),
+                            row["cmdb"].get("circuit"),
+                            row["cmdb"].get("provider"),
+                            row["city"],
+                            row["identity"].get("client"),
+                            row["identity"].get("project"),
+                        )).casefold()
+                    ]
+            ticket_rows.sort(
+                key=lambda row: (row["created_at"] or "", row["ticket_number"]), reverse=True,
+            )
+            ticket_page = Paginator(ticket_rows, int(page_size)).get_page(
+                params.get("ticket_page", 1),
+            )
+            ticket_rows = list(ticket_page.object_list)
+            tracking_rows = (
+                {}
+                if presentation
+                else {
+                    item.ticket_external_id: item for item in TicketTracking.objects.filter(
+                        ticket_external_id__in=[row["external_id"] for row in ticket_rows],
+                    ).select_related("assigned_to")
+                }
+            )
+            internal_status_default = (
+                ""
+                if presentation
+                else dict(TicketTracking.InternalStatus.choices)[TicketTracking.InternalStatus.OPEN]
+            )
+            for row in ticket_rows:
+                ticket_pk = row.pop("_ticket_pk", None)
+                row["is_recurring"] = bool(ticket_pk in recurring_ticket_ids)
+                if not presentation:
+                    tracking = tracking_rows.get(row["external_id"])
+                    row["arion_status"] = (
+                        tracking.get_internal_status_display()
+                        if tracking
+                        else internal_status_default
+                    )
+                    row["assignee"] = (
+                        (tracking.assigned_to.get_full_name() or tracking.assigned_to.get_username())
+                        if tracking and tracking.assigned_to
+                        else "Sem responsavel"
+                    )
+                    row["chamados_url"] = reverse("chamados:index") + "?" + urlencode({
+                        "open_ticket": row["external_id"], "ignore_default": "1",
+                    })
+            ticket_total = ticket_page.paginator.count
+            ticket_page_number = ticket_page.number
+            ticket_pages = ticket_page.paginator.num_pages
+            recurrence_rows = []
+            if tab == "recurrence":
+                for link in state_links.filter(pk__in=recurring_link_ids).select_related("operator"):
+                    entry = {
+                        "link": link.source_number or link.designation or link.circuit or link.name[:200],
+                        "provider": link.operator.name if link.operator_id else "",
+                        "occurrences": len(ticket_ids_by_link.get(link.pk, ())),
+                        "last_occurrence": (
+                            last_occurrence_by_link.get(link.pk).isoformat()
+                            if last_occurrence_by_link.get(link.pk)
+                            else None
+                        ),
+                    }
+                    if presentation:
+                        entry["designation"] = link.designation
+                        entry["circuit"] = link.circuit
+                    recurrence_rows.append(entry)
+                recurrence_rows.sort(
+                    key=lambda row: (row["occurrences"], row["last_occurrence"] or ""), reverse=True,
+                )
+                ticket_rows = []
+                ticket_total, ticket_page_number, ticket_pages = 0, 1, 1
+        else:
+            ticket_rows = []
+            recurrence_rows = []
+
+        if tab != "tickets":
+            ticket_total = (
+                state.get("ticket_count", 0)
+                if mode in {"projects", "calls"}
+                else state.get("recurrence_tickets", 0)
+                if mode == "repeat"
+                else sum(state.get("reason_counts", {}).values())
+                if mode == "motives"
+                else 0
+            )
+            ticket_page_number, ticket_pages = 1, 1
+
+        if mode == "repeat":
+            selected_link_ids = recurring_link_ids
+            link_total = state.get("recurrence_links", 0)
+        elif mode == "motives":
+            selected_link_ids = ticket_link_ids
+            link_total = state.get("terminal_links", 0)
+        elif mode in {"projects", "calls"}:
+            selected_link_ids = ticket_link_ids
+            link_total = state.get("affected_links", 0) if mode == "calls" else state.get("total_links", 0)
+        else:
+            selected_link_ids = set()
+            link_total = state.get("total_links", 0)
+
+        if presentation:
+            link_rows = []
+            link_total = state.get("total_links", 0)
+        else:
+            links = (
+                state_links[:100]
+                if tab != "tickets" or mode == "projects"
+                else state_links.filter(pk__in=selected_link_ids)[:100]
+            )
+            link_rows = [{
+                "id": link.pk,
+                "config_item_id": link.source_config_item_id,
+                "number": link.source_number,
+                "name": link.name,
+                "client": link.contracting_client,
+                "project": canonical_project_name(link.business_project),
+                "account": link.business_account,
+                "provider": link.operator.name if link.operator_id else "",
+                "circuit": link.circuit,
+                "city": link.city,
+                "state": _uf(link.state),
+                "ticket_count": len(ticket_ids_by_link.get(link.pk, ())),
+            } for link in links]
+
+        payload = {
+            "uf": code,
+            "name": STATE_NAMES.get(code, code),
+            "mode": mode,
+            "state": state,
+            "links": link_rows,
+            "link_total": link_total,
+            "tickets": ticket_rows,
+            "ticket_total": ticket_total,
+            "ticket_page": ticket_page_number,
+            "ticket_pages": ticket_pages,
+            "ticket_page_size": int(page_size),
+            "ticket_search": ticket_search,
+            "recurrences": recurrence_rows,
+            "tickets_authorized": allow_tickets,
+            "tab": tab,
+        }
+        if not presentation:
+            payload["truncated"] = link_total > len(link_rows)
+        return payload
 
 
 def _inc(counter, key, amount=1):

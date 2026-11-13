@@ -91,7 +91,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     reasons: $("[data-panel-reasons]"), links: $("[data-panel-links]"), tickets: $("[data-panel-tickets]"),
     ticketFilters: $("[data-ticket-filters]"), status: $("[data-status-filter]"), priority: $("[data-priority-filter]"), arionStatus: $("[data-arion-status-filter]"), assignee: $("[data-assignee-filter]"), activeFilters: $("[data-active-filters]"),
     moreFilters: $("[data-more-filters]"), moreFiltersContent: $("[data-more-filters-content]"), hoverTooltip: $("[data-state-hover-tooltip]"),
-    panelOverview: $("[data-panel-overview]"), panelOverviewContext: $("[data-panel-overview-context]"), panelClimate: $("[data-panel-climate]"), panelBackAnalysis: $("[data-panel-back-analysis]"), panelRecurrence: $("[data-panel-recurrence]"), panelTicketSearch: $("[data-panel-ticket-search]"), panelTicketSize: $("[data-panel-ticket-size]"), panelTicketPagination: $("[data-panel-ticket-pagination]"),
+    panelOverview: $("[data-panel-overview]"), panelOverviewContext: $("[data-panel-overview-context]"), panelOverviewCta: $("[data-panel-overview-cta]"), panelOutOfScope: $("[data-panel-out-of-scope]"), panelClimate: $("[data-panel-climate]"), panelBackAnalysis: $("[data-panel-back-analysis]"), panelRecurrence: $("[data-panel-recurrence]"), panelTicketControls: $(".panel-ticket-controls"), panelTicketSearch: $("[data-panel-ticket-search]"), panelTicketSize: $("[data-panel-ticket-size]"), panelTicketPagination: $("[data-panel-ticket-pagination]"),
     openBase: $("[data-open-base]"), openCockpit: $("[data-open-cockpit]"), ufPrevious: $("[data-uf-previous]"), ufNext: $("[data-uf-next]"), announce: $("[data-map-announcement]"), legend: $("[data-legend]"),
   };
   const state = { mode:"base", client:"all", project:"", provider:"", period:root.dataset.defaultPeriod||"last_month", region:"", layer:"analysis", category:"", reason:"", status:"", priority:"", arionStatus:"", assignee:"", dateFrom:"", dateTo:"", selectedUF:"", panelTab:"summary", ufTab:"overview", ticketPage:1, ticketPageSize:25, ticketSearch:"", distributionDimension:"status", collapsed:true, day:"" };
@@ -137,7 +137,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
   }
   function clearFilterValue(key){
     if(key==="client"&&!isPresentation)state.client="all";
-    else if(key==="region"){state.region="";state.selectedUF="";}
+    else if(key==="region")state.region="";
     else if(key==="category")state.category="";
     else if(key==="project")state.project="";
     else if(key==="provider")state.provider="";
@@ -237,7 +237,8 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
   };
   function urlFor(path, overrides = {}) {
     const url = new URL(path, window.location.origin);
-    const params = { mode:state.mode==="climate"?"calls":state.mode, cohort:"created", include_intelligence:"1", region:state.region, category:state.category, uf:state.selectedUF, client:state.client, project:state.project, provider:state.provider, reason:state.reason, period:state.period, date_from:state.dateFrom, date_to:state.dateTo, status:state.status, priority:state.priority, arion_status:state.arionStatus, assignee:state.assignee, ...overrides };
+    const compatibleUf = state.region && macroRegions[state.region] && !macroRegions[state.region].includes(state.selectedUF) ? "" : state.selectedUF;
+    const params = { mode:state.mode==="climate"?"calls":state.mode, cohort:"created", include_intelligence:"1", region:state.region, category:state.category, uf:compatibleUf, client:state.client, project:state.project, provider:state.provider, reason:state.reason, period:state.period, date_from:state.dateFrom, date_to:state.dateTo, status:state.status, priority:state.priority, arion_status:state.arionStatus, assignee:state.assignee, ...overrides };
     Object.entries(params).forEach(([key,value]) => { if (value) url.searchParams.set(key,value); });
     if(isPresentation)url.searchParams.set("project",state.project);
     return url;
@@ -296,6 +297,10 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
   }
   async function fetchData() {
     state.ticketPage=1;
+    clearTimeout(panelSearchTimer);
+    detailSequence++;
+    detailController?.abort();
+    detailController=null;
     closeTooltip();
     const seq = ++requestSequence;
     requestController?.abort();
@@ -308,15 +313,23 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     message.hidden = false; errorBox.hidden = true;
     syncUrl();
     try {
-      const response = await fetch(urlFor(root.dataset.apiUrl), { headers:{"X-Requested-With":"XMLHttpRequest"}, signal:controller.signal });
-      if (!response.ok) {
-        const error=await response.json().catch(()=>({})),message=error.error||error.message||`A consulta do Mapa respondeu HTTP ${response.status}.`;
-        if(response.status===400&&typeof message==="string"&&/^(Projeto|ISP) incompatível/.test(message)&&seq===requestSequence){
-          if(message.startsWith("Projeto"))state.project="";state.provider="";
-          $("[data-filter-notice]").textContent=message+" A seleção incompatível foi removida.";
-          return await fetchData();
+      const readError=async res=>{const err=await res.json().catch(()=>({}));return (typeof err.error==="string"?err.error:err.error?.message)||err.message||`A consulta do Mapa respondeu HTTP ${res.status}.`;};
+      const requestUrl=urlFor(root.dataset.apiUrl);
+      let response=await fetch(requestUrl,{headers:{"X-Requested-With":"XMLHttpRequest"},signal:controller.signal});
+      if(!response.ok){
+        let msg=await readError(response);
+        if((response.status===403||(response.status===400&&/UF incompatível/.test(msg)))&&requestUrl.searchParams.get("uf")&&seq===requestSequence){
+          response=await fetch(urlFor(root.dataset.apiUrl,{uf:""}),{headers:{"X-Requested-With":"XMLHttpRequest"},signal:controller.signal});
+          if(!response.ok)msg=await readError(response);
         }
-        throw new Error(message);
+        if(!response.ok){
+          if(response.status===400&&typeof msg==="string"&&/^(Projeto|ISP) incompatível/.test(msg)&&seq===requestSequence){
+            if(msg.startsWith("Projeto"))state.project="";state.provider="";
+            $("[data-filter-notice]").textContent=msg+" A seleção incompatível foi removida.";
+            return await fetchData();
+          }
+          throw new Error(msg);
+        }
       }
       const payload = await response.json();
       if (!payload.states || !Array.isArray(payload.projects) || !Array.isArray(payload.providers)) throw new Error("A API retornou um formato inesperado.");
@@ -608,7 +621,6 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     if(regBtn){
       const nextReg=regBtn.dataset.nationalRegion||"";
       state.region=state.region===nextReg?"":nextReg;
-      if(state.selectedUF&&state.region&&!macroRegions[state.region].includes(state.selectedUF))state.selectedUF="";
       updateModeControls();fetchData().catch(()=>showError("Não foi possível aplicar a macrorregião."));
       return;
     }
@@ -636,8 +648,59 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     target.innerHTML=names.map(name=>`<div class="panel-reason-row"><span>${esc(name)}</span><b>${number.format(links[name]||0)} links · ${number.format(tickets[name]||0)} tickets</b></div>`).join("")||'<p class="panel-empty">Sem registros neste recorte.</p>';
   }
   const statusLabels={OPEN:"Aberto",PENDING:"Pendente",SCHEDULED:"Agendado",RESOLVED:"Resolvido",CLOSED:"Resolvido"};
+  function formatTicketDate(iso){return iso?new Date(iso).toLocaleDateString("pt-BR"):"Sem data";}
+  function renderOutOfScopePanel(code){
+    clearTimeout(panelSearchTimer);
+    detailSequence++;
+    detailController?.abort();
+    detailController=null;
+    ui.panelCode.textContent=code;ui.panelName.textContent=stateNames[code]||code;
+    ui.panelFlag.src=flags[code]||"";ui.panelFlag.alt="Bandeira de "+(stateNames[code]||code);
+    ui.panelTotal.textContent="0";
+    ui.panelScope.textContent=(modeLabels[state.mode]||"Incidentes válidos")+" · Fora do recorte atual";
+    ui.panelContext.textContent="A unidade selecionada não possui registros ou está fora dos filtros ativos.";
+    if(ui.panelOutOfScope){
+      ui.panelOutOfScope.hidden=false;
+      ui.panelOutOfScope.innerHTML=`<strong>${esc(stateNames[code]||code)} fora do recorte atual</strong><p>Os filtros aplicados não incluem esta unidade federativa neste momento. Ajuste os filtros, volte ao recorte do Brasil ou feche este painel.</p><div class="panel-out-of-scope-actions"><button type="button" class="geo-text-action" data-panel-out-brazil>Voltar ao Brasil</button><button type="button" class="geo-text-action" data-panel-out-close>Fechar painel</button></div>`;
+    }
+    page.querySelectorAll("[data-state-tab]").forEach(button=>{
+      button.hidden=button.dataset.stateTab!=="overview";
+      button.setAttribute("aria-selected",String(button.dataset.stateTab==="overview"));
+    });
+    page.querySelectorAll("[data-panel-section]").forEach(section=>{section.hidden=section.dataset.panelSection!=="overview";});
+    ui.panelOverview.innerHTML="";
+    if(ui.panelClimate){ui.panelClimate.hidden=true;ui.panelClimate.innerHTML="";}
+    ui.panelOverviewContext.innerHTML="";
+    if(ui.panelOverviewCta){ui.panelOverviewCta.hidden=true;ui.panelOverviewCta.innerHTML="";}
+    openPanel();
+  }
+  function renderTicketCards(ticketRows,presentationMode){
+    ui.tickets.innerHTML=ticketRows.map(ticket=>{
+      const cmdb=ticket.cmdb||{},identity=ticket.identity||{};
+      const created=formatTicketDate(ticket.created_at);
+      const resolvedIso=ticket.resolved_at||ticket.terminal_at;
+      const resolved=resolvedIso?formatTicketDate(resolvedIso):"";
+      const dateText=resolved?`Abertura: ${created} · Resolução: ${resolved}`:`Abertura: ${created}`;
+      const statusText=statusLabels[ticket.status]||ticket.status||"Status não informado";
+      const recurrenceBadge=ticket.is_recurring?'<span class="panel-ticket-recurrence">Reincidente</span>':"";
+      const clientText=identity.client||state.client||"Cliente não identificado";
+      const projectText=identity.project?displayProject(identity.project):"Projeto não identificado";
+      const providerText=cmdb.provider||"Provedor não identificado";
+      const circuitText=[cmdb.designation,cmdb.circuit].filter(Boolean).join(" · ")||ticket.link||cmdb.number||"Circuito não identificado";
+      if(presentationMode){
+        const isTerminal=ticket.status==="RESOLVED"||ticket.status==="CLOSED";
+        const reasonText=ticket.closing_reason||(isTerminal?"Sem classificação pública":"Em andamento");
+        return `<article class="panel-ticket-row panel-ticket-row--presentation"><div><div class="panel-ticket-head"><strong>${esc(ticket.ticket_number||"Chamado")}</strong>${recurrenceBadge}</div><span>${esc(statusText)} · ${esc(created)}</span><p>${esc(circuitText)}</p><small>${esc(clientText)} · ${esc(projectText)} · ${esc(providerText)}</small><small>${esc(dateText)} · Motivo: ${esc(reasonText)}</small></div></article>`;
+      }
+      return `<article class="panel-ticket-row"><div><div class="panel-ticket-head"><strong>${esc(ticket.ticket_number||"Chamado")}</strong>${recurrenceBadge}</div><span>${esc(statusText)} · ${esc(created)}</span><p>${esc(ticket.title||"Sem título")}</p><small>${esc(clientText)} · ${esc(projectText)} · ${esc(ticket.link||"Link não identificado")} · ${esc(providerText)}</small><small>${esc(dateText)} · Prioridade: ${esc(ticket.priority||"Não informada")}${ticket.closing_reason?" · Motivo: "+esc(ticket.closing_reason):""}</small></div><div class="panel-ticket-arion"><span>${esc(ticket.arion_status||"Em Aberto")}</span><small>${esc(ticket.assignee||"Sem responsável")}</small><a class="panel-ticket-open" href="${esc(ticket.chamados_url||"#")}">Abrir</a></div></article>`;
+    }).join("")||"<p class=\"panel-empty\">Nenhum chamado corresponde a este recorte.</p>";
+  }
+  function renderRecurrenceCards(row,recurrenceRows){
+    ui.panelRecurrence.innerHTML="<div class=\"panel-recurrence-summary\"><strong>"+number.format(row.recurrence_links||0)+"</strong><span>links reincidentes</span><strong>"+number.format(row.recurrence_tickets||0)+"</strong><span>tickets nesses links</span></div>"+
+      (recurrenceRows.length?recurrenceRows.map(item=>"<div class=\"panel-reason-row panel-recurrence-row\"><span><strong>"+esc(item.link||"Link")+"</strong><small>"+esc(item.provider||"Provedor não identificado")+"</small></span><b>"+number.format(item.occurrences||0)+" ocorrências<br><small>Última: "+esc(item.last_occurrence?new Date(item.last_occurrence).toLocaleDateString("pt-BR"):"Sem data")+"</small></b></div>").join(""):"<p class=\"panel-empty\">Nenhum link reincidente neste recorte.</p>");
+  }
   async function loadState(code, tab=state.ufTab, pageNumber=state.ticketPage) {
-    if (!data) return;
+    if (!data || rightSurface !== "details") return;
     const allowedTabs=["overview","tickets","projects","providers","reasons","recurrence"];
     if (!allowedTabs.includes(tab)) tab="overview";
     if (state.mode==="base" && tab==="tickets") tab="overview";
@@ -645,6 +708,13 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     if ((state.mode==="base"||state.mode==="repeat") && tab==="reasons") tab="overview";
     state.ufTab=tab;
     state.ticketPage=pageNumber;
+    const outOfRegion=Boolean(state.region&&macroRegions[state.region]&&!macroRegions[state.region].includes(code));
+    const outOfPresentationSlice=Boolean(isPresentation&&Array.isArray(data.allowed_ufs)&&!data.allowed_ufs.includes(code));
+    if(outOfRegion||outOfPresentationSlice){
+      if(tab==="tickets")state.ufTab="overview";
+      renderOutOfScopePanel(code);
+      return;
+    }
     detailController?.abort();
     const controller=new AbortController(),sequence=++detailSequence;
     detailController=controller;
@@ -653,6 +723,14 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     let detail;
     try{
       const response=await fetch(url,{headers:{"X-Requested-With":"XMLHttpRequest"},signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});
+      if(response.status===403&&isPresentation){
+        if(tab==="tickets")state.ufTab="overview";
+        renderOutOfScopePanel(code);
+        return;
+      }
+      if(response.status===403&&tab==="tickets"){
+        return loadState(code,"overview",1);
+      }
       if(!response.ok)throw new Error("Não foi possível abrir os detalhes da UF ("+response.status+").");
       detail=await response.json();
     }catch(error){
@@ -660,65 +738,77 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
       throw error;
     }
     if(sequence!==detailSequence||state.selectedUF!==code)return;
-    if(isPresentation){
-      if(tab==="tickets")tab="overview";
-      ui.panelCode.textContent=code;ui.panelName.textContent=stateNames[code]||code;ui.panelFlag.src=flags[code]||"";
-      ui.panelTotal.textContent=number.format(metricValue(row));ui.panelScope.textContent=(modeLabels[state.mode]||"Incidentes válidos")+" · "+periodLabel(data.period);
-      ui.panelContext.textContent=state.client+" · "+number.format(row.total_links||0)+" links CMDB";
-      page.querySelectorAll("[data-panel-section]").forEach(section=>section.hidden=section.dataset.panelSection!==tab);
-      page.querySelectorAll("[data-state-tab]").forEach(button=>{button.hidden=button.dataset.stateTab==="tickets";button.setAttribute("aria-selected",String(button.dataset.stateTab===tab));});
-      ui.panelOverview.innerHTML=[["Links CMDB",row.total_links],["Incidentes válidos",row.ticket_count],["Links afetados",row.affected_links],["Links reincidentes",row.recurrence_links]].map(([label,amount])=>`<div class="panel-overview-kpi"><strong>${number.format(amount||0)}</strong><span>${esc(label)}</span></div>`).join("");
-      listRows(ui.projects,row.project_counts||{});listRows(ui.providers,row.ticket_provider_counts||row.provider_counts||{},"incidentes");listRows(ui.reasons,row.category_counts||{},"incidentes");
-      ui.panelRecurrence.textContent=number.format(row.recurrence_links||0)+" links com pelo menos dois incidentes válidos no mês.";
-      ui.panelOverviewContext.textContent="Classificações registradas; cenário estimado identificado nas análises.";
-      renderClimatePanel(row);openPanel();return;
-    }
+    if(ui.panelOutOfScope){ui.panelOutOfScope.hidden=true;ui.panelOutOfScope.innerHTML="";}
+    const ticketsAllowed=detail.tickets_authorized!==false&&state.mode!=="base";
+    tab=detail.tab||tab;
+    if(!ticketsAllowed&&tab==="tickets")tab="overview";
+    state.ufTab=tab;
+    const detailState=detail.state&&Object.keys(detail.state).length?detail.state:row;
+    const count=metricValue(detailState);
     ui.panelCode.textContent=code; ui.panelName.textContent=stateNames[code]||code;
     ui.panelFlag.src=flags[code]||""; ui.panelFlag.alt="Bandeira de "+(stateNames[code]||code);
-    const count=metricValue(row);
     ui.panelTotal.textContent=number.format(count);
-    ui.panelScope.textContent=({rain:"Chuva estimada (mm)",wind:"Rajada amostrada (km/h)",correlation:"Dias de coincid\u00eancia temporal",client:"Links CMDB",calls:"Incidentes v\u00e1lidos",motives:"Incidentes por categoria"}[state.layer]||modeLabels[state.mode])+" \u00b7 "+(state.mode==="base"?"Atual":periodLabel(data.period));
-    ui.panelContext.textContent=number.format(row.total_links||0)+" links CMDB \u00b7 "+number.format(row.ticket_count||0)+" tickets no per\u00edodo \u00b7 "+number.format(row.recurrence_links||0)+" links reincidentes.";
     page.querySelectorAll("[data-state-tab]").forEach(button=>{
-      const selected=button.dataset.stateTab===tab;
-      button.setAttribute("aria-selected",String(selected));
-      button.hidden=(state.mode==="base"&&["tickets","reasons","recurrence"].includes(button.dataset.stateTab))
-        ||(state.mode==="motives"&&button.dataset.stateTab==="recurrence")
-        ||(state.mode==="repeat"&&button.dataset.stateTab==="reasons");
+      const key=button.dataset.stateTab;
+      button.setAttribute("aria-selected",String(key===tab));
+      button.hidden=(key==="tickets"&&!ticketsAllowed)
+        ||(key==="recurrence"&&(!ticketsAllowed||["base","motives"].includes(state.mode)))
+        ||(key==="reasons"&&["base","repeat"].includes(state.mode));
     });
     page.querySelectorAll("[data-panel-section]").forEach(section=>{section.hidden=section.dataset.panelSection!==tab;});
-    const projectCounts=["calls","repeat","motives"].includes(state.mode)?(row.ticket_project_counts||{}):(row.project_counts||{});
+    if(ui.panelTicketControls)ui.panelTicketControls.hidden=!ticketsAllowed;
+    const recurrenceRows=detail.recurrences||[];
+    if(isPresentation){
+      ui.panelScope.textContent=(modeLabels[state.mode]||"Incidentes válidos")+" · "+periodLabel(data.period);
+      ui.panelContext.textContent=state.client+" · "+number.format(detailState.total_links||0)+" links CMDB";
+      ui.panelOverview.innerHTML=[["Links CMDB",detailState.total_links],["Incidentes válidos",detailState.ticket_count],["Links afetados",detailState.affected_links],["Links reincidentes",detailState.recurrence_links]].map(([label,amount])=>`<div class="panel-overview-kpi"><strong>${number.format(amount||0)}</strong><span>${esc(label)}</span></div>`).join("");
+      listRows(ui.projects,detailState.project_counts||{});listRows(ui.providers,detailState.ticket_provider_counts||detailState.provider_counts||{},"incidentes");listRows(ui.reasons,detailState.category_counts||{},"incidentes");
+      renderRecurrenceCards(detailState,recurrenceRows);
+      ui.panelOverviewContext.innerHTML="<p>"+number.format(detailState.ticket_count||0)+" incidentes válidos · "+number.format(detailState.affected_links||0)+" links afetados · "+number.format(detailState.recurrence_links||0)+" com reincidência. Classificações executivas do recorte.</p>";
+      if(ui.panelOverviewCta){
+        ui.panelOverviewCta.hidden=!ticketsAllowed;
+        ui.panelOverviewCta.innerHTML=ticketsAllowed?`<button type="button" class="geo-text-action panel-overview-cta-btn" data-open-uf-tickets><span>Consultar chamados da UF</span><b>${number.format(detailState.ticket_count||0)}</b></button>`:"";
+      }
+      ui.panelTicketSearch.value=state.ticketSearch;
+      ui.panelTicketSize.value=String(detail.ticket_page_size||state.ticketPageSize);
+      renderTicketCards(detail.tickets||[],true);
+      const current=Number(detail.ticket_page||1),pages=Number(detail.ticket_pages||1);
+      ui.panelTicketPagination.innerHTML="<span>"+number.format(detail.ticket_total||0)+" chamados · Página "+number.format(current)+" de "+number.format(pages)+"</span><div><button type=\"button\" data-panel-ticket-page=\""+Math.max(1,current-1)+"\" "+(current<=1?"disabled":"")+">Anterior</button><button type=\"button\" data-panel-ticket-page=\""+Math.min(pages,current+1)+"\" "+(current>=pages?"disabled":"")+">Próxima</button></div>";
+      renderClimatePanel(row);openPanel();
+      ui.announce.textContent=(stateNames[code]||code)+", "+number.format(count)+" "+(modeLabels[state.mode]||"incidentes válidos")+".";
+      return;
+    }
+    ui.panelScope.textContent=({rain:"Chuva estimada (mm)",wind:"Rajada amostrada (km/h)",correlation:"Dias de coincid\u00eancia temporal",client:"Links CMDB",calls:"Incidentes v\u00e1lidos",motives:"Incidentes por categoria"}[state.layer]||modeLabels[state.mode])+" \u00b7 "+(state.mode==="base"?"Atual":periodLabel(data.period));
+    ui.panelContext.textContent=number.format(detailState.total_links||0)+" links CMDB \u00b7 "+number.format(detailState.ticket_count||0)+" tickets no per\u00edodo \u00b7 "+number.format(detailState.recurrence_links||0)+" links reincidentes.";
+    const projectCounts=["calls","repeat","motives"].includes(state.mode)?(detailState.ticket_project_counts||{}):(detailState.project_counts||{});
     const canonicalProjects={};
     Object.entries(projectCounts).forEach(([name,amount])=>{const label=displayProject(name);canonicalProjects[label]=(canonicalProjects[label]||0)+amount;});
-    const providerCounts=["calls","repeat","motives"].includes(state.mode)?(row.ticket_provider_counts||{}):(row.provider_counts||{});
-    const reasonCounts=state.mode==="calls"?(row.ticket_reason_counts||{}):(row.reason_counts||{});
+    const providerCounts=["calls","repeat","motives"].includes(state.mode)?(detailState.ticket_provider_counts||{}):(detailState.provider_counts||{});
+    const reasonCounts=state.mode==="calls"?(detailState.ticket_reason_counts||{}):(detailState.reason_counts||{});
     if(["projects","calls","repeat","motives","climate"].includes(state.mode)){
-      listDimensionRows(ui.projects,row.project_counts,row.ticket_project_counts,displayProject);
-      listDimensionRows(ui.providers,row.provider_counts,row.ticket_provider_counts);
+      listDimensionRows(ui.projects,detailState.project_counts,detailState.ticket_project_counts,displayProject);
+      listDimensionRows(ui.providers,detailState.provider_counts,detailState.ticket_provider_counts);
     }else{
       listRows(ui.projects,canonicalProjects);
       listRows(ui.providers,providerCounts);
     }
     listRows(ui.reasons,reasonCounts,"tickets");
-    const recurrenceRows=detail.recurrences||[];
-    ui.panelRecurrence.innerHTML="<div class=\"panel-recurrence-summary\"><strong>"+number.format(row.recurrence_links||0)+"</strong><span>links reincidentes</span><strong>"+number.format(row.recurrence_tickets||0)+"</strong><span>tickets nesses links</span></div>"+
-      (recurrenceRows.length?recurrenceRows.map(item=>"<div class=\"panel-reason-row panel-recurrence-row\"><span><strong>"+esc(item.link||"Link")+"</strong><small>"+esc(item.provider||"Provedor não identificado")+"</small></span><b>"+number.format(item.occurrences||0)+" ocorrências<br><small>Última: "+esc(item.last_occurrence?new Date(item.last_occurrence).toLocaleDateString("pt-BR"):"Sem data")+"</small></b></div>").join(""):"<p class=\"panel-empty\">Nenhum link reincidente neste recorte.</p>");
+    renderRecurrenceCards(detailState,recurrenceRows);
     const projectCount=Object.keys(canonicalProjects).filter(name=>!norm(name).includes("nao identificado")).length;
     const providerCount=Object.keys(providerCounts).filter(name=>!norm(name).includes("nao identificado")).length;
-    const ticketCount=state.mode==="motives"?Object.values(row.reason_counts||{}).reduce((a,b)=>a+b,0):state.mode==="repeat"?(row.recurrence_tickets||0):(row.ticket_count||0);
-    const kpis=[["Links CMDB",row.total_links||0],["Tickets no recorte",ticketCount],["Links afetados",row.affected_links||row.terminal_links||0],["Projetos",projectCount],["Provedores",providerCount],["Links reincidentes",row.recurrence_links||0]];
+    const ticketCount=state.mode==="motives"?Object.values(detailState.reason_counts||{}).reduce((a,b)=>a+b,0):state.mode==="repeat"?(detailState.recurrence_tickets||0):(detailState.ticket_count||0);
+    const kpis=[["Links CMDB",detailState.total_links||0],["Tickets no recorte",ticketCount],["Links afetados",detailState.affected_links||detailState.terminal_links||0],["Projetos",projectCount],["Provedores",providerCount],["Links reincidentes",detailState.recurrence_links||0]];
     ui.panelOverview.innerHTML=kpis.map(([label,value])=>"<div class=\"panel-overview-kpi\"><strong>"+number.format(value)+"</strong><span>"+esc(label)+"</span></div>").join("");
-    const clientCounts=["calls","repeat","motives"].includes(state.mode)?(row.ticket_client_counts||{}):(row.client_counts||{});
+    const clientCounts=["calls","repeat","motives"].includes(state.mode)?(detailState.ticket_client_counts||{}):(detailState.client_counts||{});
     const dominant=topAggregate(clientCounts,["cliente nao identificado"]);
     ui.panelOverviewContext.innerHTML=dominant?"<p>Cliente predominante: <strong>"+esc(dominant[0])+"</strong> \u00b7 "+number.format(dominant[1])+" registros.</p>":"<p>Sem clientes identificados neste recorte.</p>";
-    const ticketRows=detail.tickets||[];
+    if(ui.panelOverviewCta){
+      ui.panelOverviewCta.hidden=!ticketsAllowed;
+      ui.panelOverviewCta.innerHTML=ticketsAllowed?`<button type="button" class="geo-text-action panel-overview-cta-btn" data-open-uf-tickets><span>Consultar chamados da UF</span><b>${number.format(ticketCount)}</b></button>`:"";
+    }
     ui.panelTicketSearch.value=state.ticketSearch;
     ui.panelTicketSize.value=String(detail.ticket_page_size||state.ticketPageSize);
-    ui.tickets.innerHTML=ticketRows.map(ticket=>{
-      const cmdb=ticket.cmdb||{}, identity=ticket.identity||{};
-      const created=ticket.created_at?new Date(ticket.created_at).toLocaleDateString("pt-BR"):"Sem data";
-      return "<article class=\"panel-ticket-row\"><div><strong>"+esc(ticket.ticket_number||"Chamado")+"</strong><span>"+esc(statusLabels[ticket.status]||ticket.status||"Status n\u00e3o informado")+" \u00b7 "+esc(created)+"</span><p>"+esc(ticket.title||"Sem t\u00edtulo")+"</p><small>"+esc(identity.client||"Cliente n\u00e3o identificado")+" \u00b7 "+esc(identity.project?displayProject(identity.project):"Projeto n\u00e3o identificado")+" \u00b7 "+esc(ticket.link||"Link n\u00e3o identificado")+" \u00b7 "+esc(cmdb.provider||"Provedor n\u00e3o identificado")+"</small><small>Prioridade: "+esc(ticket.priority||"Não informada")+(ticket.closing_reason?" \u00b7 Motivo: "+esc(ticket.closing_reason):"")+"</small></div><div class=\"panel-ticket-arion\"><span>"+esc(ticket.arion_status||"Em Aberto")+"</span><small>"+esc(ticket.assignee||"Sem respons\u00e1vel")+"</small><a class=\"panel-ticket-open\" href=\""+esc(ticket.chamados_url||"#")+"\">Abrir</a></div></article>";
-    }).join("")||"<p class=\"panel-empty\">Nenhum chamado corresponde a este recorte.</p>";
+    renderTicketCards(detail.tickets||[],false);
     const current=Number(detail.ticket_page||1),pages=Number(detail.ticket_pages||1);
     ui.panelTicketPagination.innerHTML="<span>"+number.format(detail.ticket_total||0)+" chamados \u00b7 P\u00e1gina "+number.format(current)+" de "+number.format(pages)+"</span><div><button type=\"button\" data-panel-ticket-page=\""+Math.max(1,current-1)+"\" "+(current<=1?"disabled":"")+">Anterior</button><button type=\"button\" data-panel-ticket-page=\""+Math.min(pages,current+1)+"\" "+(current>=pages?"disabled":"")+">Pr\u00f3xima</button></div>";
     ui.openBase.href=root.dataset.baseUrl+"?uf="+encodeURIComponent(code)+(state.client!=="all"?"&cliente="+encodeURIComponent(state.client):"")+(state.project?"&projeto="+encodeURIComponent(state.project):"")+(state.provider?"&provider_id="+encodeURIComponent(state.provider):"");
@@ -820,7 +910,8 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     else closePanel();
   }
   function closePanel(){
-    detailSequence++;detailController?.abort();
+    clearTimeout(panelSearchTimer);
+    detailSequence++;detailController?.abort();detailController=null;
     const backTarget=rightSurface==="details"&&previousSurface.startsWith("analysis-")?previousSurface:"";
     previousSurface="";
     if(backTarget==="analysis-expanded"){geoController.openExpanded?.();return;}
@@ -877,8 +968,8 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     page.querySelector("[data-weather-animate]")?.addEventListener("change",()=>renderMap());
     page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
     page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;state.provider="";$("[data-filter-notice]").textContent="Projeto e ISP revalidados para o cliente selecionado.";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
-    ui.project.addEventListener("change",()=>{state.project=ui.project.value;state.provider="";if(isPresentation){state.selectedUF="";state.region="";ui.breadcrumb.hidden=true;closePanel();}$("[data-filter-notice]").textContent="ISP revalidado para o projeto selecionado.";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
-    ui.provider.addEventListener("change",()=>{state.provider=ui.provider.value;if(isPresentation){state.selectedUF="";ui.breadcrumb.hidden=true;closePanel();}fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
+    ui.project.addEventListener("change",()=>{state.project=ui.project.value;state.provider="";$("[data-filter-notice]").textContent="ISP revalidado para o projeto selecionado.";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
+    ui.provider.addEventListener("change",()=>{state.provider=ui.provider.value;fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
     ui.period.addEventListener("change",()=>{state.period=ui.period.value;if(state.period==="custom"){ui.moreFilters.open=true;syncMoreFiltersOpen();}state.dateFrom="";state.dateTo="";ui.dates.hidden=state.period!=="custom";if(state.period!=="custom")fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
     $("[data-apply-period]").addEventListener("click",()=>{state.dateFrom=ui.dateFrom.value;state.dateTo=ui.dateTo.value;if(state.dateFrom&&state.dateTo&&state.dateFrom>state.dateTo){ui.dateTo.setCustomValidity("A data final deve ser igual ou posterior à inicial.");ui.dateTo.reportValidity();return;}ui.dateTo.setCustomValidity("");fetchData().catch(()=>showError("Não foi possível carregar o período selecionado."));});
     ui.reason.addEventListener("change",()=>{state.reason=ui.reason.value;fetchData().catch(()=>showError("Não foi possível filtrar os motivos."));});
@@ -892,6 +983,16 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     $("[data-filters-apply]").addEventListener("click",()=>{closeMoreFilters(true);fetchData().catch(error=>showError(error.message));});
     $("[data-filters-clear]").addEventListener("click",()=>ui.activeFilters.querySelector("[data-clear-all-filters]")?.click());
     page.querySelectorAll("[data-state-tab]").forEach(button=>button.addEventListener("click",()=>{if(!state.selectedUF)return;state.ticketPage=1;loadState(state.selectedUF,button.dataset.stateTab,1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));}));
+    panel.addEventListener("click",event=>{
+      if(event.target.closest("[data-open-uf-tickets]")){
+        if(!state.selectedUF)return;
+        state.ticketPage=1;
+        loadState(state.selectedUF,"tickets",1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));
+        return;
+      }
+      if(event.target.closest("[data-panel-out-brazil]")){clearSelection();return;}
+      if(event.target.closest("[data-panel-out-close]")){closePanel();}
+    });
     ui.panelTicketSearch.addEventListener("input",()=>{clearTimeout(panelSearchTimer);state.ticketSearch=ui.panelTicketSearch.value.trim();state.ticketPage=1;panelSearchTimer=setTimeout(()=>{if(state.selectedUF&&state.ufTab==="tickets")loadState(state.selectedUF,"tickets",1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));},240);});
     ui.panelTicketSize.addEventListener("change",()=>{state.ticketPageSize=Number(ui.panelTicketSize.value)||25;state.ticketPage=1;if(state.selectedUF&&state.ufTab==="tickets")loadState(state.selectedUF,"tickets",1).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));});
     ui.panelTicketPagination.addEventListener("click",event=>{const button=event.target.closest("[data-panel-ticket-page]");if(!button||button.disabled||!state.selectedUF)return;loadState(state.selectedUF,"tickets",Number(button.dataset.panelTicketPage)).catch(error=>showError(error.message,"Detalhes indispon\u00edveis"));});
@@ -912,7 +1013,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
     $("[data-national-expand]").addEventListener("click",()=>setNationalCollapsed(false));
     page.querySelectorAll("[data-national-tab]").forEach(button=>button.addEventListener("click",()=>setPanelTab(button.dataset.nationalTab)));
     $("[data-brazil-link]").addEventListener("click",clearSelection);$("[data-panel-close]").addEventListener("click",closePanel);ui.panelBackAnalysis?.addEventListener("click",returnToAnalysis);
-    const moveState=step=>{const order=stateOrder.filter(code=>!(state.region||isPresentation)||(data?.allowed_ufs||[]).includes(code));const index=order.indexOf(state.selectedUF);if(index<0)return;selectState(order[(index+step+order.length)%order.length]);};
+    const moveState=step=>{const order=stateOrder.filter(code=>!(state.region||isPresentation)||(data?.allowed_ufs||[]).includes(code));if(!order.length)return;const index=order.indexOf(state.selectedUF);const targetIndex=index<0?(step>=0?0:order.length-1):(index+step+order.length)%order.length;selectState(order[targetIndex]);};
     ui.ufPrevious.addEventListener("click",()=>moveState(-1));ui.ufNext.addEventListener("click",()=>moveState(1));
     $("[data-map-retry]").addEventListener("click",initialize);
     window.addEventListener("arion:themechange",event=>{const next=event.detail?.theme||theme();if(map?.getLayer("arion-background"))map.setPaintProperty("arion-background","background-color",next==="light"?"#e5eae6":"#0c0d0d");renderMap();renderLegend();});
@@ -1111,6 +1212,7 @@ import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
       actions?actions.offsetTop+actions.offsetHeight:0,
       filters?filters.offsetTop+filters.offsetHeight:0
     );
+    page.style.setProperty("--geo-row1-bottom",`${Math.max(44,row1Bottom-offset)}px`);
     if(subband){
       subband.style.top=`${row1Bottom+6}px`;
       page.style.setProperty("--geo-band-height",`${subband.offsetTop+subband.offsetHeight+8-offset}px`);

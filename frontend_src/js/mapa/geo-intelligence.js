@@ -817,7 +817,8 @@ export function mountGeoIntelligence({ page, root, state, urlFor, refresh, onWea
   const changed = () => refresh().catch(() => { if (status) status.textContent = "Não foi possível atualizar este recorte."; });
   region?.addEventListener("change", () => {
     state.region = region.value;
-    if (state.selectedUF && !(regions[state.region] || allUF).includes(state.selectedUF)) {
+    const detailsOpen = page.querySelector("[data-state-panel]")?.classList.contains("is-open");
+    if (state.selectedUF && !(regions[state.region] || allUF).includes(state.selectedUF) && !detailsOpen) {
       state.selectedUF = "";
       const notice = $("[data-filter-notice]");
       if (notice) notice.textContent = "A UF anterior foi removida porque não pertence à região selecionada.";
@@ -868,7 +869,8 @@ export function mountGeoIntelligence({ page, root, state, urlFor, refresh, onWea
     if (regBtn && panel.contains(regBtn)) {
       const nextReg = regBtn.dataset.filterRegion || "";
       state.region = state.region === nextReg ? "" : nextReg;
-      if (state.selectedUF && !(regions[state.region] || allUF).includes(state.selectedUF)) state.selectedUF = "";
+      const detailsOpen = page.querySelector("[data-state-panel]")?.classList.contains("is-open");
+      if (state.selectedUF && !(regions[state.region] || allUF).includes(state.selectedUF) && !detailsOpen) state.selectedUF = "";
       syncControls();
       onFilterUpdate?.();
       changed();

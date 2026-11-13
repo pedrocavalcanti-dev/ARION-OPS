@@ -118,7 +118,7 @@ def bootstrap_access(*, using="default"):
         if created or (name == GROUP_EXECUTIVE and not group.permissions.exists()):
             group.permissions.add(*(available[codename] for codename in codenames if codename in available))
         elif name == GROUP_SYSTEM_ADMIN:
-            group.permissions.add(*(available[codename] for codename in ACCOUNT_SECURITY_PERMISSIONS if codename in available))
+            group.permissions.add(*(available[codename] for codename in codenames if codename in available))
         default_mode = GroupDataScope.Mode.ALL if name == GROUP_SYSTEM_ADMIN else GroupDataScope.Mode.CUSTOM
         GroupDataScope.objects.using(using).get_or_create(group=group, defaults={"mode": default_mode})
 def is_system_admin(user):
