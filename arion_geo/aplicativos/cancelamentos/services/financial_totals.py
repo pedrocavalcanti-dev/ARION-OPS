@@ -159,13 +159,6 @@ def money_columns(obligations, pendings=()):
         if _attr(item, "source_pending_id", None) is None and eff is not None:
             unlinked_obligation_kinds.add(kind_group)
 
-    totals = {}
-    partial = False
-    for kind_group, values in amounts.items():
-        known = [value for value in values if value is not None]
-        totals[kind_group] = sum(known, ZERO) if known else None
-        partial |= not values or len(known) != len(values)
-
     pending_open_count = 0
     pending_open_with_value_count = 0
     pending_open_without_value_count = 0
@@ -200,20 +193,29 @@ def money_columns(obligations, pendings=()):
             covered_pending_count += 1
             continue
 
+        pending_kind_group = pending_principal_kind(kind)
+        amounts[pending_kind_group].append(amount)
         pending_unlinked_values.append(amount)
         unlinked_pendings.append(pending)
         if status == "OPEN":
             pending_unlinked_open_values.append(amount)
-        if pending_principal_kind(kind) in unlinked_obligation_kinds:
+        if pending_kind_group in unlinked_obligation_kinds:
             possible_duplicate = True
             review = True
+
+    totals = {}
+    partial = False
+    for kind_group, values in amounts.items():
+        known = [value for value in values if value is not None]
+        totals[kind_group] = sum(known, ZERO) if known else None
+        partial |= not values or len(known) != len(values)
 
     pending_unlinked = sum(pending_unlinked_values, ZERO) if pending_unlinked_values else None
     pending_open = sum(pending_open_values, ZERO) if pending_open_values else None
     pending_resolved = sum(pending_resolved_values, ZERO) if pending_resolved_values else None
     pending_discarded = sum(pending_discarded_values, ZERO) if pending_discarded_values else None
 
-    known_parts = [value for value in (totals["CONTRACT"], totals["EQUIPMENT"], totals["OTHER"], pending_unlinked) if value is not None]
+    known_parts = [value for value in (totals["CONTRACT"], totals["EQUIPMENT"], totals["OTHER"]) if value is not None]
     total = sum(known_parts, ZERO) if known_parts else None
     estimated = sum(estimated_values, ZERO) if estimated_values else None
     charged = sum(charged_values, ZERO) if charged_values else None

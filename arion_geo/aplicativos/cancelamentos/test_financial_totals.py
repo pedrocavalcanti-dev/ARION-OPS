@@ -58,8 +58,8 @@ class InformativeTotalTests(SimpleTestCase):
         self.assertEqual(format_brl(Decimal("1326.45")), "R$ 1.326,45")
         self.assertEqual(format_brl(None), "—")
 
-    def test_unlinked_monetary_pendings_enter_total_without_fabricating_zero_obligations(self):
-        # Caso 1 & 3: pendências sem cobrança vinculada compõem o total identificado e mantêm ausentes como None.
+    def test_unlinked_monetary_pendings_enter_total_and_categories_without_fabricating_zeros(self):
+        # Caso 1 & 3: pendências sem cobrança vinculada compõem sua respectiva categoria e mantêm ausentes como None.
         pending = [{"pk": 1, "kind": "OVERDUE", "status": "OPEN", "amount": Decimal("22.00")}]
         result = money_columns([], pending)
         self.assertEqual(result["total"], Decimal("22.00"))
@@ -68,7 +68,7 @@ class InformativeTotalTests(SimpleTestCase):
         self.assertEqual(result["open"], Decimal("22.00"))
         self.assertIsNone(result["fine"])
         self.assertIsNone(result["equipment"])
-        self.assertIsNone(result["other"])
+        self.assertEqual(result["other"], Decimal("22.00"))
         self.assertIsNone(result["paid"])
         self.assertTrue(result["partial"])
         self.assertFalse(result["possible_duplicate"])
@@ -78,11 +78,15 @@ class InformativeTotalTests(SimpleTestCase):
             {"pk": 3, "kind": "DOCUMENT", "status": "OPEN", "amount": None},
         ]
         res_multi = money_columns([], multiple)
+        self.assertEqual(res_multi["fine"], Decimal("30.00"))
+        self.assertIsNone(res_multi["equipment"])
+        self.assertEqual(res_multi["other"], Decimal("22.00"))
         self.assertEqual(res_multi["total"], Decimal("52.00"))
         self.assertEqual(res_multi["pending_open"], Decimal("52.00"))
         self.assertEqual(res_multi["pending_open_count"], 3)
         self.assertEqual(res_multi["pending_open_with_value_count"], 2)
         self.assertEqual(res_multi["pending_open_without_value_count"], 1)
+        self.assertTrue(res_multi["partial"])
 
     def test_deduplication_requires_explicit_link_or_legacy_provenance_never_equal_amount(self):
         # Caso 5: igualdade de valor sem vínculo não é deduplicada automaticamente; apenas sinalizada para revisão.
@@ -391,3 +395,91 @@ class FinancialPresentationTests(TestCase):
         self.assertContains(detail_resp, "Resolvido / descartado")
         self.assertContains(detail_resp, "R$ 99,00")
         self.assertContains(detail_resp, "possível duplicidade sem vínculo formal")
+
+    def test_pendings_distribute_across_fine_equipment_other_in_list_detail_export_and_all_stages(self):
+        proc = self.approve(self.entry(9006))
+        CancellationProcess.objects.filter(pk=proc.pk).update(stage="PENDING", ticket_number="2026071036000568")
+        proc.pendings.create(kind="OVERDUE", description="Mensalidade em aberto", amount=Decimal("22.00"))
+        p_fine = proc.pendings.create(kind="CONTRACT_FINE", description="Multa contratual", amount=Decimal("200.00"))
+        p_equip = proc.pendings.create(kind="EQUIPMENT_FINE", description="Multa equipamento", amount=Decimal("200.00"))
+
+        for stage, tab in (("PENDING", "pending"), ("COMPLETED", "completed")):
+            CancellationProcess.objects.filter(pk=proc.pk).update(stage=stage)
+            resp = self.client.get(reverse("cancelamentos:index"), {"tab": tab, "q": "2026071036000568"})
+            html = resp.content.decode()
+            self.assertIn("R$ 200,00", html)
+            self.assertIn("R$ 22,00", html)
+            self.assertIn("R$ 422,00", html)
+            self.assertNotContains(resp, ">Parcial<")
+
+        for stage, tab in (("ORDER", "order"), ("REQUEST", "request"), ("PENDING", "pending"), ("COMPLETED", "completed")):
+            CancellationProcess.objects.filter(pk=proc.pk).update(stage=stage)
+            proc.refresh_from_db()
+            row = prepare_rows(query_module(self.admin, {"tab": tab, "q": "2026071036000568"})["queryset"], self.admin)[0]
+            self.assertEqual(row.finance["fine"], Decimal("200.00"))
+            self.assertEqual(row.finance["equipment"], Decimal("200.00"))
+            self.assertEqual(row.finance["other"], Decimal("22.00"))
+            self.assertEqual(row.finance["total"], Decimal("422.00"))
+            self.assertFalse(row.finance["partial"])
+            export_resp = self.client.get(reverse("cancelamentos:export"), {"tab": tab, "q": "2026071036000568"})
+            csv_row = list(csv.DictReader(io.StringIO(export_resp.content.decode("utf-8-sig")), delimiter=";"))[0]
+            self.assertEqual(csv_row["Multa (R$)"], "R$ 200,00")
+            self.assertEqual(csv_row["Equipamento (R$)"], "R$ 200,00")
+            self.assertEqual(csv_row["Outros (R$)"], "R$ 22,00")
+            self.assertEqual(csv_row["Total informado (R$)"], "R$ 422,00")
+            self.assertEqual(csv_row["Total parcial"], "Não")
+
+        CancellationProcess.objects.filter(pk=proc.pk).update(stage="PENDING")
+        detail_resp = self.client.get(reverse("cancelamentos:detail", args=[proc.pk]))
+        self.assertContains(detail_resp, "<dt>Multa contratual</dt><dd>R$ 200,00</dd>")
+        self.assertContains(detail_resp, "<dt>Equipamentos</dt><dd>R$ 200,00</dd>")
+        self.assertContains(detail_resp, "<dt>Outros valores</dt><dd>R$ 22,00</dd>")
+        self.assertContains(detail_resp, "R$ 422,00")
+        summary = financial_summary(proc)
+        self.assertIn("Multa contratual: R$ 200,00", summary)
+        self.assertIn("Equipamento: R$ 200,00", summary)
+        self.assertIn("Outros valores: R$ 22,00", summary)
+        self.assertIn("Total informado: R$ 422,00", summary)
+
+        # Dashboard soma uma única vez por categoria (base do setUp + processo 9006)
+        dash = build_dashboard(self.admin, {})
+        self.assertEqual(dash["metrics"]["contract"], Decimal("400.00"))
+        self.assertEqual(dash["metrics"]["equipment"], Decimal("1200.00"))
+        self.assertEqual(dash["metrics"]["other"], Decimal("148.45"))
+        self.assertEqual(dash["metrics"]["total"], Decimal("1748.45"))
+
+        # Atualizar uma pendência reflete imediatamente nas colunas sem alterar etapa
+        proc.refresh_from_db()
+        act_on_process(request=self.request(self.admin), pk=proc.pk, action="pending_update", data={
+            "revision": proc.revision, "child_id": p_fine.pk, "kind": "BILL",
+            "description": "Reclassificada como boleto", "amount": "150,00",
+        })
+        proc.refresh_from_db()
+        updated = prepare_rows([proc], self.admin)[0]
+        self.assertIsNone(updated.finance["fine"])
+        self.assertEqual(updated.finance["equipment"], Decimal("200.00"))
+        self.assertEqual(updated.finance["other"], Decimal("172.00"))
+        self.assertEqual(updated.finance["total"], Decimal("372.00"))
+        self.assertTrue(updated.finance["partial"])
+        self.assertEqual(updated.stage, "PENDING")
+        resp_partial = self.client.get(reverse("cancelamentos:index"), {"tab": "pending", "q": "2026071036000568"})
+        self.assertContains(resp_partial, ">—</td>")
+        self.assertContains(resp_partial, "R$ 200,00")
+        self.assertContains(resp_partial, "R$ 172,00")
+        self.assertContains(resp_partial, "R$ 372,00")
+        self.assertContains(resp_partial, "Parcial")
+
+        # Vincular obrigação à pendência de equipamento mantém total consolidado sem dupla contagem
+        act_on_process(request=self.request(self.admin), pk=proc.pk, action="obligation_add", data={
+            "revision": proc.revision, "kind": "EQUIPMENT", "source_pending": p_equip.pk,
+            "description": "Equipamento cobrado", "estimated_amount": "200,00",
+            "charged_amount": "200,00", "document_status": "AVAILABLE", "document_reference": "DOC-EQ-9006",
+        })
+        proc.refresh_from_db()
+        linked_row = prepare_rows([proc], self.admin)[0]
+        self.assertIsNone(linked_row.finance["fine"])
+        self.assertEqual(linked_row.finance["equipment"], Decimal("200.00"))
+        self.assertEqual(linked_row.finance["other"], Decimal("172.00"))
+        self.assertEqual(linked_row.finance["total"], Decimal("372.00"))
+        self.assertEqual(linked_row.finance["covered_pending_count"], 1)
+        self.assertFalse(linked_row.finance["possible_duplicate"])

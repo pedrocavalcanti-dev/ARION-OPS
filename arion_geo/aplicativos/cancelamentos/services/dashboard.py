@@ -13,8 +13,7 @@ from aplicativos.integracoes.services.link_business_identity import BusinessIden
 from aplicativos.integracoes.services.project_names import canonical_project_name, display_project_name
 from ..models import CancellationPending, CancellationProcess, FinancialObligation, LegacyCancellationReference
 from .data_scope import CancellationScope
-from .financial_totals import (format_brl, money_columns, obligation_effective_amount,
-                               pending_principal_kind, principal_kind)
+from .financial_totals import format_brl, money_columns, obligation_effective_amount, principal_kind
 
 DIMENSIONS = ("contracting_client", "project", "final_client", "isp", "link__operator__name")
 KINDS = ("CONTRACT", "EQUIPMENT", "OTHER")
@@ -168,9 +167,6 @@ def build_dashboard(user, params):
             proc_obs = obligations_by_proc.get(row["pk"], ())
             fin = money_columns(proc_obs, pendings_by_proc.get(row["pk"], ()))
             proc_cats = {"CONTRACT": fin["fine"], "EQUIPMENT": fin["equipment"], "OTHER": fin["other"]}
-            for up in fin["unlinked_pendings"]:
-                cat = pending_principal_kind(up["kind"])
-                proc_cats[cat] = (proc_cats[cat] if proc_cats[cat] is not None else Decimal(0)) + up["amount"]
             null_cats = {principal_kind(ob["kind"]) for ob in proc_obs if obligation_effective_amount(ob) is None}
             for bucket in targets:
                 for category in KINDS:
