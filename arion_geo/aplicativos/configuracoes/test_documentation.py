@@ -104,12 +104,13 @@ class DocumentationPortalTests(TestCase):
         self.assertContains(response, "Atualiza&ccedil;&otilde;es e vers&otilde;es")
         self.assertContains(response, "ARION OPS 1.3.1")
         self.assertContains(response, "ARION OPS 1.4.0")
+        self.assertContains(response, "ARION OPS 1.4.1")
         self.assertContains(response, "ARION OPS 1.2.0 — Identidade, Cockpit e Inteligência Operacional")
         self.assertContains(response, "data-pwa-update-version")
-        self.assertContains(response, "Novidades, melhorias")
-        self.assertContains(response, 'id="release-v1.4.0"')
-        self.assertContains(response, "Vers&atilde;o carregada nesta p&aacute;gina: v1.4.0")
-        self.assertEqual(response.context["version"], "1.4.0")
+        self.assertContains(response, "GEO Inteligência")
+        self.assertContains(response, 'id="release-v1.4.1"')
+        self.assertContains(response, "Vers&atilde;o carregada nesta p&aacute;gina: v1.4.1")
+        self.assertEqual(response.context["version"], "1.4.1")
         self.assertEqual(response.context["current_release"]["version"], response.context["version"])
 
     def test_portal_receives_the_existing_saved_theme(self):

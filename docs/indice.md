@@ -43,6 +43,8 @@ OTRS e CMDB permanecem como fontes oficiais nos seus domínios; o banco do ARION
 - [Migra??o hist?rica ArionBroker](05-funcionalidades/cancelamentos-migracao-arionbroker.md)
 - [Cockpit](05-funcionalidades/cockpit.md)
 - [Mapa operacional](05-funcionalidades/mapa.md)
+- [GEO Inteligência](05-funcionalidades/geo-intelligence.md)
+- [GEO Inteligência · Nacional e Local](05-funcionalidades/geo-intelligence-nacional-local.md)
 - [Rankings](05-funcionalidades/rankings.md)
 - [Qualidade operacional](05-funcionalidades/qualidade.md)
 - [Base de links](05-funcionalidades/base.md)
@@ -78,6 +80,10 @@ Snapshots e levantamentos técnicos datados (não substituem os contratos normat
 
 ## 08. Releases
 
+- [Versão 1.4.1 — GEO Inteligência, Qualidade e Cancelamentos](08-releases/v1.4.1.md)
+- [Versão 1.4.1 — Checklist de implantação Windows Server](08-releases/v1.4.1-implantacao-windows.md)
+- [Consolidação DEV da candidata 1.4.1](08-releases/v1.4.1-candidata.md)
+- [Versão 1.4.0 — Nota técnica](08-releases/v1.4.0.md)
 - [Catálogo de versões (`releases.json`)](08-releases/releases.json)
 
 ## 09. Tarefas

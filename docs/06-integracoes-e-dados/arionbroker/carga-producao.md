@@ -34,7 +34,8 @@ $arionFonte = 'C:\Users\Arion\Desktop\arion-migracao\producao-20261110-130653'
 $arionDump = 'cancelamentos-dados.sql'
 $arionRelatorios = Join-Path $arionFonte 'relatorios-importacao'
 New-Item -ItemType Directory -Force -Path $arionRelatorios | Out-Null
-$arionAtor = [int](Read-Host 'ID do usuário ARION ativo autorizado, com escopo global')
+$arionAtorEntrada = Read-Host 'ID do usuário ARION ativo autorizado, com escopo global'
+$arionAtor = [int]$arionAtorEntrada
 $arionFuso = Read-Host 'Fuso IANA comprovado dos datetime do legado (ex.: UTC)'
 $arionSnapshotHash = (Get-FileHash -LiteralPath (Join-Path $arionFonte $arionDump) -Algorithm SHA256).Hash.ToLowerInvariant()
 $arionComum = @('--source-dir', $arionFonte, '--dump', $arionDump,

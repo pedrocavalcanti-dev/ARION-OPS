@@ -1,6 +1,52 @@
 {
-  "current_version": "1.4.0",
+  "current_version": "1.4.1",
   "releases": [
+    {
+      "version": "1.4.1",
+      "released_at": "2026-11-13",
+      "title": "ARION OPS 1.4.1 — GEO Inteligência, Qualidade e Cancelamentos",
+      "summary": "Consolidação de GEO Inteligência com listagem paginada de Chamados no drawer de UF no Mapa e Modo Apresentação, altura ampliada sem sobreposição, exclusão definitiva de OQs na Qualidade, cálculo financeiro unificado em Cancelamentos e sincronização de novas permissões no bootstrap de acessos. Implantação no Windows Server e homologação MySQL permanecem pendentes de janela autorizada.",
+      "sections": [
+        {
+          "category": "GEO Inteligência",
+          "items": [
+            "Política explícita de elegibilidade por operadora contratante no Mapa e GEO Inteligência (Vivo exclui cancelados, improcedentes e Sem intervenção; Claro exclui cancelados e improcedentes preservando Sem intervenção; demais operadoras mantêm regra padrão com deduplicação por TicketID), sem alterar Painel, Rankings ou Cockpit.",
+            "Painéis esquerdo (Panorama Territorial) e direito simultâneos acima de 1180 px com redimensionamento automático do canvas, subfaixa superior de legenda dinâmica e remoção individual de filtros, linha do tempo recolhível, diagnóstico técnico recolhido por padrão e paleta distinta de causas.",
+            "Aba e listagem operacional de Chamados restauradas no drawer de UF tanto no Mapa interno quanto no Modo Apresentação, com busca, paginação server-side, circuito/designação/ISP/motivo/status/datas e indicador de reincidência, protegidas por view_operational_tickets, Data Scope e sanitização estrita na apresentação.",
+            "Drawer de UF alcança logo abaixo da Linha 1 sem sobrepor controles superiores nem cabeçalho executivo, mantendo a UF selecionada aberta até fechamento explícito e exibindo aviso fora do recorte quando filtros posteriores excluírem o estado.",
+            "Coleta meteorológica nacional/local (Open-Meteo pública/comercial/self-hosted, adaptador NASA POWER diário, IBGE no worker, grade e histórico climático permanente com revisão/consolidação) e correlação local em quatro estados na Central GEO."
+          ]
+        },
+        {
+          "category": "Qualidade Operacional",
+          "items": [
+            "Filtros gerenciais de 30 dias, seleção dependente de projetos por contratante, macrorregião/UF IBGE e correção das carteiras por operadora contratante separada do ISP.",
+            "Exclusão definitiva em cascata controlada de Ordens de Qualidade (delete_quality_order) com remoção transacional de dependentes exclusivos sem exigir encerramento manual prévio de TQs ou RREIP, tombstones de segurança contra reuso/jobs atrasados, auditoria OQ_DELETED e limpeza pós-commit de anexos exclusivos."
+          ]
+        },
+        {
+          "category": "Cancelamentos",
+          "items": [
+            "Cálculo financeiro unificado em Decimal incorporando pendências monetárias não vinculadas e não descartadas ao total identificado sem preencher campos financeiros ausentes com zero artificial, e deduplicação confiável via vínculo explícito ou proveniência legada.",
+            "Melhorias no detalhe, vinculação de ticket OTRS no processo, conclusão excepcional simplificada, agrupamento mensal do Dashboard compatível com MySQL sem timezone tables e preparação controlada (--production-import) do importador histórico."
+          ]
+        },
+        {
+          "category": "Segurança e Acessos",
+          "items": [
+            "bootstrap_access passa a sincronizar automaticamente todas as permissões de Administrador do Sistema mesmo em grupos já existentes no banco, garantindo que present_geo (botão Apresentar) e delete_qualityorder fiquem ativos após migrate/bootstrap em produção.",
+            "Modo Apresentação isola sessão e endpoints pelo cliente fixado, bloqueando rotas internas até encerramento explícito e omitindo títulos internos, responsáveis, links OTRS e motivos financeiros."
+          ]
+        },
+        {
+          "category": "Infraestrutura e Documentação",
+          "items": [
+            "Oito migrations aditivas/metadados desde v1.4.0 (configuracoes.0012, qualidade.0016, cancelamentos.0007 e integracoes.0017–0021), sem reversão destrutiva recomendada e sem novas dependências obrigatórias de produção.",
+            "Documentação GEO Inteligência, catálogo interno e roteiro Windows Server 1.4.1 publicados em Git; aplicação em produção Windows Server e validação MySQL seguem pendentes de janela autorizada."
+          ]
+        }
+      ]
+    },
     {
       "version": "1.4.0",
       "released_at": "2026-11-10",
