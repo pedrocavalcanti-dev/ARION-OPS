@@ -26,6 +26,10 @@ O backend não agrega nem compara em ranking séries com modelos/fusos incompat�
 
 NASA retorna neste ensaio `sources=[MERRA2, GEOSIT, POWER]`, resolução meteorológica 0,5° × 0,625°, unidades `C` e `mm/day`, referência explicitamente UTC. A identidade `power_meteorology` preserva esses metadados; dados recentes são tratados como potencialmente provisórios, sem declarar ERA5 ou MERRA2 definitivo. O adaptador não substitui vento médio por máximo/rajada e declara vento máximo, rajada, direção e horário indisponíveis. `supported_completeness` distingue completude das quatro variáveis suportadas da completude do contrato GEO de sete variáveis. A grade de diagnóstico foi persistida separadamente; a fonte preferencial operacional permanece Open-Meteo pública.
 
+## Histórico permanente
+
+A retenção agora segue a [política histórica](historico-climatico.md). Vencimento HTTP não determina exclusão ou recolhimento de meses completos. Consolidação exige integridade e confirmação posterior à janela da fonte; atualização manual é versionada. Migrations aditivas 0020/0021.
+
 ## Consumo, lotes e reutilização
 
 `WeatherGridCache` identifica fonte, modelo, coordenada solicitada/célula NASA canônica, período e contrato diário/fuso. A mesma série não recebe peso territorial de uma UF no cache compartilhado. As áreas entram apenas na composição `area-grid-v2` existente.

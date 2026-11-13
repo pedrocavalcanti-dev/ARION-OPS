@@ -69,6 +69,10 @@ Para reproduzir **somente uma rodada GEO no DEV**, sem acionar OTRS/CMDB, backlo
 
 Não iniciar outro Worker se já existir lease ativo. A execução contínua usa o supervisor já existente sob a identidade Windows correta; esta tarefa não fez deploy nem alterou os serviços de produção.
 
+## Histórico persistente
+
+A política de TTL foi substituída pela [política histórica](historico-climatico.md): meses completos são reutilizados além do cache HTTP; consolidação definitiva exige confirmação posterior à janela de revisão. Revisões manuais preservam versões e a coleta atualiza somente lacunas/trechos necessários. Central e Mapa leem primeiro os dados locais. Outubro/2026 continua completo, sem consolidação antecipada; o ensaio histórico não fez novas chamadas externas. Migrations 0020/0021 aplicadas somente no SQLite DEV.
+
 ## Confirmar persistência e exibição
 
 Confirmar job concluído, cache da fonte selecionada, método `area-grid-v2`, modelo ERA5, coleta e completude coerentes. Leitura técnica no banco DEV correto:
