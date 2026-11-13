@@ -10,9 +10,61 @@
   const popovers = [...document.querySelectorAll(popoverSelector)];
   let sidebarCollapsed = false;
 
+  const catalogElement=document.getElementById("quality-filter-catalog");
+  const catalog=catalogElement?JSON.parse(catalogElement.textContent):null;
+  document.querySelectorAll("form:has([data-quality-period]),form:has([data-quality-dimensions])").forEach(form=>{
+    const client=form.querySelector("[data-quality-client]"),project=form.querySelector("[data-quality-project]"),region=form.querySelector("[data-quality-region]"),uf=form.querySelector("[data-quality-uf]"),portfolio=form.querySelector('[name="portfolio"]');
+    const period=form.querySelector("[data-quality-period]"),dates=form.querySelector("[data-quality-custom-period]");
+    const feedback=document.querySelector("[data-quality-filter-feedback]");
+    const replaceOptions=(field,values,placeholder)=>{
+      if(!field)return false;
+      const value=field.value;
+      field.replaceChildren(new Option(placeholder,""),...values.map(item=>new Option(item,item)));
+      field.value=values.includes(value)?value:"";
+      return value!==field.value;
+    };
+    const sync=(announce=false)=>{
+      const cleared=[];
+      if(catalog&&client&&project){
+        if(replaceOptions(project,client.value?(catalog.projects_by_client[client.value]||[]):catalog.projects,"Todos os projetos"))cleared.push("Projeto incompatível com a operadora foi limpo.");
+        if(replaceOptions(uf,region.value?(catalog.ufs_by_region[region.value]||[]):catalog.ufs,"Todas as UFs"))cleared.push("UF incompatível com a região foi limpa.");
+        if(portfolio){
+          const allowed=new Set(Object.entries(catalog.portfolios).filter(([name])=>!client.value||name===client.value).flatMap(([,projects])=>Object.entries(projects).filter(([name])=>!project.value||name===project.value).map(([,value])=>value)));
+          [...portfolio.options].forEach(option=>option.disabled=Boolean(option.value&&!allowed.has(option.value)));
+          if(portfolio.value&&!allowed.has(portfolio.value)){portfolio.value="";cleared.push("Carteira incompatível foi limpa. Revise as opções avançadas.");}
+        }
+      }
+      if(dates&&period){
+        dates.hidden=period.value!=="custom";
+        dates.querySelectorAll("input").forEach(field=>{field.disabled=dates.hidden;field.required=!dates.hidden;});
+      }
+      if(announce&&cleared.length&&feedback)feedback.textContent=cleared.join(" ");
+    };
+    form.addEventListener("change",()=>sync(true));
+    form.addEventListener("quality:restore",()=>sync(true));
+    sync();
+    document.querySelectorAll(".quality-nav a,.quality-mobile-nav a").forEach(link=>link.addEventListener("click",()=>{
+      if(!client)return;
+      const target=new URL(link.href);
+      if(target.pathname.includes("contatos"))return;
+      const dashboard=target.pathname.endsWith("/qualidade/");
+      const setOrDelete=(key,val)=>{ if(val) target.searchParams.set(key,val); else target.searchParams.delete(key); };
+      setOrDelete(dashboard?"cliente":"client",client.value);
+      setOrDelete(dashboard?"projeto":"project",project?.value||"");
+      setOrDelete("region",region?.value||"");
+      setOrDelete("uf",uf?.value||"");
+      if(period&&!target.pathname.endsWith("/ordens/")){
+        setOrDelete("period",period.value);
+        if(period.value==="custom")dates?.querySelectorAll("input").forEach(field=>setOrDelete(field.name,field.value));
+        else { target.searchParams.delete("date_from"); target.searchParams.delete("date_to"); }
+      }
+      link.href=target.href;
+    }));
+  });
+
   document.querySelectorAll("form[data-quality-persist]").forEach(form => {
     const screen = form.dataset.qualityPersist;
-    const key = `arion_quality_filters:${form.dataset.qualityUser || "anonymous"}:${screen}`;
+    const key = `arion_quality_filters:${form.dataset.qualityUser || "anonymous"}:${screen}${form.dataset.qualityFilterVersion?":v"+form.dataset.qualityFilterVersion:""}`;
     const fields = [...form.elements].filter(field => field.name && field.type !== "submit" && field.type !== "button");
     const query = new URLSearchParams(window.location.search);
     const hasUrlState = fields.some(field => query.has(field.name));
@@ -42,6 +94,7 @@
         if (saved) {
           const before = JSON.stringify(readState());
           writeState(JSON.parse(saved));
+          form.dispatchEvent(new Event("quality:restore"));
           if (JSON.stringify(readState()) !== before) {
             saveState();
             form.requestSubmit();
@@ -58,7 +111,8 @@
     link.addEventListener("click", () => {
       const screen = link.dataset.qualityClearFilters;
       const owner = document.querySelector(`form[data-quality-persist="${screen}"]`)?.dataset.qualityUser || "anonymous";
-      try { window.localStorage.removeItem(`arion_quality_filters:${owner}:${screen}`); } catch (_) { /* Limpeza da URL continua funcional. */ }
+      const version=document.querySelector(`form[data-quality-persist="${screen}"]`)?.dataset.qualityFilterVersion;
+      try { window.localStorage.removeItem(`arion_quality_filters:${owner}:${screen}${version?":v"+version:""}`); } catch (_) { /* Limpeza da URL continua funcional. */ }
     });
   });
 

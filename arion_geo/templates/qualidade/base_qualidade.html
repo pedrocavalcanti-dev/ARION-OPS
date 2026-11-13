@@ -40,5 +40,6 @@
     <div class="quality-content">{% block quality_content %}{% endblock %}</div>
   </div>
 </div>
+{% if filter_catalog %}{{ filter_catalog|json_script:"quality-filter-catalog" }}{% endif %}
 {% include "qualidade/partials/guide_dialog.html" %}
 {% endblock %}

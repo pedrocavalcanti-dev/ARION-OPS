@@ -10,31 +10,29 @@
     <p class="quality-page-subtitle">Resultado das tratativas, estabilidade dos circuitos e reincidências.</p>
     {% include "qualidade/partials/guide_trigger.html" %}
   </div>
-  <form class="quality-filters" method="get" action="{% url 'qualidade:dashboard' %}" aria-label="Filtros do dashboard" data-quality-persist="dashboard" data-quality-user="{{ request.user.pk }}">
+  <form class="quality-filters" method="get" action="{% url 'qualidade:dashboard' %}" aria-label="Filtros do dashboard" data-quality-persist="dashboard" data-quality-user="{{ request.user.pk }}" data-quality-filter-version="2">
     <input type="hidden" name="concentration_by" value="{{ concentration_by }}">
-    <label class="quality-period-control">Período gerencial
-      <select name="period">
-        {% for value,label in period_options %}<option value="{{ value }}"{% if filters.period == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
-      </select>
-    </label>
+    {% include "qualidade/_primary_filters.html" with selected=primary_selected filter_options=primary_options client_name="cliente" project_name="projeto" period=filters.period date_from=filters.date_from date_to=filters.date_to %}
     <label class="quality-group-control">Agrupar por
       <select name="group_by">
         {% for value,label in granularity_options %}<option value="{{ value }}"{% if filters.group_by == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
       </select>
     </label>
-    <details class="quality-filter-details"{% if filters.cliente or filters.projeto or filters.isp or filters.uf %} open{% endif %}>
-      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Filtros</summary>
+    <details class="quality-filter-details"{% if filters.isp %} open{% endif %}>
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Opções avançadas{% if filter_chips %}<span>{{ filter_chips|length }}</span>{% endif %}</summary>
       <div class="quality-filter-panel">
-        <label>Cliente<select name="cliente"><option value="">Todos</option>{% for option in filter_options.cliente %}<option value="{{ option }}"{% if filters.cliente == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-        <label>Projeto<select name="projeto"><option value="">Todos</option>{% for option in filter_options.projeto %}<option value="{{ option }}"{% if filters.projeto == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+
+
         <label>ISP<select name="isp"><option value="">Todos</option>{% for option in filter_options.isp %}<option value="{{ option }}"{% if filters.isp == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-        <label>UF<select name="uf"><option value="">Todas</option>{% for option in filter_options.uf %}<option value="{{ option }}"{% if filters.uf == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+
         <div class="quality-filter-actions"><a href="{% url 'qualidade:dashboard' %}" data-quality-clear-filters="dashboard">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
       </div>
     </details>
     <button class="quality-period-apply" type="submit">Aplicar</button>
   </form>
 </header>
+{% include "qualidade/_filter_feedback.html" %}
+{% if filter_chips %}<div class="quality-active-filters">{% for chip in filter_chips %}<a class="quality-filter-chip" href="{{ chip.remove_url }}">{{ chip.label }}: {{ chip.value }} ×</a>{% endfor %}<a class="quality-clear-filters" href="{% url 'qualidade:dashboard' %}" data-quality-clear-filters="dashboard">Limpar filtros</a></div>{% endif %}
 
 <section class="quality-kpis" aria-label="Resultados da Qualidade no período">
   <article class="quality-kpi quality-kpi--danger"><span class="quality-kpi__label">Novas reincidências</span><strong>{{ kpis.new_recurrences }}</strong><small>Ocorrências válidas após a inicial</small><span class="quality-kpi__mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17 10 11l4 4 6-8M15 7h5v5"/></svg></span></article>
@@ -74,8 +72,8 @@
 
   <section class="quality-panel quality-panel--concentration" aria-labelledby="quality-concentration-title">
     <header class="quality-panel__header"><div><h2 id="quality-concentration-title">Concentração das reincidências</h2><p>Top 5 · percentual sobre {{ concentration_total }} reincidências do recorte</p></div>
-      <form class="quality-concentration-filter" method="get" action="{% url 'qualidade:dashboard' %}" data-quality-persist="dashboard" data-quality-user="{{ request.user.pk }}">
-        <input type="hidden" name="period" value="{{ filters.period }}"><input type="hidden" name="group_by" value="{{ filters.group_by }}"><input type="hidden" name="cliente" value="{{ filters.cliente }}"><input type="hidden" name="projeto" value="{{ filters.projeto }}"><input type="hidden" name="isp" value="{{ filters.isp }}"><input type="hidden" name="uf" value="{{ filters.uf }}">
+      <form class="quality-concentration-filter" method="get" action="{% url 'qualidade:dashboard' %}" data-quality-persist="dashboard" data-quality-user="{{ request.user.pk }}" data-quality-filter-version="2">
+        <input type="hidden" name="period" value="{{ filters.period }}"><input type="hidden" name="group_by" value="{{ filters.group_by }}"><input type="hidden" name="cliente" value="{{ filters.cliente }}"><input type="hidden" name="projeto" value="{{ filters.projeto }}"><input type="hidden" name="isp" value="{{ filters.isp }}"><input type="hidden" name="uf" value="{{ filters.uf }}"><input type="hidden" name="region" value="{{ filters.region }}"><input type="hidden" name="date_from" value="{{ filters.date_from }}"><input type="hidden" name="date_to" value="{{ filters.date_to }}">
         <label><span>Visualizar por</span><select name="concentration_by"><option value="project"{% if concentration_by == "project" %} selected{% endif %}>Projeto</option><option value="isp"{% if concentration_by == "isp" %} selected{% endif %}>ISP</option></select></label><button type="submit">Ver</button>
       </form>
     </header>

@@ -41,7 +41,7 @@ def _review_index(link, external_ids, scoped_orders):
 
 def get_priority_link_detail(user, identifier, params):
     """Return the current candidate and a paginated, locally mirrored ticket history."""
-    analysis = build_priority_link_analysis(user, params.get("period"), state="all")
+    analysis = build_priority_link_analysis(user, params.get("period"), state="all", date_from=params.get("date_from",""), date_to=params.get("date_to",""))
     link = analysis["links"].filter(source_config_item_id=identifier).first()
     if link is None:
         return None
@@ -78,7 +78,7 @@ def get_priority_link_detail(user, identifier, params):
     valid_external_ids = set(occurrence_index)
     period_occurrences = [
         item for item in recurrence_summary.get("occurrences", ())
-        if analysis["cutoff"] <= item["occurred_at"] <= analysis["now"]
+        if analysis["cutoff"] <= item["occurred_at"] < analysis["end_exclusive"]
     ]
     period_recurrence_ids = {
         item["external_id"] for item in period_occurrences if item.get("is_recurrence")
@@ -139,7 +139,7 @@ def get_priority_link_detail(user, identifier, params):
             ticket.exclusion_label = "Válida"
             review_in_window = bool(
                 review
-                and analysis["cutoff"] <= review.occurred_at <= analysis["now"]
+                and analysis["cutoff"] <= review.occurred_at < analysis["end_exclusive"]
             )
             if (review_in_window and review.counts_as_recurrence and review.same_root_cause
                     and not review.excluded):
@@ -180,9 +180,10 @@ def get_priority_link_detail(user, identifier, params):
 
     return {
         "link": link,
-        "period": analysis["period"],
+        "period": analysis["period"], "period_label":analysis["period_label"],
+        "date_from":analysis["date_from"], "date_to":analysis["date_to"], "filter_notices":analysis["notices"],
         "operational_state_filter": state_filter,
-        "period_options": QUALITY_PRIORITY_PERIOD_OPTIONS,
+        "period_options": analysis["period_options"],
         "first_occurrence": first_occurrence,
         "last_occurrence": recurrence_summary.get("last_occurrence"),
         "valid_occurrence_count": valid_tickets.count(),

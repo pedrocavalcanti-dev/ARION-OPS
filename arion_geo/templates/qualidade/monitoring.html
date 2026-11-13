@@ -13,37 +13,41 @@
     </div>
   </header>
 
+  <p class="quality-list-period">Janela gerencial · {{ period_label }} · ciclos ativos preservados independentemente da data de início.</p>
   <section class="quality-monitoring-kpis" aria-label="Resumo dos ciclos RREIP">
-    <a href="?tab=active"{% if selected.tab == "active" %} aria-current="page"{% endif %}><span>Ativos</span><strong>{{ active_count }}</strong></a>
-    <a href="?tab=ending"{% if selected.tab == "ending" %} aria-current="page"{% endif %}><span>Terminando</span><strong>{{ ending_count }}</strong></a>
-    <a href="?tab=recurrence"{% if selected.tab == "recurrence" %} aria-current="page"{% endif %}><span>Reincidiram</span><strong>{{ recurrence_count }}</strong></a>
-    <a href="?tab=completed"{% if selected.tab == "completed" %} aria-current="page"{% endif %}><span>Concluídos</span><strong>{{ completed_count }}</strong></a>
+    <a href="?{{ tab_query }}&amp;tab=active"{% if selected.tab == "active" %} aria-current="page"{% endif %}><span>Ativos</span><strong>{{ active_count }}</strong></a>
+    <a href="?{{ tab_query }}&amp;tab=ending"{% if selected.tab == "ending" %} aria-current="page"{% endif %}><span>Terminando</span><strong>{{ ending_count }}</strong></a>
+    <a href="?{{ tab_query }}&amp;tab=recurrence"{% if selected.tab == "recurrence" %} aria-current="page"{% endif %}><span>Reincidiram</span><strong>{{ recurrence_count }}</strong></a>
+    <a href="?{{ tab_query }}&amp;tab=completed"{% if selected.tab == "completed" %} aria-current="page"{% endif %}><span>Concluídos</span><strong>{{ completed_count }}</strong></a>
   </section>
 
   <nav class="quality-monitoring-tabs" aria-label="Filtrar ciclos RREIP">
-    {% for tab in tabs %}<a href="?tab={{ tab.key }}&amp;q={{ selected.q|urlencode }}&amp;client={{ selected.client|urlencode }}&amp;project={{ selected.project|urlencode }}&amp;isp={{ selected.isp|urlencode }}&amp;uf={{ selected.uf|urlencode }}&amp;owner={{ selected.owner|urlencode }}&amp;result={{ selected.result|urlencode }}&amp;date_from={{ selected.date_from|urlencode }}&amp;date_to={{ selected.date_to|urlencode }}&amp;per_page={{ page_size }}"{% if selected.tab == tab.key %} aria-current="page"{% endif %}>{{ tab.label }} <span>{{ tab.count }}</span></a>{% endfor %}
+    {% for tab in tabs %}<a href="?tab={{ tab.key }}&amp;period={{ period|urlencode }}&amp;region={{ selected.region|urlencode }}&amp;q={{ selected.q|urlencode }}&amp;client={{ selected.client|urlencode }}&amp;project={{ selected.project|urlencode }}&amp;isp={{ selected.isp|urlencode }}&amp;uf={{ selected.uf|urlencode }}&amp;owner={{ selected.owner|urlencode }}&amp;result={{ selected.result|urlencode }}&amp;date_from={{ selected.date_from|urlencode }}&amp;date_to={{ selected.date_to|urlencode }}&amp;per_page={{ page_size }}"{% if selected.tab == tab.key %} aria-current="page"{% endif %}>{{ tab.label }} <span>{{ tab.count }}</span></a>{% endfor %}
   </nav>
 
   <form class="quality-contact-toolbar quality-monitoring-toolbar" method="get" aria-label="Buscar e filtrar ciclos">
     <input type="hidden" name="tab" value="{{ selected.tab }}">
     <label class="quality-search-field"><span class="quality-sr-only">Buscar OQ, Designação, cliente, projeto ou provedor</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{ selected.q }}" placeholder="Buscar OQ, Designação, cliente, projeto..."></label>
-    <details class="quality-list-filter-details"{% if selected.client or selected.project or selected.isp or selected.uf or selected.owner or selected.result or date_from or date_to %} open{% endif %}>
-      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Filtros</summary>
+  {% include "qualidade/_primary_filters.html" with filter_options=primary_options %}
+    <details class="quality-list-filter-details"{% if selected.isp or selected.owner or selected.result %} open{% endif %}>
+      <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Opções avançadas{% if filter_chips %}<span>{{ filter_chips|length }}</span>{% endif %}</summary>
       <div class="quality-list-filter-panel">
-        <label>Cliente<select name="client"><option value="">Todos</option>{% for item in filter_options.client %}<option value="{{ item }}"{% if selected.client == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
-        <label>Projeto<select name="project"><option value="">Todos</option>{% for item in filter_options.project %}<option value="{{ item }}"{% if selected.project == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+
+
         <label>ISP / Provedor<select name="isp"><option value="">Todos</option>{% for item in filter_options.isp %}<option value="{{ item }}"{% if selected.isp == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
-        <label>UF<select name="uf"><option value="">Todas</option>{% for item in filter_options.uf %}<option value="{{ item }}"{% if selected.uf == item %} selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+
         <label>Responsável<select name="owner"><option value="">Todos</option>{% for value,label in filter_options.owner %}<option value="{{ value }}"{% if selected.owner == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
         <label>Resultado<select name="result"><option value="">Todos</option>{% for value,label in filter_options.result %}<option value="{{ value }}"{% if selected.result == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-        <label>Início a partir de<input type="date" name="date_from" value="{{ date_from }}"></label>
-        <label>Fim previsto até<input type="date" name="date_to" value="{{ date_to }}"></label>
-        <div class="quality-list-filter-actions"><a href="{% url 'qualidade:monitoramento' %}?tab={{ selected.tab }}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
+
+
+        <div class="quality-list-filter-actions"><a href="{% url 'qualidade:monitoramento' %}?tab={{ selected.tab }}&amp;period=30">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
       </div>
     </details>
     <label class="quality-contact-page-size"><span>Por página</span><select name="per_page"><option value="25"{% if page_size == 25 %} selected{% endif %}>25</option><option value="50"{% if page_size == 50 %} selected{% endif %}>50</option><option value="100"{% if page_size == 100 %} selected{% endif %}>100</option></select></label>
     <button class="quality-list-submit" type="submit">Buscar</button>
   </form>
+{% include "qualidade/_filter_feedback.html" %}
+{% include "qualidade/_active_filters.html" %}
 
   {% if cycles %}
     <section class="quality-monitoring-table-wrap" aria-label="Ciclos de monitoramento">

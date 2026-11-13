@@ -1,0 +1,7 @@
+<div class="quality-primary-filters" data-quality-dimensions>
+  <label class="quality-toolbar-control"><span>Operadora / Cliente contratante</span><select name="{{ client_name|default:'client' }}" data-quality-client><option value="">Todas as operadoras</option>{% for option in filter_options.clients %}<option value="{{ option }}"{% if selected.client == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+  <label class="quality-toolbar-control"><span>Projeto / Cliente final</span><select name="{{ project_name|default:'project' }}" data-quality-project><option value="">Todos os projetos</option>{% for option in filter_options.projects %}<option value="{{ option }}"{% if selected.project == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+  <label class="quality-toolbar-control"><span>Macrorregião</span><select name="region" data-quality-region><option value="">Brasil</option>{% for value,label in filter_options.regions %}<option value="{{ value }}"{% if selected.region == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <label class="quality-toolbar-control"><span>UF</span><select name="uf" data-quality-uf><option value="">Todas as UFs</option>{% for option in filter_options.ufs %}<option value="{{ option }}"{% if selected.uf == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+  {% if period_options %}{% include "qualidade/_period_filter.html" %}{% endif %}
+</div>

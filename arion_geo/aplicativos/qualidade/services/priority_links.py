@@ -12,6 +12,7 @@ from aplicativos.integracoes.services.semantics import provider_filter_queryset,
 
 from ..models import QualityOccurrence, QualityOrder
 from .constants import QUALITY_BUSINESS_PRIORITY, QUALITY_LIST_PAGE_SIZES, QUALITY_PRIORITY_DEFAULT_PERIOD, QUALITY_PRIORITY_PERIOD_OPTIONS
+from .filters import quality_period, dimension_catalog, resolve_dimensions, filter_links, strategic_rank
 from .data_scope import QualityDataScopeService
 from .recurrence import ACTIVE_RECURRENCE, build_quality_recurrence_analysis
 from .ticket_validity import quality_ticket_sets
@@ -53,28 +54,21 @@ def _scoped_orders(user):
     return QualityDataScopeService.orders_for(user)
 
 
-def business_priority(provider_name, project_name, client_name=""):
+def business_priority(provider_name, project_name, client_name=None):
     """Return an explicit attention rank; it never changes recurrence metrics."""
-    from aplicativos.integracoes.services.project_names import canonical_project_name, project_comparison_key
+    # Two-argument callers keep their legacy contract. Rows always provide the
+    # contracting client explicitly; a blank client never becomes an ISP.
+    return strategic_rank(provider_name if client_name is None else client_name, project_name)
 
-    provider = project_comparison_key(provider_name)
-    project = project_comparison_key(canonical_project_name(project_name))
-    client = project_comparison_key(client_name)
-    if client == "FUST" or project == "FUST":
-        return QUALITY_BUSINESS_PRIORITY[("FUST", "")]
-    return QUALITY_BUSINESS_PRIORITY.get((provider, project), 99)
 
 
 def build_priority_link_analysis(
-    user, period_value=QUALITY_PRIORITY_DEFAULT_PERIOD, *, state="active",
+    user, period_value=QUALITY_PRIORITY_DEFAULT_PERIOD, *, state="active", date_from="", date_to="",
 ):
     """Build the shared, scoped source and annotations for priority link views."""
     now = timezone.now()
-    allowed_periods = {value for value, _label in QUALITY_PRIORITY_PERIOD_OPTIONS}
-    period = _bounded(period_value, 4)
-    if period not in allowed_periods:
-        period = QUALITY_PRIORITY_DEFAULT_PERIOD
-    cutoff = now - timedelta(days=int(period))
+    window = quality_period({"period":period_value,"date_from":date_from,"date_to":date_to}, now)
+    period, cutoff = window["period"], window["cutoff"]
 
     scoped_orders = _scoped_orders(user)
     scope_links = DataScopeService.filter_queryset(
@@ -84,8 +78,8 @@ def build_priority_link_analysis(
     recurrence = build_quality_recurrence_analysis(
         user, scope_links=scope_links, scoped_orders=scoped_orders, now=now,
     )
-    period_tickets = recurrence["period_tickets"].filter(source_created_at__gte=cutoff)
-    valid_tickets = recurrence["valid_tickets"].filter(source_created_at__gte=cutoff)
+    period_tickets = recurrence["period_tickets"].filter(source_created_at__gte=cutoff, source_created_at__lt=window["end_exclusive"])
+    valid_tickets = recurrence["valid_tickets"].filter(source_created_at__gte=cutoff, source_created_at__lt=window["end_exclusive"])
 
     active_orders = scoped_orders.filter(status__in=ACTIVE_ORDER_STATUSES).order_by(
         Case(
@@ -115,6 +109,8 @@ def build_priority_link_analysis(
             config_item_id for config_item_id, summary in recurrence["links"].items()
             if summary["is_active_recurrence"]
         }
+    if state=="active":
+        candidate_ids.update(value for value in active_order_ids if value)
     recurrence_ticket_ids = set()
     for config_item_id, summary in recurrence["links"].items():
         if state == "active":
@@ -126,7 +122,7 @@ def build_priority_link_analysis(
         recurrence_ticket_ids.update(
             (config_item_id, item["external_id"])
             for episode in episodes
-            for item in episode.occurrences[1:]
+            for item in episode.occurrences[1:] if cutoff <= item["occurred_at"] < window["end_exclusive"]
         )
     same_cause_by_link = {}
     if recurrence_ticket_ids:
@@ -151,6 +147,7 @@ def build_priority_link_analysis(
         active_level=Subquery(active_order.values("recurrence_level")[:1]),
     )
     return {
+        **window,
         "now": now,
         "cutoff": cutoff,
         "period": period,
@@ -173,14 +170,14 @@ def get_priority_links(user, params):
     analysis = build_priority_link_analysis(
         user,
         params.get("period", QUALITY_PRIORITY_DEFAULT_PERIOD),
-        state=selected_state,
+        state=selected_state, date_from=params.get("date_from",""), date_to=params.get("date_to",""),
     )
     now = analysis["now"]
     period = analysis["period"]
 
     selected = {
         key: _bounded(params.get(key), 160 if key == "q" else 300)
-        for key in ("q", "client", "project", "isp", "uf", "level", "priority", "oq", "status", "reason", "portfolio")
+        for key in ("q", "client", "project", "isp", "region", "uf", "level", "priority", "oq", "status", "reason", "portfolio")
     }
     selected["state"] = selected_state
     if selected["level"] not in {value for value, _label in QualityOrder.RecurrenceLevel.choices} | {"UNCLASSIFIED"}:
@@ -211,12 +208,10 @@ def get_priority_links(user, params):
     links = analysis["links"]
     valid_tickets = analysis["valid_tickets"]
     scope_links = analysis["scope_links"]
-    raw_projects = list(scope_links.values_list("business_project", flat=True))
-    raw_projects.extend(scope_links.values_list("legacy_project", flat=True))
-    project_groups = project_alias_groups(raw_projects)
-    project_aliases = project_groups.get(canonical_project_name(selected["project"]), ()) if selected["project"] else ()
-    if selected["project"] and project_aliases:
-        selected["project"] = display_project_name(selected["project"])
+    catalog = dimension_catalog(scope_links, scoped_orders)
+    dimensions = resolve_dimensions(selected, catalog)
+    links = filter_links(links, dimensions)
+    project_options = catalog["projects_by_client"].get(selected["client"], []) if selected["client"] else catalog["projects"]
 
     if selected["q"]:
         term = selected["q"]
@@ -229,11 +224,6 @@ def get_priority_links(user, params):
             | Q(business_project__icontains=term)
             | Q(legacy_project__icontains=term)
         )
-    for key, field in (("client", "contracting_client"), ("uf", "state")):
-        if selected[key]:
-            links = links.filter(**{field: selected[key]})
-    if project_aliases:
-        links = links.filter(Q(business_project__in=project_aliases) | Q(legacy_project__in=project_aliases))
     if selected["isp"]:
         links = provider_filter_queryset(links, selected["isp"])
     if selected["level"] == "UNCLASSIFIED":
@@ -286,7 +276,7 @@ def get_priority_links(user, params):
         row.project_display = display_project_name(row.business_project or row.legacy_project)
         summary = recurrence_by_link.get(row.source_config_item_id, {})
         occurrences = summary.get("occurrences", ())
-        in_period = [item for item in occurrences if analysis["cutoff"] <= item["occurred_at"] <= now]
+        in_period = [item for item in occurrences if analysis["cutoff"] <= item["occurred_at"] < analysis["end_exclusive"]]
         row.is_active_recurrence = bool(summary.get("is_active_recurrence"))
         row.is_stabilized = bool(summary.get("is_stabilized"))
         row.operational_state = summary.get("operational_state", "NO_VALID_OCCURRENCES")
@@ -332,7 +322,7 @@ def get_priority_links(user, params):
     elif ordering == "occurrences":
         rows.sort(key=lambda row: (-row.period_occurrence_count, -row.period_recurrence_count, -timestamp(row), row.source_config_item_id))
     elif ordering == "recurrences":
-        rows.sort(key=lambda row: (-row.recurrence_count, -timestamp(row), -row.period_occurrence_count, row.source_config_item_id))
+        rows.sort(key=lambda row: (-row.period_recurrence_count, -timestamp(row), -row.period_occurrence_count, row.source_config_item_id))
     else:
         rows.sort(key=lambda row: (
             not row.is_active_recurrence,
@@ -369,16 +359,21 @@ def get_priority_links(user, params):
         is_present_in_source=True,
     )
     options = {
-        "clients": list(scope_links.exclude(contracting_client="").order_by("contracting_client").values_list("contracting_client", flat=True).distinct()),
-        "projects": sorted({display_project_name(name) for name in raw_projects if name}, key=str.casefold),
-        "ufs": list(scope_links.exclude(state="").order_by("state").values_list("state", flat=True).distinct()),
+        "clients": catalog["clients"],
+        "projects": project_options,
+        "ufs": catalog["ufs_by_region"].get(selected["region"],[]) if selected["region"] else catalog["ufs"],
+        "regions": catalog["regions"],
         "isps": provider_name_options(scope_links),
     }
     return {
+        "filter_catalog": catalog,
+        "filter_notices": analysis["notices"] + dimensions["notices"],
+        "period_label": analysis["period_label"],
+        "date_from": analysis["date_from"], "date_to": analysis["date_to"],
         "page_obj": page,
         "rows": rows,
         "period": period,
-        "period_options": QUALITY_PRIORITY_PERIOD_OPTIONS,
+        "period_options": analysis["period_options"],
         "state_options": (("active", "Ativos"), ("stabilized", "Estabilizados"), ("all", "Todos")),
         "page_size": page_size,
         "page_sizes": PAGE_SIZES,

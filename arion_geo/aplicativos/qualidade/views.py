@@ -93,6 +93,11 @@ logger = logging.getLogger(__name__)
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 def dashboard(request):
     context = get_dashboard_data(request.user, request.GET)
+    filters=context["filters"]
+    context["primary_selected"]={**filters,"client":filters["cliente"],"project":filters["projeto"]}
+    options=context["filter_options"]
+    context["primary_options"]={"clients":options["cliente"],"projects":options["projeto"],"ufs":options["uf"],"regions":options["regions"]}
+    context["filter_chips"]=_filter_chips(request, filters, filters["period"] if filters["period"]!=QUALITY_PRIORITY_DEFAULT_PERIOD else None)
     context["active_section"] = "overview"
     context["chart_data"] = {
         "evolution": context["evolution"],
@@ -122,7 +127,7 @@ def priority_links(request):
         "active_section": "links",
         "page_title": "Links prioritários",
         "page_subtitle": "Identifique os circuitos que exigem maior atenção da Qualidade.",
-        "page_query": _page_query(request),
+        "page_query": _quality_filter_query(request, context),
         "filter_chips": _filter_chips(
             request,
             context["selected"],
@@ -204,9 +209,15 @@ def link_options(request):
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 def orders(request):
     context = get_quality_orders_queue(request.user, request.GET)
+    page_query = _quality_filter_query(request, context)
     tab_links = []
     for tab in context["tabs"]:
         query = request.GET.copy()
+        for key, value in context["selected"].items():
+            if value:
+                query[key] = value
+            else:
+                query.pop(key, None)
         query["tab"] = tab["key"]
         query.pop("page", None)
         tab_links.append({**tab, "url": f"{reverse('qualidade:ordens')}?{query.urlencode()}"})
@@ -215,7 +226,7 @@ def orders(request):
         "active_section": "orders",
         "page_title": "Ordens de Qualidade",
         "page_subtitle": "Acompanhe os casos de reincidência, responsáveis, prazos, tratativas e monitoramentos.",
-        "page_query": _page_query(request),
+        "page_query": page_query,
         "filter_chips": _filter_chips(
             request,
             context["selected"],
@@ -236,6 +247,25 @@ def _page_query(request):
     return query.urlencode()
 
 
+def _quality_filter_query(request, context, *, exclude_keys=()):
+    query = request.GET.copy()
+    query.pop("page", None)
+    for key in exclude_keys:
+        query.pop(key, None)
+    values = dict(context.get("selected") or {})
+    for key in ("period", "date_from", "date_to"):
+        if key in context:
+            values[key] = context[key]
+    for key, value in values.items():
+        if key in exclude_keys:
+            continue
+        if value:
+            query[key] = value
+        else:
+            query.pop(key, None)
+    return query.urlencode()
+
+
 def _query_without(request, *keys):
     query = request.GET.copy()
     for key in keys:
@@ -245,23 +275,28 @@ def _query_without(request, *keys):
 
 def _filter_chips(request, selected, period=None, owner_labels=None):
     labels = {
-        "q": "Busca", "period": "Período", "client": "Cliente", "project": "Projeto", "isp": "ISP", "uf": "UF",
+        "q": "Busca", "period": "Período", "client": "Operadora", "project": "Projeto", "isp": "ISP", "uf": "UF",
         "level": "Nível", "priority": "Prioridade", "oq": "OQ", "status": "Status", "reason": "Motivo",
         "owner": "Responsável", "due": "Prazo", "rreip": "RREIP", "portfolio": "Carteira",
-        "state": "Estado operacional",
+        "state": "Estado operacional", "region":"Macrorregião", "cliente":"Operadora", "projeto":"Projeto",
     }
     chips = []
     values = dict(selected)
     if period:
         values["period"] = period
     for key, value in values.items():
+        if key in {"date_from","date_to","concentration_by","group_by","tab"} or (key=="period" and value==QUALITY_PRIORITY_DEFAULT_PERIOD):
+            continue
         if not value:
             continue
         if key == "state" and value == "active":
             continue
         display_value = value
         if key == "period":
-            display_value = f"{value} dias"
+            display_value = f"{request.GET.get('date_from','')} – {request.GET.get('date_to','')}" if value=="custom" else f"{value} dias"
+        elif key == "region":
+            from aplicativos.integracoes.services.geography import REGIONS
+            display_value=next((r["nome"] for r in REGIONS if r["sigla"]==value),value)
         elif key == "status":
             display_value = dict(QualityOrder.Status.choices).get(value, value)
         elif key == "priority":
@@ -283,8 +318,18 @@ def _filter_chips(request, selected, period=None, owner_labels=None):
         elif key == "state":
             display_value = {"active": "Ativos", "stabilized": "Estabilizados", "all": "Todos"}.get(value, value)
         query = request.GET.copy()
+        for field,normalized in selected.items():
+            if normalized:
+                query[field]=normalized
+            else:
+                query.pop(field,None)
         query.pop(key, None)
         query.pop("page", None)
+        if key=="period":
+            query.pop("date_from",None)
+            query.pop("date_to",None)
+        if request.resolver_match.url_name in {"links_prioritarios","dashboard"}:
+            query.setdefault("period",QUALITY_PRIORITY_DEFAULT_PERIOD)
         chips.append({
             "label": labels.get(key, key),
             "value": display_value,
@@ -1296,11 +1341,16 @@ def contact_toggle(request, contact_id):
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 def monitoring(request):
     context = get_monitoring_queue(request.user, request.GET)
+    context["filter_chips"]=_filter_chips(request,context["selected"])
+    context["clear_filters_url"]=reverse("qualidade:monitoramento")+"?period=30"
+    options=context["filter_options"]
+    context["primary_options"]={"clients":options["client"],"projects":options["project"],"regions":options["regions"],"ufs":options["uf"]}
+    context["tab_query"] = _quality_filter_query(request, context, exclude_keys=("tab",))
     context.update({
         "active_section": "monitoring",
         "page_title": "Monitoramento RREIP",
         "page_subtitle": "Acompanhe os ciclos locais de verificação e identifique os próximos vencimentos.",
-        "page_query": _query_without(request, "page"),
+        "page_query": _quality_filter_query(request, context),
     })
     return render(request, "qualidade/monitoring.html", context)
 
@@ -1324,10 +1374,12 @@ def contacts(request):
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 def history(request):
     context = get_global_quality_history(request.user, request.GET)
+    context["filter_chips"]=_filter_chips(request,context["selected"])
+    context["clear_filters_url"]=reverse("qualidade:historico")+"?period=30"
     context.update({
         "active_section": "history",
         "page_title": "Histórico da Qualidade",
         "page_subtitle": "Consulte os eventos auditados das OQs e do diretório de contatos.",
-        "page_query": _query_without(request, "page"),
+        "page_query": _quality_filter_query(request, context),
     })
     return render(request, "qualidade/history.html", context)

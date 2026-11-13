@@ -19,14 +19,15 @@
       <p class="quality-link-ci">CI {{ link.source_config_item_id }}</p>
       <span class="quality-operational-state{% if is_active_recurrence %} quality-operational-state--active{% elif is_stabilized %} quality-operational-state--stabilized{% elif operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ operational_state_label }}</span>
     </div>
-    <span class="quality-link-period-label">Janela gerencial · {{ period }} dias</span>
+    <span class="quality-link-period-label">Janela gerencial · {{ period_label }}</span>
   </header>
+  {% include "qualidade/_filter_feedback.html" %}
 
   <section class="quality-link-summary" aria-label="Resumo do circuito">
     <dl class="quality-link-facts">
       <div><dt>Primeira ocorrência da janela</dt><dd>{% if first_occurrence %}{{ first_occurrence|date:"d/m/Y H:i" }}{% else %}—{% endif %}</dd></div>
       <div><dt>Última ocorrência</dt><dd>{% if last_occurrence %}{{ last_occurrence|date:"d/m/Y H:i" }}{% else %}—{% endif %}</dd></div>
-      <div><dt>Operadora / ISP</dt><dd>{{ link.provider_name|default:"—" }}</dd></div>
+      <div><dt>ISP / Provedor</dt><dd>{{ link.provider_name|default:"—" }}</dd></div>
       <div><dt>UF</dt><dd>{{ link.state|default:"—" }}</dd></div>
     </dl>
     <dl class="quality-link-episode-summary" aria-label="Estado operacional do episódio">
@@ -37,7 +38,7 @@
     </dl>
     <div class="quality-link-metrics">
       <article><span>Ocorrências válidas</span><strong>{{ valid_occurrence_count }}</strong><small>Tickets contabilizados após as regras de exclusão.</small></article>
-      <article><span>Reincidências na janela</span><strong>{{ recurrence_count }}</strong><small>{{ period }} dias gerenciais · episódio atual: {{ current_episode_recurrence_count }} reincidência{{ current_episode_recurrence_count|pluralize }}{% if is_active_recurrence %} · ativo{% elif is_stabilized %} · estabilizado{% elif operational_state == "NEW_EPISODE" %} · novo episódio{% else %} · ocorrência isolada{% endif %}</small></article>
+      <article><span>Reincidências na janela</span><strong>{{ recurrence_count }}</strong><small>{{ period_label }} gerenciais · episódio atual: {{ current_episode_recurrence_count }} reincidência{{ current_episode_recurrence_count|pluralize }}{% if is_active_recurrence %} · ativo{% elif is_stabilized %} · estabilizado{% elif operational_state == "NEW_EPISODE" %} · novo episódio{% else %} · ocorrência isolada{% endif %}</small></article>
       <article><span>Mesma causa confirmada</span><strong>{{ same_cause_recurrences }}</strong><small>A classificação depende da revisão da Qualidade.</small></article>
       <article><span>Nível da Qualidade</span><strong>{{ link.level_label }}</strong><small>Contagem da janela não define o nível formal da OQ.</small></article>
     </div>
@@ -66,7 +67,7 @@
       <div class="quality-link-history__counts"><span>{{ valid_history_count }} válidas</span><span>{{ excluded_history_count }} não contabilizadas</span></div>
     </header>
     <form id="quality-link-history-filters" class="quality-link-history-filters" method="get" action="{% url 'qualidade:priority_link_detail' identificador=link.source_config_item_id %}">
-      <label><span>Período</span><select name="period">{% for value,label in period_options %}<option value="{{ value }}"{% if period == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      {% include "qualidade/_period_filter.html" %}
       <label><span>Exibir</span><select name="history"><option value="all"{% if history_filter == 'all' %} selected{% endif %}>Todos os tickets</option><option value="valid"{% if history_filter == 'valid' %} selected{% endif %}>Válidos</option><option value="excluded"{% if history_filter == 'excluded' %} selected{% endif %}>Não contabilizados</option></select></label>
       <label><span>Ordem</span><select name="direction"><option value="recent"{% if direction == 'recent' %} selected{% endif %}>Mais recentes</option><option value="oldest"{% if direction == 'oldest' %} selected{% endif %}>Mais antigas</option></select></label>
       <button type="submit">Aplicar</button>

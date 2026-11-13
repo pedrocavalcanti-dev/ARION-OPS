@@ -1,4 +1,7 @@
 """Scoped OQ timeline and global Quality audit history."""
+from .filters import quality_period, dimension_catalog, resolve_dimensions, filter_orders
+from aplicativos.integracoes.models import CMDBLinkMirror
+from .constants import QUALITY_PRIORITY_PERIOD_OPTIONS
 from django.core.paginator import Paginator
 from django.db.models import CharField, F, Q
 from django.db import connection
@@ -80,16 +83,20 @@ def get_global_quality_history(user, params):
 
     selected = {
         key: str(params.get(key, "")).strip()[:180]
-        for key in ("q", "event", "user", "oq", "client", "project", "isp", "date_from", "date_to")
+        for key in ("q", "event", "user", "oq", "client", "project", "isp", "region", "uf", "date_from", "date_to")
     }
+    catalog=dimension_catalog(CMDBLinkMirror.objects.none(),orders,((client,project,"") for client,project in contacts.values_list("client","project").distinct()))
+    dimensions=resolve_dimensions(selected,catalog)
+    if dimensions["blocked"]:
+        queryset=queryset.none()
+    if selected["region"] or selected["uf"]:
+        queryset=queryset.filter(object_type="QualityOrder",object_id__in=_object_id_subquery(filter_orders(orders,dimensions)))
     if selected["isp"].isdigit():
         selected["isp"] = ""
-    start_date = parse_date(selected["date_from"])
-    end_date = parse_date(selected["date_to"])
-    if start_date:
-        queryset = queryset.filter(timestamp__date__gte=start_date)
-    if end_date:
-        queryset = queryset.filter(timestamp__date__lte=end_date)
+    window=quality_period(params)
+    selected.update(period=window["period"],date_from=window["date_from"],date_to=window["date_to"])
+    start_date,end_date=window["start_date"],window["end_date"]
+    queryset=queryset.filter(timestamp__gte=window["cutoff"],timestamp__lt=window["end_exclusive"])
     if selected["event"]:
         queryset = queryset.annotate(_quality_action=Collate("action", "utf8mb4_unicode_ci") if connection.vendor == "mysql" else F("action"))
         queryset = queryset.filter(_quality_action=selected["event"])
@@ -97,17 +104,19 @@ def get_global_quality_history(user, params):
         queryset = queryset.filter(user_id=int(selected["user"]))
 
     if selected["client"]:
-        order_ids = _object_id_subquery(orders.filter(client_snapshot__iexact=selected["client"]))
+        order_ids = _object_id_subquery(
+            orders.filter(
+                Q(client_snapshot__iexact=selected["client"])
+                | Q(link__contracting_client__iexact=selected["client"]),
+            ),
+        )
         contact_ids = _object_id_subquery(contacts.filter(client__iexact=selected["client"]))
         queryset = queryset.filter(
             Q(object_type="QualityOrder", object_id__in=order_ids)
             | Q(object_type="QualityContact", object_id__in=contact_ids)
         )
-    raw_project_values = list(orders.exclude(project_snapshot="").values_list("project_snapshot", flat=True))
-    raw_project_values.extend(orders.exclude(link__business_project="").values_list("link__business_project", flat=True))
-    raw_project_values.extend(orders.exclude(link__legacy_project="").values_list("link__legacy_project", flat=True))
-    raw_project_values.extend(contacts.exclude(project="").values_list("project", flat=True))
-    project_groups = project_alias_groups(raw_project_values)
+    project_groups=catalog["project_groups"]
+    raw_project_values=[value for aliases in project_groups.values() for value in aliases]
     project_key = canonical_project_name(selected["project"])
     if project_key not in project_groups:
         selected["project"] = ""
@@ -216,6 +225,7 @@ def get_global_quality_history(user, params):
         ) or "—"
         event.event_label = EVENT_LABELS.get(event.action, event.get_action_display() if hasattr(event, "get_action_display") else event.action.replace("_", " ").title())
         event.summary = _format_audit_summary(event)
+        event.actor_label=(event.user.get_full_name() or event.user.get_username()) if event.user_id else "Sistema"
         rows.append(event)
 
     client_options = set(orders.exclude(client_snapshot="").order_by().values_list("client_snapshot", flat=True).distinct())
@@ -229,6 +239,8 @@ def get_global_quality_history(user, params):
     )
     provider_options = set(provider_name_options_for_orders(orders)) | set(contact_provider_names.values())
     return {
+        "filter_catalog":catalog, "primary_options":{"clients":catalog["clients"],"projects":catalog["projects_by_client"].get(selected["client"],[]) if selected["client"] else catalog["projects"],"regions":catalog["regions"],"ufs":catalog["ufs_by_region"].get(selected["region"],[]) if selected["region"] else catalog["ufs"]},
+        "period":window["period"], "period_label":window["period_label"], "period_options":window["period_options"], "filter_notices":window["notices"]+dimensions["notices"],
         "history_page": page_obj,
         "history_events": rows,
         "selected": selected,
@@ -239,8 +251,8 @@ def get_global_quality_history(user, params):
         "client_options": sorted(client_options, key=str.casefold),
         "project_options": sorted(project_options, key=str.casefold),
         "provider_options": sorted(provider_options, key=str.casefold),
-        "date_from": start_date.isoformat() if start_date else "",
-        "date_to": end_date.isoformat() if end_date else "",
+        "date_from":window["date_from"],
+        "date_to":window["date_to"],
     }
 
 

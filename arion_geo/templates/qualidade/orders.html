@@ -14,17 +14,18 @@
 <form class="quality-list-toolbar quality-orders-toolbar" method="get" action="{% url 'qualidade:ordens' %}" aria-label="Busca e filtros de Ordens de Qualidade">
   <input type="hidden" name="tab" value="{{ selected_tab }}">
   <label class="quality-search-field"><span class="quality-sr-only">Buscar OQ, link, CI ou cliente</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{ selected.q }}" placeholder="Buscar OQ, link, CI ou cliente…"></label>
-  <details class="quality-list-filter-details"{% if selected.status or selected.priority or selected.level or selected.owner or selected.client or selected.project or selected.isp or selected.uf or selected.due or selected.rreip %} open{% endif %}>
-    <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Filtros{% if filter_chips %}<span>{{ filter_chips|length }}</span>{% endif %}</summary>
+  {% include "qualidade/_primary_filters.html" %}
+  <details class="quality-list-filter-details"{% if selected.status or selected.priority or selected.level or selected.owner or selected.isp or selected.due or selected.rreip %} open{% endif %}>
+    <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Opções avançadas{% if filter_chips %}<span>{{ filter_chips|length }}</span>{% endif %}</summary>
     <div class="quality-list-filter-panel quality-order-filter-panel">
       <label>Status<select name="status"><option value="">Todos</option>{% for value,label in status_options %}<option value="{{ value }}"{% if selected.status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <label>Prioridade<select name="priority"><option value="">Todas</option>{% for value,label in priority_options %}<option value="{{ value }}"{% if selected.priority == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <label>Nível<select name="level"><option value="">Todos</option>{% for value,label in level_options %}<option value="{{ value }}"{% if selected.level == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
       <label>Responsável<select name="owner"><option value="">Todos</option><option value="unassigned"{% if selected.owner == 'unassigned' %} selected{% endif %}>Não atribuído</option>{% for owner in filter_options.owners %}<option value="{{ owner.pk }}"{% if selected.owner == owner.pk|stringformat:"s" %} selected{% endif %}>{{ owner.get_full_name|default:owner.username }}</option>{% endfor %}</select></label>
-      <label>Cliente<select name="client"><option value="">Todos</option>{% for option in filter_options.clients %}<option value="{{ option }}"{% if selected.client == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-      <label>Projeto<select name="project"><option value="">Todos</option>{% for option in filter_options.projects %}<option value="{{ option }}"{% if selected.project == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+
+
       <label>ISP<select name="isp"><option value="">Todos</option>{% for option in filter_options.isps %}<option value="{{ option }}"{% if selected.isp == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-      <label>UF<select name="uf"><option value="">Todas</option>{% for option in filter_options.ufs %}<option value="{{ option }}"{% if selected.uf == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+
       <label>Prazo<select name="due"><option value="">Qualquer</option><option value="overdue"{% if selected.due == 'overdue' %} selected{% endif %}>Vencidas</option><option value="soon"{% if selected.due == 'soon' %} selected{% endif %}>Vence em até 3 dias</option><option value="none"{% if selected.due == 'none' %} selected{% endif %}>Sem prazo</option></select></label>
       <label>RREIP<select name="rreip"><option value="">Qualquer</option><option value="active"{% if selected.rreip == 'active' %} selected{% endif %}>Com ciclo ativo</option><option value="none"{% if selected.rreip == 'none' %} selected{% endif %}>Sem ciclo ativo</option></select></label>
       <div class="quality-list-filter-actions"><a href="{% url 'qualidade:ordens' %}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
@@ -33,6 +34,7 @@
   <label class="quality-toolbar-control quality-page-size"><span>Por página</span><select name="per_page">{% for size in page_sizes %}<option value="{{ size }}"{% if page_size == size %} selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
   <button class="quality-list-submit" type="submit">Aplicar</button>
 </form>
+{% include "qualidade/_filter_feedback.html" %}
 {% if filter_chips %}<div class="quality-active-filters" aria-label="Filtros ativos">{% for chip in filter_chips %}<a href="{{ chip.remove_url }}" class="quality-filter-chip"><span>{{ chip.label }}: {{ chip.value }}</span><span aria-hidden="true">×</span></a>{% endfor %}<a class="quality-clear-filters" href="{% url 'qualidade:ordens' %}">Limpar filtros</a></div>{% endif %}
 
 <section class="quality-list-panel" aria-label="Fila de Ordens de Qualidade">

@@ -22,6 +22,7 @@ from aplicativos.integracoes.services.semantics import (
 
 from ..models import QualityAuditEvent, QualityMonitoringCycle, QualityOrder
 from .constants import QUALITY_LIST_PAGE_SIZES
+from .filters import dimension_catalog, resolve_dimensions, filter_orders
 from .data_scope import QualityDataScopeService
 
 UserModel = get_user_model()
@@ -67,7 +68,7 @@ def get_quality_orders_queue(user, params):
     now = timezone.now()
     selected = {
         key: _clean(params.get(key), 160 if key == "q" else 300)
-        for key in ("q", "status", "priority", "level", "owner", "client", "project", "isp", "uf", "due", "rreip")
+        for key in ("q", "status", "priority", "level", "owner", "client", "project", "isp", "region", "uf", "due", "rreip")
     }
     status_values = {value for value, _label in QualityOrder.Status.choices}
     priority_values = {value for value, _label in QualityOrder.Priority.choices}
@@ -106,17 +107,10 @@ def get_quality_orders_queue(user, params):
         page_size = 25
 
     scoped = QualityDataScopeService.orders_for(user).select_related("owner", "link")
-    raw_projects = list(scoped.values_list("project_snapshot", flat=True))
-    raw_projects.extend(scoped.values_list("link__business_project", flat=True))
-    raw_projects.extend(scoped.values_list("link__legacy_project", flat=True))
-    project_groups = project_alias_groups(raw_projects)
-    project_options = sorted({display_project_name(value) for value in raw_projects if value}, key=str.casefold)
-    project_key = canonical_project_name(selected["project"])
-    if project_key not in {canonical_project_name(value) for value in project_options}:
-        selected["project"] = ""
-        project_key = ""
-    else:
-        selected["project"] = display_project_name(project_key)
+    scope_links = DataScopeService.filter_queryset(user, CMDBLinkMirror.objects.filter(is_present_in_source=True))
+    catalog=dimension_catalog(scope_links,scoped)
+    dimensions=resolve_dimensions(selected,catalog)
+    project_options=catalog["projects_by_client"].get(selected["client"],[]) if selected["client"] else catalog["projects"]
     cycle_query = QualityMonitoringCycle.objects.filter(
         quality_order_id=OuterRef("pk"), result=QualityMonitoringCycle.Result.IN_PROGRESS,
     )
@@ -126,6 +120,7 @@ def get_quality_orders_queue(user, params):
         last_activity=Coalesce(Subquery(latest_event.values("created_at")[:1]), F("updated_at")),
     )
 
+    base=filter_orders(base,dimensions)
     if selected["q"]:
         term = selected["q"]
         base = base.filter(
@@ -148,15 +143,8 @@ def get_quality_orders_queue(user, params):
         "level": "recurrence_level",
     }
     for key, field in filter_fields.items():
-        if selected[key] and key != "project":
+        if selected[key] and key not in {"project","client","uf"}:
             base = base.filter(**{field: selected[key]})
-    if project_key:
-        aliases = project_groups.get(project_key, ())
-        base = base.filter(
-            Q(project_snapshot__in=aliases)
-            | Q(link__business_project__in=aliases)
-            | Q(link__legacy_project__in=aliases),
-        )
     if selected["isp"]:
         base = provider_filter_order_queryset(base, selected["isp"])
     if selected["owner"] == "unassigned":
@@ -252,6 +240,7 @@ def get_quality_orders_queue(user, params):
     )
     provider_options = provider_name_options_for_orders(scoped)
     return {
+        "filter_catalog":catalog, "filter_notices":dimensions["notices"],
         "page_obj": page,
         "rows": rows,
         "counts": counts,
@@ -264,10 +253,10 @@ def get_quality_orders_queue(user, params):
         "priority_options": QualityOrder.Priority.choices,
         "level_options": QualityOrder.RecurrenceLevel.choices,
         "filter_options": {
-            "clients": _filter_options(scoped, "client_snapshot"),
+            "clients": catalog["clients"],
             "projects": project_options,
             "isps": provider_options,
-            "ufs": _filter_options(scoped, "uf_snapshot"),
+            "ufs":catalog["ufs_by_region"].get(selected["region"],[]) if selected["region"] else catalog["ufs"], "regions":catalog["regions"],
             "owners": owner_options,
         },
         "links_for_create": scoped_links,

@@ -1,3 +1,6 @@
+from aplicativos.integracoes.models import CMDBLinkMirror
+from .filters import dimension_catalog, resolve_dimensions, filter_orders as apply_order_dimensions, quality_period
+from .constants import QUALITY_PRIORITY_PERIOD_OPTIONS
 from datetime import datetime, time, timedelta
 
 from django.core.exceptions import ValidationError
@@ -302,6 +305,7 @@ def _complete_checklist_milestone(order, title, actor, treatment_code, cycle_num
 
 
 def get_monitoring_queue(user, params):
+    now = timezone.now()
     today = timezone.localdate()
     orders = QualityDataScopeService.orders_for(user)
     queryset = QualityMonitoringCycle.objects.filter(quality_order_id__in=orders.values("pk")).select_related(
@@ -310,7 +314,7 @@ def get_monitoring_queue(user, params):
     )
     selected = {
         key: str(params.get(key, "")).strip()[:160]
-        for key in ("q", "tab", "client", "project", "isp", "uf", "owner", "result", "date_from", "date_to")
+        for key in ("q", "tab", "client", "project", "isp", "region", "uf", "owner", "result", "date_from", "date_to")
     }
     if selected["tab"] not in {key for key, _label in MONITORING_TABS}:
         selected["tab"] = "active"
@@ -318,17 +322,10 @@ def get_monitoring_queue(user, params):
         selected["result"] = ""
     if selected["isp"].isdigit():
         selected["isp"] = ""
-    raw_projects = list(orders.values_list("project_snapshot", flat=True))
-    raw_projects.extend(orders.values_list("link__business_project", flat=True))
-    raw_projects.extend(orders.values_list("link__legacy_project", flat=True))
-    project_groups = project_alias_groups(raw_projects)
-    project_options = sorted({display_project_name(value) for value in raw_projects if value}, key=str.casefold)
-    project_key = canonical_project_name(selected["project"])
-    if project_key not in {canonical_project_name(value) for value in project_options}:
-        selected["project"] = ""
-        project_key = ""
-    else:
-        selected["project"] = display_project_name(project_key)
+    catalog=dimension_catalog(CMDBLinkMirror.objects.none(),orders)
+    dimensions=resolve_dimensions(selected,catalog)
+    project_options=catalog["projects_by_client"].get(selected["client"],[]) if selected["client"] else catalog["projects"]
+    queryset=queryset.filter(quality_order_id__in=apply_order_dimensions(orders,dimensions).values("pk"))
     if selected["q"]:
         term = selected["q"]
         queryset = queryset.filter(
@@ -343,16 +340,6 @@ def get_monitoring_queue(user, params):
             | Q(quality_order__owner__last_name__icontains=term)
             | Q(trigger_occurrence__ticket_number__icontains=term)
         )
-    for key, field in (("client", "quality_order__client_snapshot"), ("uf", "quality_order__uf_snapshot")):
-        if selected[key]:
-            queryset = queryset.filter(**{f"{field}__iexact": selected[key]})
-    if project_key:
-        aliases = project_groups.get(project_key, ())
-        queryset = queryset.filter(
-            Q(quality_order__project_snapshot__in=aliases)
-            | Q(quality_order__link__business_project__in=aliases)
-            | Q(quality_order__link__legacy_project__in=aliases)
-        )
     if selected["isp"]:
         matching_orders = provider_filter_order_queryset(orders, selected["isp"]).order_by().values("pk")
         queryset = queryset.filter(quality_order_id__in=matching_orders)
@@ -364,16 +351,11 @@ def get_monitoring_queue(user, params):
         selected["owner"] = ""
     if selected["result"]:
         queryset = queryset.filter(result=selected["result"])
-    start_date = _date_param(selected["date_from"])
-    end_date = _date_param(selected["date_to"])
-    selected["date_from"] = start_date.isoformat() if start_date else ""
-    selected["date_to"] = end_date.isoformat() if end_date else ""
-    if start_date:
-        start_at = timezone.make_aware(datetime.combine(start_date, time.min))
-        queryset = queryset.filter(started_at__gte=start_at)
-    if end_date:
-        end_before = timezone.make_aware(datetime.combine(end_date + timedelta(days=1), time.min))
-        queryset = queryset.filter(expected_end_at__lt=end_before)
+    window=quality_period(params,now)
+    selected.update(period=window["period"],date_from=window["date_from"],date_to=window["date_to"])
+    start_date, end_date=window["start_date"],window["end_date"]
+    # Current operational work is stock, even if the cycle started before the window.
+    queryset=queryset.filter(Q(result=QualityMonitoringCycle.Result.IN_PROGRESS)|Q(ended_at__gte=window["cutoff"],ended_at__lt=window["end_exclusive"]))
 
     # Counters are based on the Data Scope and current search/filter context, before the selected quick tab.
     scoped_cycles = queryset.order_by()
@@ -449,6 +431,8 @@ def get_monitoring_queue(user, params):
     filter_orders = orders
     owner_options = list(filter_orders.filter(monitoring_cycles__isnull=False).values_list("owner_id", "owner__first_name", "owner__last_name", "owner__username").distinct())
     return {
+        "filter_catalog":catalog, "filter_notices":window["notices"]+dimensions["notices"],
+        "period":window["period"], "period_label":window["period_label"], "period_options":window["period_options"],
         "cycles": cycles,
         "page_obj": page_obj,
         "tabs": tabs,
@@ -458,13 +442,13 @@ def get_monitoring_queue(user, params):
         "ending_count": ending_count,
         "recurrence_count": recurrence_count,
         "completed_count": completed_count,
-        "date_from": start_date.isoformat() if start_date else "",
-        "date_to": end_date.isoformat() if end_date else "",
+        "date_from": window["date_from"],
+        "date_to": window["date_to"],
         "filter_options": {
-            "client": _options(orders, "client_snapshot"),
+            "client":catalog["clients"],
             "project": project_options,
             "isp": provider_name_options_for_orders(orders),
-            "uf": _options(orders, "uf_snapshot"),
+            "uf":catalog["ufs_by_region"].get(selected["region"],[]) if selected["region"] else catalog["ufs"], "regions":catalog["regions"],
             "owner": [(str(pk) if pk else "unassigned", " ".join(part for part in (first, last) if part).strip() or username or "Não atribuído") for pk, first, last, username in owner_options],
             "result": list(QualityMonitoringCycle.Result.choices),
         },

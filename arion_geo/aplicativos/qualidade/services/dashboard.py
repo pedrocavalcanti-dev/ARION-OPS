@@ -29,20 +29,13 @@ from ..models import (
     QualityOrder,
 )
 from .constants import QUALITY_MONITORING_END_WARNING_DAYS, QUALITY_PRIORITY_PERIOD_OPTIONS
+from .filters import quality_period, dimension_catalog, resolve_dimensions, filter_links, filter_orders
 from .data_scope import QualityDataScopeService
 from .priority_links import ACTIVE_ORDER_STATUSES, business_priority, build_priority_link_analysis
 from .recurrence import build_quality_recurrence_analysis
 
-PERIOD_OPTIONS = (
-    ("7", "7 dias (Semana)"),
-    ("30", "30 dias"),
-    ("60", "60 dias"),
-    ("90", "90 dias"),
-    ("month", "Este mês"),
-    ("previous_month", "Mês anterior"),
-    ("180", "180 dias"),
-    ("365", "365 dias"),
-)
+PERIOD_OPTIONS = QUALITY_PRIORITY_PERIOD_OPTIONS
+
 
 _MONTHS = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
 _ATTENTION_ORDER = {
@@ -187,9 +180,9 @@ def _make_buckets(start_date, end_date, granularity):
 def _priority_links_url(selected, overrides=None):
     params = {}
     supported_periods = {value for value, _label in QUALITY_PRIORITY_PERIOD_OPTIONS}
-    if selected["period"] in supported_periods:
+    if selected["period"] in supported_periods|{"180","365","month","previous_month"}:
         params["period"] = selected["period"]
-    for dashboard_key, links_key in (("cliente", "client"), ("projeto", "project"), ("isp", "isp"), ("uf", "uf")):
+    for dashboard_key, links_key in (("cliente", "client"), ("projeto", "project"), ("isp", "isp"), ("uf", "uf"), ("region","region"), ("date_from","date_from"), ("date_to","date_to")):
         value = selected.get(dashboard_key)
         if value:
             params[links_key] = value
@@ -257,90 +250,36 @@ def get_dashboard_data(user, requested_filters=None):
     scoped_orders = QualityDataScopeService.orders_for(user).select_related("link", "link__operator", "owner")
     # The management period controls dashboard aggregation only. Recurrence remains
     # based on the complete, scoped mirror sequence and its fixed 30-day episodes.
-    priority_analysis = build_priority_link_analysis(user, "60")
+    priority_analysis = build_priority_link_analysis(user, requested_filters.get("period", "30"), date_from=requested_filters.get("date_from",""), date_to=requested_filters.get("date_to",""))
     scope_links = priority_analysis["scope_links"]
 
-    raw_projects = list(scope_links.values_list("business_project", flat=True))
-    raw_projects.extend(scope_links.values_list("legacy_project", flat=True))
-    raw_projects.extend(scoped_orders.exclude(project_snapshot="").values_list("project_snapshot", flat=True))
-    project_groups = project_alias_groups(raw_projects)
-    project_options = _project_options(raw_projects)
-    client_options = sorted(
-        set(scope_links.exclude(contracting_client="").values_list("contracting_client", flat=True))
-        | set(scoped_orders.exclude(client_snapshot="").values_list("client_snapshot", flat=True)),
-        key=str.casefold,
-    )
-    isp_options = sorted(
-        set(provider_name_options(scope_links)) | set(provider_name_options_for_orders(scoped_orders)),
-        key=str.casefold,
-    )
-    uf_options = sorted(
-        set(scope_links.exclude(state="").values_list("state", flat=True))
-        | set(scoped_orders.exclude(uf_snapshot="").values_list("uf_snapshot", flat=True)),
-        key=str.casefold,
-    )
-    filter_options = {
-        "cliente": client_options,
-        "projeto": project_options,
-        "isp": isp_options,
-        "uf": uf_options,
-    }
-
+    catalog = dimension_catalog(scope_links, scoped_orders)
+    window = quality_period(requested_filters, now)
     selected = {
-        "period": str(requested_filters.get("period", "60")),
+        "period": window["period"],
         "cliente": str(requested_filters.get("cliente", "")).strip(),
         "projeto": str(requested_filters.get("projeto", "")).strip(),
         "isp": str(requested_filters.get("isp", "")).strip(),
         "uf": str(requested_filters.get("uf", "")).strip(),
+        "region":str(requested_filters.get("region", "")).strip(),
+        "date_from":window["date_from"], "date_to":window["date_to"],
         "concentration_by": str(requested_filters.get("concentration_by", "project")).strip(),
         "group_by": str(requested_filters.get("group_by", "auto")).strip().lower(),
     }
-    if selected["period"] not in {value for value, _label in PERIOD_OPTIONS}:
-        selected["period"] = "60"
     if selected["concentration_by"] not in {"project", "isp"}:
         selected["concentration_by"] = "project"
-    if selected["cliente"] not in client_options:
-        selected["cliente"] = ""
-    project_key = canonical_project_name(selected["projeto"])
-    valid_project_keys = {canonical_project_name(value) for value in project_options}
-    if project_key not in valid_project_keys:
-        selected["projeto"] = ""
-        project_key = ""
-    else:
-        selected["projeto"] = display_project_name(project_key)
-    if selected["isp"].isdigit() or selected["isp"] not in isp_options:
+    dimensions = resolve_dimensions(selected, catalog, client_key="cliente", project_key="projeto")
+    filter_options = {"cliente":catalog["clients"], "projeto":catalog["projects_by_client"].get(selected["cliente"],[]) if selected["cliente"] else catalog["projects"],
+                      "isp":sorted(set(provider_name_options(scope_links))|set(provider_name_options_for_orders(scoped_orders)), key=str.casefold),
+                      "uf":catalog["ufs_by_region"].get(selected["region"],[]) if selected["region"] else catalog["ufs"], "regions":catalog["regions"]}
+    if selected["isp"].isdigit() or selected["isp"] not in filter_options["isp"]:
         selected["isp"] = ""
-    if selected["uf"] not in uf_options:
-        selected["uf"] = ""
-
-    selected_links = scope_links
-    selected_orders = scoped_orders
-    if selected["cliente"]:
-        selected_links = selected_links.filter(contracting_client__iexact=selected["cliente"])
-        selected_orders = selected_orders.filter(
-            Q(client_snapshot__iexact=selected["cliente"])
-            | Q(link__contracting_client__iexact=selected["cliente"]),
-        )
-    if project_key:
-        aliases = project_groups.get(project_key, ())
-        selected_links = selected_links.filter(
-            Q(business_project__in=aliases) | Q(legacy_project__in=aliases),
-        )
-        selected_orders = selected_orders.filter(
-            Q(project_snapshot__in=aliases)
-            | Q(link__business_project__in=aliases)
-            | Q(link__legacy_project__in=aliases),
-        )
+    selected_links = filter_links(scope_links, dimensions, client_key="cliente", project_key="projeto")
+    selected_orders = filter_orders(scoped_orders, dimensions, client_key="cliente", project_key="projeto")
     if selected["isp"]:
         selected_links = provider_filter_queryset(selected_links, selected["isp"])
         selected_orders = provider_filter_order_queryset(selected_orders, selected["isp"])
-    if selected["uf"]:
-        selected_links = selected_links.filter(state__iexact=selected["uf"])
-        selected_orders = selected_orders.filter(
-            Q(uf_snapshot__iexact=selected["uf"]) | Q(link__state__iexact=selected["uf"]),
-        )
-
-    start_at, end_exclusive, start_date, end_date = _period_bounds(selected["period"], now)
+    start_at, end_exclusive, start_date, end_date = window["cutoff"], window["end_exclusive"], window["start_date"], window["end_date"]
     period_days = (end_date - start_date).days + 1
     selected["group_by"], granularity, allowed_granularities = _resolve_granularity(
         period_days, selected["group_by"],
@@ -631,8 +570,9 @@ def get_dashboard_data(user, requested_filters=None):
         "attention_summary": {"critical": kpis["critical"], "overdue": kpis["overdue"]},
         "demo_order_count": selected_orders.filter(internal_notes__startswith=QUALITY_DEMO_MARKER).count(),
         "filters": selected,
+        "filter_catalog":catalog, "filter_notices":window["notices"]+dimensions["notices"],
         "filter_options": filter_options,
-        "period_options": PERIOD_OPTIONS,
+        "period_options": window["period_options"],
         "granularity_options": granularity_options,
         "has_evolution": any(
             any(series[name])
@@ -643,5 +583,5 @@ def get_dashboard_data(user, requested_filters=None):
         "has_stabilized_links": bool(stabilized_links),
         "has_stabilized_events": bool(stabilized_event_links),
         "has_concentration": bool(concentration),
-        "period_label": dict(PERIOD_OPTIONS)[selected["period"]],
+        "period_label": window["period_label"],
     }
