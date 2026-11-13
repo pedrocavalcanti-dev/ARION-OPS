@@ -1,23 +1,77 @@
-<section class="geo-intelligence" aria-label="Análises GEO Intelligence" data-geo-intelligence data-panel-state="collapsed" {% if not presentation %}data-local-url="{% url 'mapa:weather-local' %}"{% endif %} data-url="{% if presentation %}{{ intelligence_url }}{% else %}{% url 'mapa:intelligence' %}{% endif %}" {% if not presentation and perms.configuracoes.run_integrations %}data-collect-url="{% url 'mapa:weather-collect' %}"{% endif %}>
-  <header><div class="geo-analysis-heading"><strong>GEO Intelligence</strong><span data-geo-context></span></div><div class="geo-intelligence-actions">
-    <button class="geo-text-action" type="button" data-weather-toggle aria-expanded="false" aria-controls="geo-analysis-body">Análises</button>
-    <button class="geo-text-action" type="button" data-analysis-expand aria-expanded="false" aria-controls="geo-intelligence-content" hidden>Expandir</button>
-    <button class="geo-text-action" type="button" data-analysis-close aria-label="Fechar análises" hidden>Fechar</button>
-  </div></header>
+<aside id="geo-intelligence-panel" class="geo-intelligence thin-scroll" aria-label="Análises GEO Intelligence" data-geo-intelligence data-panel-state="collapsed" hidden {% if not presentation %}data-local-url="{% url 'mapa:weather-local' %}"{% endif %} data-url="{% if presentation %}{{ intelligence_url }}{% else %}{% url 'mapa:intelligence' %}{% endif %}" {% if not presentation and perms.configuracoes.run_integrations %}data-collect-url="{% url 'mapa:weather-collect' %}"{% endif %}>
+  <header class="geo-analysis-drawer-header">
+    <div class="geo-analysis-heading"><strong>GEO Intelligence</strong><span data-geo-context>Carregando recorte…</span></div>
+    <div class="geo-intelligence-actions">
+      <button class="geo-text-action" type="button" data-analysis-expand aria-expanded="false" aria-controls="geo-intelligence-content" hidden>Expandir</button>
+      <button class="geo-text-action" type="button" data-analysis-close aria-label="Fechar análises" hidden>Fechar</button>
+    </div>
+  </header>
   <div id="geo-analysis-body" class="geo-analysis-body" hidden>
-    <div class="geo-weather-metrics" data-weather-metrics></div>
-    <div class="geo-climate-status"><p class="geo-status" data-weather-status role="status">Consultando cache local…</p><div class="geo-intelligence-actions">
-      {% if not presentation and perms.configuracoes.run_integrations %}<form data-geo-collect-form hidden>{% csrf_token %}<button type="submit" class="geo-text-action" data-weather-collect>Coletar clima do recorte</button></form>{% endif %}
-      {% if not presentation and perms.configuracoes.view_integrations and perms.configuracoes.manage_integrations %}<a class="geo-text-action" data-weather-configure href="{% url 'configuracoes:integracoes:geo-detail' provider='open_meteo' %}" hidden>Configurar integração</a>{% endif %}
-      <button class="geo-text-action" type="button" data-weather-refresh>Atualizar</button>
-    </div></div>
-    <div class="geo-intelligence-content" id="geo-intelligence-content" hidden><section class="geo-daily-chart" aria-label="Evolução mensal" data-weather-chart></section><details class="geo-weather-section" open><summary>Ranking climático</summary><label>Indicador<select data-climate-ranking><option value="precipitation_mm">Precipitação · mm</option><option value="rainy_days">Dias chuvosos</option><option value="gust_max_kmh">Rajada · km/h</option><option value="temperature_max_c">Maior temperatura · °C</option><option value="temperature_min_c">Menor temperatura · °C</option></select></label><div data-weather-ranking></div></details><details class="geo-weather-section" open><summary>Localidades e coincidência</summary><div data-weather-correlation></div><div data-weather-localities></div><div data-local-weather-result role="status"></div></details><section class="geo-reasons" aria-label="Distribuição da análise" data-geo-reasons></section></div>
-    <details class="geo-method-note"><summary>Método e cobertura</summary><p>Chuva: estimativa espacial em mm; dias chuvosos: média diária ≥ 1 mm. Vento e rajada: máximos amostrados em km/h. Coincidência temporal não confirma causalidade. Fonte: Open-Meteo / Copernicus ERA5. Temperatura média: média espacial e temporal; mínimas/máximas: extremos amostrados. Direção: média circular ponderada; ausente se os vetores se anulam. Inventário CMDB atual; tickets por data de criação. Um ticket pode aparecer em várias UFs; o total nacional é distinto.</p><div data-geo-quality></div></details>
+    <section class="geo-drawer-section geo-drawer-section--summary" aria-label="Resumo analítico">
+      <div class="geo-climate-status">
+        <p class="geo-status" data-weather-status role="status">Consultando cobertura analítica…</p>
+        <div class="geo-intelligence-actions">
+          {% if not presentation and perms.configuracoes.run_integrations %}<form data-geo-collect-form hidden>{% csrf_token %}<button type="submit" class="geo-text-action" data-weather-collect>Coletar clima do recorte</button></form>{% endif %}
+          {% if not presentation and perms.configuracoes.view_integrations and perms.configuracoes.manage_integrations %}<a class="geo-text-action" data-weather-configure href="{% url 'configuracoes:integracoes:geo-detail' provider='open_meteo' %}" hidden>Configurar integração</a>{% endif %}
+          <button class="geo-text-action" type="button" data-weather-refresh>Atualizar</button>
+        </div>
+      </div>
+      <div class="geo-weather-metrics" data-weather-metrics></div>
+      <div class="geo-period-comparison" data-period-comparison hidden></div>
+      <details class="geo-tech-diagnostics" data-tech-diagnostics hidden>
+        <summary>Diagnóstico técnico de coleta</summary>
+        <div class="geo-tech-diagnostics-body" data-tech-diagnostics-body></div>
+      </details>
+    </section>
+
+    <div class="geo-intelligence-content" id="geo-intelligence-content" hidden>
+      <section class="geo-drawer-section" aria-label="Evolução diária">
+        <div class="geo-section-head"><h3>Evolução</h3><span class="geo-section-note" data-chart-caption></span></div>
+        <div class="geo-daily-chart" data-weather-chart></div>
+      </section>
+
+      <section class="geo-drawer-section" aria-label="Principais motivos e regiões">
+        <div class="geo-section-head"><h3>Principais motivos</h3><span class="geo-section-note" data-reasons-caption></span></div>
+        <div class="geo-reasons" data-geo-reasons></div>
+      </section>
+
+      <section class="geo-drawer-section" aria-label="Inteligência climática" data-climate-intelligence-section>
+        <div class="geo-section-head"><h3>Inteligência climática</h3><span class="geo-section-note" data-climate-section-note>Territorial e próximo aos incidentes</span></div>
+        <details class="geo-weather-section" data-weather-territorial open>
+          <summary>Clima territorial · ranking de UFs</summary>
+          <label>Indicador territorial<select data-climate-ranking><option value="precipitation_mm">Precipitação · mm</option><option value="rainy_days">Dias chuvosos</option><option value="gust_max_kmh">Rajada máxima · km/h</option><option value="temperature_max_c">Maior temperatura · °C</option><option value="temperature_min_c">Menor temperatura · °C</option></select></label>
+          <div data-weather-ranking></div>
+        </details>
+        <details class="geo-weather-section" data-weather-correlation-section open>
+          <summary>Clima próximo aos incidentes · diagnóstico e localidades</summary>
+          <div data-weather-correlation></div>
+          <label class="geo-local-metric-select">Ranking municipal<select data-local-ranking-metric><option value="rain_day_incidents">Incidentes em dia chuvoso</option><option value="ruptures_rain">Rompimentos em chuva</option><option value="massives_rain">Massivas em chuva</option><option value="equipment_weather">Equipamento / energia com clima</option><option value="precipitation_mm">Maior precipitação · mm</option><option value="rainy_days">Mais dias chuvosos</option></select></label>
+          <div data-weather-localities></div>
+          <div data-local-weather-result role="status"></div>
+        </details>
+      </section>
+
+      <details class="geo-method-note">
+        <summary>Fonte e metodologia</summary>
+        <p>Chuva: estimativa espacial em mm (dias chuvosos: média diária ≥ 1 mm). Vento e rajada: máximos amostrados em km/h. Coincidência temporal e geográfica não comprova causalidade; rotas intermediárias de fibra sem município próprio exigem investigação local explícita. Fonte climática: Open-Meteo / Copernicus ERA5. Inventário CMDB atual; tickets por data de criação e elegibilidade específica por operadora contratante deduplicada por TicketID.</p>
+        <div data-geo-operator-policy></div>
+        <div data-geo-quality></div>
+      </details>
+    </div>
   </div>
-</section>
-<section class="geo-timeline" aria-label="Reprodução temporal" data-geo-timeline hidden>
-  <button type="button" data-timeline-play aria-label="Reproduzir dias">▶</button><output data-timeline-label>Mês completo</output>
-  <input type="range" min="0" max="31" value="0" data-timeline-day aria-label="Dia do mês; zero representa o mês completo">
-  <label><span>Velocidade</span><select data-timeline-speed aria-label="Velocidade da reprodução"><option value="1200">1×</option><option value="600">2×</option><option value="300">4×</option></select></label>
-  <button type="button" data-timeline-reset aria-label="Reiniciar período">↺</button><button type="button" data-timeline-expand aria-expanded="false" aria-controls="geo-intelligence-content">Detalhar</button>
+</aside>
+<section class="geo-timeline" aria-label="Reprodução temporal" data-geo-timeline data-timeline-state="collapsed" hidden>
+  <button type="button" class="geo-timeline-toggle" data-timeline-toggle aria-expanded="false" aria-controls="geo-timeline-controls">
+    <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M6.5 2.5v3M13.5 2.5v3M3 8.5h14"/></svg>
+    <span>Linha do tempo · <strong data-timeline-pill-label>Mês completo</strong></span>
+  </button>
+  <div id="geo-timeline-controls" class="geo-timeline-controls" hidden>
+    <button type="button" data-timeline-play aria-label="Reproduzir dias">▶</button>
+    <output data-timeline-label>Mês completo</output>
+    <input type="range" min="0" max="31" value="0" data-timeline-day aria-label="Dia do mês; zero representa o mês completo">
+    <label><span>Velocidade</span><select data-timeline-speed aria-label="Velocidade da reprodução"><option value="1200">1×</option><option value="600">2×</option><option value="300">4×</option></select></label>
+    <button type="button" data-timeline-reset aria-label="Reiniciar período">↺</button>
+    <button type="button" data-timeline-expand aria-expanded="false" aria-controls="geo-intelligence-content">Detalhar</button>
+    <button type="button" class="geo-timeline-collapse" data-timeline-collapse aria-label="Recolher linha do tempo">&#215;</button>
+  </div>
 </section>

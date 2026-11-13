@@ -210,10 +210,10 @@ class MapMirrorTests(TestCase):
             'if(state.selectedUF)url.searchParams.set("uf",state.selectedUF)',
             "if (state.selectedUF) await loadState(state.selectedUF)",
             'const temporal=["projects","calls","repeat","motives","climate"].includes(state.mode);',
-            'ui.reasonWrap.hidden=state.mode==="base";',
+            'ui.reasonWrap.hidden=!incidents;',
         ):
             self.assertIn(token, script)
-        self.assertEqual(script.count("bind();setNationalCollapsed(true);initialize();"), 1)
+        self.assertEqual(script.count("bind();setNationalCollapsed(window.innerWidth<=760);initialize();"), 1)
         self.assertNotIn("DOMContentLoaded", script)
 
     def test_drawer_sections_follow_the_selected_tab(self):
@@ -250,7 +250,9 @@ class MapMirrorTests(TestCase):
         self.assertIn("geo-toolbar--map", template)
         self.assertIn("geo-filter-section", template)
         self.assertIn("geo-analysis-controls", template)
-        self.assertIn("geo-legend--overlay", template)
+        self.assertIn("geo-mode-legend", template)
+        self.assertIn("data-top-subband", template)
+        self.assertIn("data-weather-toggle", template)
         self.assertIn("data-ranking-code", script)
         self.assertIn('data-uf-previous', template)
         self.assertIn('data-uf-next', template)
@@ -308,6 +310,7 @@ class MapMirrorTests(TestCase):
         self.assertEqual(data["period"], {"date_from": "2026-10-01", "date_to": "2026-10-31"})
 
     def test_ticket_mode_uses_explicit_ticket_client_for_ticket_distribution(self):
+        CMDBLinkMirror.objects.create(source_config_item_id="map-ci-vivo-bd", state="RJ", contracting_client="Vivo", business_project="BRADESCO")
         ticket = self._ticket(91, "OPEN", day=20)
         ticket.title = "TELEFONICA BRASIL S.A. - BRADESCO - BD0001234"
         ticket.save(update_fields=("title",))
@@ -659,7 +662,7 @@ class MapMirrorTests(TestCase):
             "mode": "motives", "period": "custom", "date_from": "2026-10-01", "date_to": "2026-10-31",
         }).json()
         november = self.client.get(reverse("base_links:map-aggregates"), {
-            "mode": "motives", "period": "custom", "date_from": "2026-11-01", "date_to": "2026-11-30",
+            "mode": "motives", "period": "custom", "date_from": "2026-11-01", "date_to": "2026-11-12",
         }).json()
         october_detail = self.client.get(reverse("base_links:map-state-detail"), {
             "uf": "SP", "mode": "motives", "period": "custom",
@@ -667,7 +670,7 @@ class MapMirrorTests(TestCase):
         }).json()
         november_detail = self.client.get(reverse("base_links:map-state-detail"), {
             "uf": "SP", "mode": "motives", "period": "custom",
-            "date_from": "2026-11-01", "date_to": "2026-11-30",
+            "date_from": "2026-11-01", "date_to": "2026-11-12",
         }).json()
 
         self.assertEqual(october["terminal_ticket_count"], 1)
@@ -852,7 +855,7 @@ class MapMirrorTests(TestCase):
             "default", "diversos", "bradesco", "banco_do_brasil", "correios", "arcos_dourados",
             "caixa_economica_federal", "fust", "escolas_conectadas", "carrefour", "petrobras",
         }.issubset(palette_keys))
-        self.assertIn('return projectPalettes[projectPaletteAliases[key]||key]||projectPalettes.default;', script)
+        self.assertIn("if(projectPalettes[projectPaletteAliases[key]||key])return projectPalettes[projectPaletteAliases[key]||key];", script)
         self.assertIn('state.mode==="projects"?getProjectPalette(state.project):quantitative[state.mode]||quantitative.calls', script)
         self.assertIn('return row.total_links || 0;', script)
         self.assertIn('default:quantitative.projects', script)

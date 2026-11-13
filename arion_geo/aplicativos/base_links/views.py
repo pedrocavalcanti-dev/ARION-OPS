@@ -483,7 +483,7 @@ def map_state_detail(request):
         ).filter(business_statuses_query("ticket__business_status", statuses)).select_related(
             "ticket", "cmdb_link", "cmdb_link__operator",
         ).order_by("-ticket__source_created_at")
-        relations = IncidentRules.filter(IncidentRules.valid(relations, "ticket__"), params, "ticket__")
+        relations = IncidentRules.filter(IncidentRules.valid_for_operator(relations, "ticket__", client=client), params, "ticket__")
         if mode == "motives":
             relations = relations.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
@@ -516,6 +516,8 @@ def map_state_detail(request):
             ticket = relation.ticket
             parsed_identity = TicketBusinessIdentityService.parse(ticket.title)
             ticket_client = parsed_identity.client or BusinessIdentityRules.client_for_token(relation.cmdb_link.contracting_client) or relation.cmdb_link.contracting_client
+            if not IncidentRules.is_valid_ticket(ticket, ticket_client):
+                continue
             ticket_project = parsed_identity.project or relation.cmdb_link.business_project
             if not _client_label_matches(ticket_client, client) or (
                 project and canonical_project_name(ticket_project) != project

@@ -11,6 +11,8 @@
   <label data-motives-select hidden>Motivo de fechamento<select data-motive-filter aria-label="Filtrar motivo de fechamento"><option value="">Todos os motivos</option></select></label>
 </div></details>
 <details class="geo-filter-section"><summary>Camadas do Mapa</summary><div class="geo-filter-fields">
-  <label><input type="checkbox" data-weather-icons checked> Exibir ícones meteorológicos</label><label>Condição dos ícones<select data-weather-icon-type><option value="rain">Chuva</option><option value="heat">Calor</option><option value="cold">Frio</option><option value="wind">Vento / rajada</option></select></label>
+  <label class="geo-checkbox-label"><input type="checkbox" data-weather-icons checked> Exibir ícones meteorológicos</label>
+  <label>Condição dos ícones<select data-weather-icon-type><option value="auto">Automático · condição relevante</option><option value="rain">Chuva</option><option value="heat">Calor</option><option value="cold">Frio</option><option value="wind">Vento / rajada</option></select></label>
+  <label class="geo-checkbox-label"><input type="checkbox" data-weather-animate checked> Transição diária suave (estimativa)</label>
   <label>Camada visual<select data-geo-layer><option value="analysis">Análise selecionada</option><option value="client">Cliente / projeto</option><option value="calls">Somente chamados</option><option value="motives">Categoria predominante</option><option value="rain">Somente clima · chuva · mm</option><option value="temperature">Temperatura média · °C</option><option value="temperature_min">Temperatura mínima · °C</option><option value="temperature_max">Temperatura máxima · °C</option><option value="wind_speed">Vento máximo · km/h</option><option value="wind">Rajada máxima · km/h</option><option value="direction">Direção dominante · °</option><option value="correlation">Comparação combinada · dias</option></select></label>
 </div></details>

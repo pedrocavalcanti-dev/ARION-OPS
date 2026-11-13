@@ -1,5 +1,6 @@
 import { mountGeoIntelligence } from "./geo-intelligence.js";
 import { mountWeatherIcons } from "./weather-icons.js";
+import { CAUSE_ORDER, causeColor, causeBadge } from "./cause-meta.js";
 (() => {
   const root = document.querySelector("[data-map-config]");
   const page = document.querySelector(".geo-page");
@@ -175,13 +176,15 @@ import { mountWeatherIcons } from "./weather-icons.js";
     const analytics=page.querySelector("[data-geo-intelligence]");
     const surface=ui.moreFilters.open?"filters":rightSurface;
     page.dataset.rightSurface=surface;
-    analytics.hidden=surface==="filters"||surface==="details";
+    const showAnalytics=surface==="analysis-summary"||surface==="analysis-expanded";
+    if(analytics)analytics.hidden=!showAnalytics;
     panel.hidden=surface!=="details";
     panel.inert=surface!=="details";
     panel.setAttribute("aria-hidden",String(surface!=="details"));
     panel.classList.toggle("is-open",surface==="details");
     panelBackdrop.classList.remove("is-visible");
-    page.classList.toggle("has-analytics-drawer",surface==="analysis");
+    page.classList.toggle("has-analytics-drawer",surface==="analysis-expanded");
+    if(surface&&window.innerWidth<=1180&&!state.collapsed)setNationalCollapsed(true);
     updateMapLayout();
     page.dispatchEvent(new CustomEvent("geo:layout"));
   }
@@ -418,16 +421,20 @@ import { mountWeatherIcons } from "./weather-icons.js";
   const geoRamps={rain:{light:["#e3edf6","#85acd0","#315f98"],dark:["#25384b","#5888ba","#b0d6fa"]},wind:{light:["#eee9f7","#ad91c6","#67508f"],dark:["#352945","#9173b2","#d0b3ef"]},correlation:{light:["#f8eadf","#d4a07d","#a35e3f"],dark:["#45332a","#ba8b66","#f0bd91"]}};
   geoRamps.temperature={light:["#d4e4ef","#dfb78c","#b56652"],dark:["#304956","#b9916b","#de937f"]};
   ["temperature_min","temperature_max"].forEach(k=>geoRamps[k]=geoRamps.temperature);geoRamps.wind_speed=geoRamps.wind;geoRamps.direction=geoRamps.wind;
-  const causeColors={"Massiva":"#8975b6","Rompimento":"#bc805d","Equipamento":"#5f8eae","Energia":"#b49755","Configuração":"#699b9a","Reset remoto":"#8c96ac","Pendência Financeira":"#a48296","Demais motivos técnicos":"#8a8f98","Sem classificação":"#777d83"};
+  function causeMatchExpression(modeName){
+    return ["match",["get","cause"],...CAUSE_ORDER.flatMap(label=>[label,causeColor(label,modeName)]),modeName==="light"?"#787f85":"#7a8288"];
+  }
   function fillExpression() {
-    if(state.mode==="projects"&&!state.project&&state.layer==="analysis")return ["case",["get","has_data"],["get","project_color"],theme()==="light"?"#d5d8dc":"#363839"];
-    if(state.layer==="motives")return ["case",["get","has_data"],["match",["get","cause"],...Object.entries(causeColors).flat(),"#777d83"],theme()==="light"?"#d5d8dc":"#363839"];
-    if(geoRamps[state.layer])return ["case",["get","has_data"],colorRamp(geoRamps[state.layer][theme()]),theme()==="light"?"#d5d8dc":"#363839"];
-    if(state.layer==="client")return ["case",["get","has_data"],state.project?colorRamp(getProjectPalette(state.project)[theme()]):baseColorExpression(),theme()==="light"?"#d5d8dc":"#363839"];
-    if(state.layer==="calls")return ["case",["get","has_data"],colorRamp(quantitative.calls[theme()]),theme()==="light"?"#d5d8dc":"#363839"];
-    const colors=(state.mode==="projects"?getProjectPalette(state.project):quantitative[state.mode]||quantitative.calls)[theme()];
+    const modeName=theme();
+    const emptyColor=modeName==="light"?"#d5d8dc":"#363839";
+    if(state.mode==="projects"&&!state.project&&state.layer==="analysis")return ["case",["get","has_data"],["get","project_color"],emptyColor];
+    if(state.layer==="motives")return ["case",["get","has_data"],causeMatchExpression(modeName),emptyColor];
+    if(geoRamps[state.layer])return ["case",["get","has_data"],colorRamp(geoRamps[state.layer][modeName]),emptyColor];
+    if(state.layer==="client")return ["case",["get","has_data"],state.project?colorRamp(getProjectPalette(state.project)[modeName]):baseColorExpression(),emptyColor];
+    if(state.layer==="calls")return ["case",["get","has_data"],colorRamp(quantitative.calls[modeName]),emptyColor];
+    const colors=(state.mode==="projects"?getProjectPalette(state.project):quantitative[state.mode]||quantitative.calls)[modeName];
     const metricColors=state.mode==="base"?baseColorExpression():colorRamp(colors);
-    return ["case",["boolean",["get","has_data"],false],metricColors,theme()==="light"?"#d5dcda":"#363839"];
+    return ["case",["boolean",["get","has_data"],false],metricColors,modeName==="light"?"#d5dcda":"#363839"];
   }
   function setFeatureState(code, key, value) {
     if (!code || !map) return;
@@ -449,7 +456,8 @@ import { mountWeatherIcons } from "./weather-icons.js";
     if(map.getSource("arion-state-callouts"))map.getSource("arion-state-callouts").setData(calloutCollection());
     syncFeatureStates();
     closeTooltip();
-    if (map.getLayer("arion-state-fill")) {map.setPaintProperty("arion-state-fill","fill-color-transition",{duration:window.matchMedia("(prefers-reduced-motion: reduce)").matches?0:450,delay:0});map.setPaintProperty("arion-state-fill","fill-color",fillExpression());}
+    const animateWeather=page.querySelector("[data-weather-animate]")?.checked!==false&&!window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (map.getLayer("arion-state-fill")) {map.setPaintProperty("arion-state-fill","fill-color-transition",{duration:animateWeather?420:0,delay:0});map.setPaintProperty("arion-state-fill","fill-color",fillExpression());}
     if (map.getLayer("arion-state-fill")) map.setPaintProperty("arion-state-fill","fill-opacity",["case",["boolean",["feature-state","selected"],false],.98,["boolean",["get","has_data"],false],["case",["get","context_faded"],.64,.92],["case",["get","context_faded"],.32,.48]]);
     if (map.getLayer("arion-state-outline")) {
       map.setPaintProperty("arion-state-outline","line-color",["case",["boolean",["feature-state","selected"],false],theme()==="light"?"#496454":"#e3eee5",["boolean",["feature-state","hover"],false],theme()==="light"?"#718579":"#d1ded4",theme()==="light"?"rgba(48,67,56,.36)":"rgba(221,233,224,.34)"]);
@@ -499,7 +507,9 @@ import { mountWeatherIcons } from "./weather-icons.js";
       return;
     }
     if(state.layer==="motives"){
-      ui.legend.innerHTML=Object.entries(causeColors).filter(([label])=>!isPresentation||((data?.category_counts?.[label]||0)>0&&label!=="Pendência Financeira")).map(([label,color])=>`<span class="legend-item"><i class="legend-dot" style="background:${color}"></i>${esc(label)}</span>`).join("");return;
+      const modeName=theme();
+      ui.legend.innerHTML=CAUSE_ORDER.filter(label=>!isPresentation||((data?.category_counts?.[label]||0)>0&&label!=="Pendência Financeira")).map(label=>`<span class="legend-item"><i class="legend-dot" style="background:${causeColor(label,modeName)}"></i><kbd class="geo-legend-code">${causeBadge(label)}</kbd>${esc(label)}</span>`).join("");
+      return;
     }
     if(geoRamps[state.layer]||state.layer==="calls"){
       const ramps=geoRamps[state.layer]||quantitative.calls,colors=ramps[theme()],labels={temperature:"Temperatura média · °C",temperature_min:"Temperatura mínima · °C",temperature_max:"Temperatura máxima · °C",wind_speed:"Vento máximo · km/h",direction:"Direção dominante · graus",rain:"Chuva estimada · mm",wind:"Rajada máxima · km/h",correlation:"Dias com chuva ≥ 1 mm e incidentes técnicos · sem causalidade",calls:"Incidentes válidos"};
@@ -523,66 +533,74 @@ import { mountWeatherIcons } from "./weather-icons.js";
     const source={base:"CMDB real \u00b7 base atual",projects:"CMDB real \u00b7 projetos atuais",calls:"OTRS + CMDB \u00b7 chamados",repeat:"OTRS + CMDB \u00b7 reincid\u00eancia",motives:"OTRS \u00b7 motivos de encerramento"};
     ui.source.innerHTML=`<i></i>${source[state.mode]}`;
   }
+  const macroRegions={N:["AC","AM","AP","PA","RO","RR","TO"],NE:["AL","BA","CE","MA","PB","PE","PI","RN","SE"],CO:["DF","GO","MS","MT"],SE:["ES","MG","RJ","SP"],S:["PR","RS","SC"]};
+  const macroNames={N:"Norte",NE:"Nordeste",CO:"Centro-Oeste",SE:"Sudeste",S:"Sul"};
   function renderNational() {
     if (!data || !ui.nationalView) return;
     national.querySelector(".section-kicker").textContent=state.selectedUF||state.region||"BRASIL";
-    national.querySelector(".national-subtitle").textContent=state.selectedUF?stateNames[state.selectedUF]:state.region?"Visão regional":"Visão nacional";
-    if(state.mode==="climate"){
-      const c=data.geo_climate||{};
-      const value=v=>v==null?"Indisponível":number.format(v);
-      ui.nationalView.innerHTML=`<div class="national-kpis"><div><strong>${value(state.day?c.rain_mm:c.precipitation_mm)}</strong><span>Chuva estimada · mm</span></div><div><strong>${value(c.temperature_mean_c)}</strong><span>Temperatura média · °C</span></div><div><strong>${value(c.wind_max_kmh)}</strong><span>Vento máximo · km/h</span></div><div><strong>${value(c.gust_max_kmh)}</strong><span>Rajada máxima · km/h</span></div></div><p class="panel-empty">${esc(state.day||state.period)} · ${esc(c?.coverage_label||"")} · Estimativa do recorte coberto. Cinza indica ausência; zero observado é válido. Coincidência temporal não confirma causalidade.</p>`;
-      return;
-    }
+    national.querySelector(".national-subtitle").textContent=state.selectedUF?stateNames[state.selectedUF]:state.region?(macroNames[state.region]||"Visão regional"):"Panorama territorial";
+    const rows=Object.entries(data.states).map(([code,row])=>({code,name:stateNames[code]||code,row,value:metricValue(row)})).sort((a,b)=>b.value-a.value||a.code.localeCompare(b.code));
+    const allowedUFs=new Set(data.allowed_ufs||Object.keys(stateNames));
+    const scopedRows=rows.filter(r=>allowedUFs.has(r.code));
+    const activeRows=scopedRows.filter(r=>r.value>0);
+    const totalSum=activeRows.reduce((acc,r)=>acc+r.value,0);
     const unlinkedCount=Number(data.unlinked_ticket_count||0);
-    const unlinkedNote=unlinkedCount?`<p class="panel-empty">${number.format(unlinkedCount)} tickets sem Link CMDB local foram somados ao total nacional. Eles n\u00e3o s\u00e3o atribu\u00eddos a uma UF e n\u00e3o contam como Links afetados.</p>`:"";
-    const rows=Object.entries(data.states).map(([code,row])=>({code,name:stateNames[code]||code,row,value:metricValue(row)})).sort((a,b)=>b.value-a.value);
-    const active=rows.filter(row=>row.value>0).length;
-    const total=selectedTotal();
-    const baseCoverage=Number(data.client_coverage||0).toLocaleString("pt-BR",{maximumFractionDigits:1});
-    const max=Math.max(1,...rows.map(row=>row.value));
+    const unlinkedNote=unlinkedCount?`<p class="panel-empty">${number.format(unlinkedCount)} tickets sem Link CMDB local somados ao total nacional (sem UF atribuída).</p>`:"";
+
     if(isPresentation){
-      ui.nationalView.innerHTML=`<div class="geo-executive-summary"><h3>${esc(state.selectedUF||state.region||"Brasil")} \u00b7 ${esc(state.client)}</h3><div class="geo-executive-metrics"><div><strong>${number.format(data.filtered_source_total||0)}</strong><span>Links CMDB</span></div><div><strong>${number.format(data.ticket_count||0)}</strong><span>Incidentes v\u00e1lidos</span></div></div><div class="geo-reasons"><h3>Links por macrorregi\u00e3o</h3>${Object.entries(data.region_link_counts||{}).map(([name,count])=>`<p><span>${esc(name)}</span><b>${number.format(count)}</b></p>`).join("")}</div><h3>Incidentes por UF</h3>${rows.filter(row=>(row.row.ticket_count||0)>0).sort((a,b)=>b.row.ticket_count-a.row.ticket_count).slice(0,3).map(row=>`<button type="button" class="geo-executive-uf" data-ranking-code="${row.code}"><span>${esc(row.name)}</span><strong>${number.format(row.row.ticket_count)}</strong></button>`).join("")}</div>`;
+      const presRows=rows.filter(row=>(row.row.ticket_count||0)>0).sort((a,b)=>b.row.ticket_count-a.row.ticket_count);
+      ui.nationalView.innerHTML=`<div class="geo-executive-summary"><h3>${esc(state.selectedUF||state.region||"Brasil")} · ${esc(state.client)}</h3><div class="geo-executive-metrics"><div><strong>${number.format(data.filtered_source_total||0)}</strong><span>Links CMDB</span></div><div><strong>${number.format(data.ticket_count||0)}</strong><span>Incidentes válidos</span></div></div><div class="geo-reasons"><h3>Links por macrorregião</h3>${Object.entries(data.region_link_counts||{}).map(([name,count])=>`<p><span>${esc(name)}</span><b>${number.format(count)}</b></p>`).join("")}</div><h3>Principais UFs em incidentes</h3>${presRows.slice(0,5).map(row=>`<button type="button" class="geo-executive-uf" data-ranking-code="${row.code}"><span>${esc(row.name)}</span><strong>${number.format(row.row.ticket_count)}</strong></button>`).join("")||'<p class="panel-empty">Sem incidentes por UF.</p>'}</div>`;
       return;
     }
+
     if (state.panelTab==="summary") {
-      const top=rows[0];
-      const projects=new Set(),clients=new Set(),providers=new Set();
-      const reasonCounts={};
-      Object.values(data.states).forEach(row=>{
-        Object.keys(row.project_counts||{}).filter(value=>value!=="Projeto n\u00e3o identificado").forEach(value=>projects.add(value));
-        Object.keys(row.client_counts||{}).filter(value=>value!=="Cliente n\u00e3o identificado").forEach(value=>clients.add(value));
-        Object.keys(row.provider_counts||{}).filter(value=>value!=="Provedor n\u00e3o identificado").forEach(value=>providers.add(value));
-        Object.entries(row.reason_counts||{}).forEach(([reason,count])=>reasonCounts[reason]=(reasonCounts[reason]||0)+count);
+      const top3Sum=activeRows.slice(0,3).reduce((acc,r)=>acc+r.value,0);
+      const top3Pct=totalSum>0?(top3Sum/totalSum*100).toLocaleString("pt-BR",{maximumFractionDigits:1}):"0";
+      const leader=activeRows[0];
+      const regTotals=Object.entries(macroRegions).map(([sigla,ufs])=>{
+        const subset=scopedRows.filter(r=>ufs.includes(r.code)&&Number.isFinite(r.value));
+        const val=state.mode==="climate"&&state.layer.startsWith("temperature")
+          ? (subset.length?subset.reduce((a,r)=>a+r.value,0)/subset.length:0)
+          : subset.reduce((a,r)=>a+r.value,0);
+        return {sigla,name:macroNames[sigla],value:val};
       });
-      const topReason=Object.entries(reasonCounts).sort((a,b)=>b[1]-a[1])[0];
-      let kpis;
-      if(state.mode==="base") kpis=[["Links CMDB",total],["UFs com links",active],["Cobertura Cliente",`${baseCoverage}%`],["Clientes",clients.size],["Projetos",projects.size],["Provedores",providers.size]];
-      else if(state.mode==="projects") kpis=[["Links CMDB",total],["Tickets no período",data.ticket_count||0],["UFs com links",active],["Clientes",clients.size],["Projetos",projects.size],["Provedores",providers.size]];
-      else if(state.mode==="calls") kpis=[["Tickets criados",data.ticket_count||0],["Links afetados",data.affected_link_count||0],["UFs com chamados",active],["Links reincidentes",data.recurrence_link_count||0]];
-      else if(state.mode==="repeat") kpis=[["Links reincidentes",data.recurrence_link_count||0],["Tickets nesses links",data.recurrence_ticket_count||0],["UFs com reincidencia",active],["Projetos",projects.size]];
-      else kpis=[["Tickets resolvidos",data.terminal_ticket_count||0],["Motivo dominante",topReason?.[0]||"Sem dados"],["UFs com resolu\u00e7\u00f5es",active],["Links afetados",data.terminal_link_count||0]];
-      const source=["base","projects"].includes(state.mode)?"CMDB atual":state.mode==="repeat"?"OTRS + CMDB":"OTRS local";
-      const period=["base","projects"].includes(state.mode)?"Snapshot atual":`${data.period?.date_from||""} \u2013 ${data.period?.date_to||""}`;
-      ui.nationalView.innerHTML=`<div class="national-kpis">${kpis.map(([label,value])=>`<div><strong>${typeof value==="number"?number.format(value):esc(value)}</strong><span>${esc(label)}</span></div>`).join("")}</div><div class="national-leaders"><div><span>Maior valor por UF</span><strong>${esc(top?.name||"Sem dados")}</strong><small>${number.format(top?.value||0)} ${esc(modeLabels[state.mode])}</small></div><div><span>Fonte / recorte</span><strong>${esc(source)}</strong><small>${esc(period)}</small></div></div>${unlinkedNote}`;
+      const regSum=regTotals.reduce((a,r)=>a+Math.max(0,r.value),0)||1;
+      ui.nationalView.innerHTML=`<div class="national-concentration-grid"><div class="national-stat-tile"><strong>${activeRows.length} / ${scopedRows.length}</strong><span>UFs com registros</span></div><div class="national-stat-tile"><strong>${top3Pct}%</strong><span>Concentração Top 3</span></div></div>`
+        +`<div class="national-leaders"><div><span>Líder territorial</span><strong>${esc(leader?.name||"Sem dados")}</strong><small>${leader?number.format(leader.value)+" "+esc(modeLabels[state.mode]||""):"—"}</small></div><div><span>Recorte ativo</span><strong>${esc(state.region?macroNames[state.region]:"Nacional")}</strong><small>${["base","projects"].includes(state.mode)?"Inventário CMDB":esc(periodLabel(data.period))}</small></div></div>`
+        +`<div class="national-region-list">${regTotals.map(r=>{const pct=Math.max(0,(r.value/regSum)*100);const active=state.region===r.sigla?" is-active":"";const displayVal=state.mode==="climate"?r.value.toLocaleString("pt-BR",{maximumFractionDigits:1}):number.format(Math.round(r.value));return `<button type="button" class="national-region-btn${active}" data-national-region="${r.sigla}" title="Filtrar macrorregião ${esc(r.name)}"><span>${esc(r.name)} (${r.sigla})</span><b>${displayVal}${state.mode==="climate"&&state.layer.startsWith("temperature")?"°":" · "+pct.toLocaleString("pt-BR",{maximumFractionDigits:0})+"%"}</b><span class="national-region-bar"><i style="width:${Math.min(100,pct)}%"></i></span></button>`;}).join("")}</div>`
+        +unlinkedNote;
     } else if (state.panelTab==="ranking") {
-      ui.nationalView.innerHTML=`<div class="national-view-heading"><span>Top 5 por ${esc(modeLabels[state.mode])}</span><span class="demo-inline">Dados reais</span></div><ol class="national-ranking">${rows.filter(row=>row.value>0).slice(0,5).map((row,i)=>`<li><button type="button" class="national-rank-button" data-ranking-code="${row.code}" aria-label="Abrir ${esc(row.name)}, ${number.format(row.value)} ${esc(modeLabels[state.mode])}"><span class="national-rank-number">${String(i+1).padStart(2,"0")}</span><img src="${esc(flags[row.code]||"")}" alt="" width="22" height="15" loading="lazy"><span class="national-rank-name">${esc(row.name)}</span><strong>${number.format(row.value)}</strong></button></li>`).join("")||"<li>Nenhum dado para este recorte.</li>"}</ol>${unlinkedNote}`;
+      const rankSum=Math.max(1,totalSum);
+      ui.nationalView.innerHTML=`<div class="national-view-heading"><span>Ranking territorial · ${esc(modeLabels[state.mode]||state.mode)}</span><span class="demo-inline">${activeRows.length} UFs</span></div><ol class="national-ranking">${activeRows.slice(0,27).map((row,i)=>`<li><button type="button" class="national-rank-button" data-ranking-code="${row.code}" aria-label="Abrir ${esc(row.name)}, ${number.format(row.value)}"><span class="national-rank-number">${String(i+1).padStart(2,"0")}</span><img src="${esc(flags[row.code]||"")}" alt="" width="22" height="15" loading="lazy"><span class="national-rank-name">${esc(row.name)} <small>(${(row.value/rankSum*100).toLocaleString("pt-BR",{maximumFractionDigits:1})}%)</small></span><strong>${number.format(row.value)}</strong></button></li>`).join("")||"<li>Nenhum dado para este recorte.</li>"}</ol>${unlinkedNote}`;
     } else {
       let distribution={},distributionLabel="",dimensionSelector="";
-      if(state.mode==="base") { distributionLabel="Distribui\u00e7\u00e3o por cliente";Object.values(data.states).forEach(row=>Object.entries(row.client_counts||{}).forEach(([key,value])=>{const normKey=norm(key);const bucket=normKey==="claro"?"Claro":normKey==="vivo"?"Vivo":normKey==="algar"?"Algar":normKey==="cliente nao identificado"?"Cliente n\u00e3o identificado":"Outras";distribution[bucket]=(distribution[bucket]||0)+value;})); }
-      else if(state.mode==="projects") { distributionLabel="Distribui\u00e7\u00e3o por provedor";Object.values(data.states).forEach(row=>Object.entries(row.provider_counts||{}).forEach(([key,value])=>distribution[key]=(distribution[key]||0)+value)); }
+      if(state.mode==="base") { distributionLabel="Distribuição por cliente";Object.values(data.states).forEach(row=>Object.entries(row.client_counts||{}).forEach(([key,value])=>{const normKey=norm(key);const bucket=normKey==="claro"?"Claro":normKey==="vivo"?"Vivo":normKey==="algar"?"Algar":normKey==="cliente nao identificado"?"Cliente não identificado":"Outras";distribution[bucket]=(distribution[bucket]||0)+value;})); }
+      else if(state.mode==="projects") { distributionLabel="Distribuição por provedor";Object.values(data.states).forEach(row=>Object.entries(row.provider_counts||{}).forEach(([key,value])=>distribution[key]=(distribution[key]||0)+value)); }
       else if(state.mode==="calls") {
-        const dimensions={status:["Status",data.ticket_status_counts||{}],client:["Cliente",data.ticket_client_counts||{}],project:["Projeto",data.ticket_project_counts||{}],provider:["Provedor",data.ticket_provider_counts||{}],reason:["Motivo",data.ticket_reason_counts||{}]};
-        const selected=dimensions[state.distributionDimension]||dimensions.status;distributionLabel=`Tickets por ${selected[0].toLocaleLowerCase("pt-BR")}`;distribution=selected[1];
-        dimensionSelector=`<label class="distribution-dimension"><span>Distribuir por</span><select data-distribution-filter>${Object.entries(dimensions).map(([key,value])=>`<option value="${key}" ${key===state.distributionDimension?"selected":""}>${value[0]}</option>`).join("")}</select></label>`;
+        const dimensions={client:["Cliente",data.ticket_client_counts||{}],project:["Projeto",data.ticket_project_counts||{}],provider:["Provedor",data.ticket_provider_counts||{}],status:["Status",data.ticket_status_counts||{}],reason:["Motivo",data.ticket_reason_counts||{}]};
+        const selected=dimensions[state.distributionDimension]||dimensions.client;distributionLabel=`Concentração por ${selected[0].toLocaleLowerCase("pt-BR")}`;distribution=selected[1];
+        dimensionSelector=`<label class="distribution-dimension"><span>Eixo</span><select data-distribution-filter>${Object.entries(dimensions).map(([key,value])=>`<option value="${key}" ${key===state.distributionDimension?"selected":""}>${value[0]}</option>`).join("")}</select></label>`;
       }
-      else if(state.mode==="repeat") { distributionLabel="Links reincidentes por cliente";distribution=data.recurrence_client_counts||{}; }
-      else { distributionLabel="Tickets por motivo";Object.values(data.states).forEach(row=>Object.entries(row.reason_counts||{}).forEach(([key,value])=>distribution[key]=(distribution[key]||0)+value)); }
+      else if(state.mode==="repeat") { distributionLabel="Reincidentes por cliente";distribution=data.recurrence_client_counts||{}; }
+      else if(state.mode==="climate") { distributionLabel="UFs no recorte climático";activeRows.slice(0,8).forEach(r=>{distribution[r.name]=r.value;}); }
+      else { distributionLabel="Distribuição por motivo";Object.values(data.states).forEach(row=>Object.entries(row.reason_counts||{}).forEach(([key,value])=>distribution[key]=(distribution[key]||0)+value)); }
       const allItems=Object.entries(distribution).filter(([,value])=>value>0).sort((a,b)=>b[1]-a[1]),sum=allItems.reduce((a,item)=>a+item[1],0),items=allItems.slice(0,8);
-      ui.nationalView.innerHTML=`<div class="national-view-heading"><span>${esc(distributionLabel)}</span>${dimensionSelector}<span class="demo-inline">${number.format(sum)} ${sum===1?"registro":"registros"}</span></div><div class="national-distribution">${items.map(([label,value])=>{const key=norm(label);const tone=key==="claro"?"claro":key==="vivo"?"vivo":key==="algar"?"algar":key==="cliente nao identificado"?"unidentified":"other";return `<div class="national-distribution-row"><span><i class="operator-swatch operator-swatch--${tone}"></i>${esc(label)}</span><strong>${sum?(value/sum*100).toLocaleString("pt-BR",{maximumFractionDigits:1}):0}%</strong><small>${number.format(value)}</small><i class="national-distribution-track"><b class="operator-fill--${tone}" style="width:${Math.max(0,value/sum*100)}%"></b></i></div>`;}).join("")||"<p>Nenhum dado para este recorte.</p>"}</div>${unlinkedNote}`;
+      ui.nationalView.innerHTML=`<div class="national-view-heading"><span>${esc(distributionLabel)}</span>${dimensionSelector}<span class="demo-inline">${number.format(sum)}</span></div><div class="national-distribution">${items.map(([label,value])=>{const key=norm(label);const tone=key==="claro"?"claro":key==="vivo"?"vivo":key==="algar"?"algar":key==="cliente nao identificado"?"unidentified":"other";return `<div class="national-distribution-row"><span><i class="operator-swatch operator-swatch--${tone}"></i>${esc(label)}</span><strong>${sum?(value/sum*100).toLocaleString("pt-BR",{maximumFractionDigits:1}):0}%</strong><small>${number.format(value)}</small><i class="national-distribution-track"><b class="operator-fill--${tone}" style="width:${Math.max(0,value/sum*100)}%"></b></i></div>`;}).join("")||"<p>Nenhum dado para este recorte.</p>"}</div>${unlinkedNote}`;
     }
   }
   ui.nationalView.addEventListener("change",event=>{if(event.target.matches("[data-distribution-filter]")){state.distributionDimension=event.target.value;renderNational();}});
-  ui.nationalView.addEventListener("click",event=>{const row=event.target.closest("[data-ranking-code]");if(row)selectState(row.dataset.rankingCode);});
+  ui.nationalView.addEventListener("click",event=>{
+    const regBtn=event.target.closest("[data-national-region]");
+    if(regBtn){
+      const nextReg=regBtn.dataset.nationalRegion||"";
+      state.region=state.region===nextReg?"":nextReg;
+      if(state.selectedUF&&state.region&&!macroRegions[state.region].includes(state.selectedUF))state.selectedUF="";
+      updateModeControls();fetchData().catch(()=>showError("Não foi possível aplicar a macrorregião."));
+      return;
+    }
+    const row=event.target.closest("[data-ranking-code]");
+    if(row)selectState(row.dataset.rankingCode);
+  });
   function setPanelTab(tab) {
     state.panelTab=tab;
     $("[data-national-tab='summary']").setAttribute("aria-selected",String(tab==="summary"));
@@ -712,15 +730,17 @@ import { mountWeatherIcons } from "./weather-icons.js";
   }
   function panelWidth(element,fallback){const width=parseFloat(getComputedStyle(element).width);return Number.isFinite(width)&&width>0?width:fallback;}
   function updateMapLayout(){
-    const drawerWidth=panelWidth(panel,480),nationalWidth=panelWidth(national,300);
+    const drawerWidth=panelWidth(panel,440),nationalWidth=panelWidth(national,280);
     root.style.setProperty("--map-drawer-width",`${drawerWidth}px`);
     page.style.setProperty("--geo-detail-reserve",`${state.selectedUF?drawerWidth+52:36}px`);
     root.style.setProperty("--map-national-width",`${nationalWidth}px`);
     root.style.setProperty("--map-control-inset",`${drawerWidth+16}px`);
     const analytics=page.querySelector("[data-geo-intelligence]");
-    const surface=page.dataset.rightSurface;
-    const side=window.innerWidth>760&&surface?panelWidth(surface==="filters"?page.querySelector(".geo-toolbar--map"):surface==="analysis"?analytics:panel,420)+18:0;
-    const left=window.innerWidth>760&&!state.collapsed?nationalWidth+18:0;
+    const surface=page.dataset.rightSurface||"";
+    const rightElem=surface==="filters"?page.querySelector(".geo-toolbar--map"):surface.startsWith("analysis-")?analytics:surface==="details"?panel:null;
+    const rightFallback=surface==="analysis-summary"?380:460;
+    const side=window.innerWidth>760&&surface&&rightElem?panelWidth(rightElem,rightFallback)+22:0;
+    const left=window.innerWidth>760&&!state.collapsed?nationalWidth+20:0;
     page.style.setProperty("--geo-left-space",`${left}px`);
     page.style.setProperty("--geo-side-space",`${side}px`);
     root.classList.toggle("national-collapsed",state.collapsed);
@@ -734,15 +754,8 @@ import { mountWeatherIcons } from "./weather-icons.js";
       const drawerHeight=focused?Math.min(panelHeight(),stageHeight*.48):0;
       padding={top:24,right:24,bottom:drawerHeight+24,left:24};
     }else{
-      const left=24;
-      const analyticsExpanded=page.classList.contains("has-analytics-drawer");
-      const right=24; // The side panel now has its own layout space outside the canvas.
-      const maxOccupied=Math.max(0,stageWidth*.62),occupied=left+right;
-      const factor=occupied>maxOccupied&&occupied?maxOccupied/occupied:1;
-      const analytics=page.querySelector("[data-geo-intelligence]");
-      const analyticsHeight=analytics.dataset.panelState==="summary"?analytics.getBoundingClientRect().height:0;
-      const bottom=analyticsHeight+(page.classList.contains("has-timeline")?92:52);
-      padding={top:100,right:right*factor,bottom:Math.min(bottom,stageHeight*.52),left:left*factor};
+      const bottom=page.classList.contains("has-timeline")?62:24;
+      padding={top:32,right:28,bottom:Math.min(bottom,stageHeight*.3),left:28};
     }
     return padding;
   }
@@ -762,6 +775,11 @@ import { mountWeatherIcons } from "./weather-icons.js";
   function refitCurrentMap(duration=280){if(manualCamera)return;if(state.selectedUF)fitSelectedState(duration);else if(state.region)fitRegion(duration);else fitBrazil(duration);}
   function setNationalCollapsed(collapsed){
     state.collapsed=collapsed;clearTimeout(panelHideTimer);
+    if(!collapsed&&window.innerWidth<=1180){
+      closeMoreFilters();
+      if(rightSurface==="details")closePanel();
+      if(rightSurface.startsWith("analysis-"))geoController.close?.();
+    }
     if(collapsed){national.inert=true;national.setAttribute("aria-hidden","true");national.classList.add("is-collapsed");$('[data-national-expand]').hidden=false;$("[data-national-collapse]").setAttribute("aria-expanded","false");panelHideTimer=setTimeout(()=>{if(state.collapsed)national.hidden=true;},220);}
     else{national.hidden=false;national.inert=false;national.removeAttribute("aria-hidden");requestAnimationFrame(()=>national.classList.remove("is-collapsed"));$('[data-national-expand]').hidden=true;$("[data-national-collapse]").setAttribute("aria-expanded","true");}
     updateMapLayout();requestAnimationFrame(()=>{map?.resize();refitCurrentMap(280);});
@@ -772,7 +790,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
   }
   function closePanel(){
     detailSequence++;detailController?.abort();
-    if(rightSurface==="details")rightSurface=previousSurface==="analysis"?"analysis":"";
+    if(rightSurface==="details")rightSurface=previousSurface&&previousSurface.startsWith("analysis-")?previousSurface:"";
     syncRightSurface();
   }
   function selectState(code,zoom=true){
@@ -806,9 +824,11 @@ import { mountWeatherIcons } from "./weather-icons.js";
 
   function bind(){
     page.addEventListener("geo:analysis",event=>{
-      rightSurface=event.detail.expanded?"analysis":"";
+      const st=event.detail?.state;
+      rightSurface=st==="expanded"?"analysis-expanded":st==="summary"?"analysis-summary":"";
       closeMoreFilters();syncRightSurface();
     });
+    page.querySelector("[data-weather-animate]")?.addEventListener("change",()=>renderMap());
     page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
     page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;state.provider="";$("[data-filter-notice]").textContent="Projeto e ISP revalidados para o cliente selecionado.";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
     ui.project.addEventListener("change",()=>{state.project=ui.project.value;state.provider="";if(isPresentation){state.selectedUF="";state.region="";ui.breadcrumb.hidden=true;closePanel();}$("[data-filter-notice]").textContent="ISP revalidado para o projeto selecionado.";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));});
@@ -987,9 +1007,16 @@ import { mountWeatherIcons } from "./weather-icons.js";
     if(code===state.selectedUF){closeTooltip();return;}
     const row=data?.states?.[code]||{};
     if(state.layer==="client"||state.layer==="motives"){
-      const cause=Object.entries(row.geo_category_counts||row.category_counts||{}).sort((a,b)=>b[1]-a[1])[0];
-      const label=state.layer==="client"?"Links CMDB":(cause?.[0]||"Sem dados de categoria");
-      ui.hoverTooltip.innerHTML=`<div class="state-tooltip"><strong>${esc(stateNames[code])}</strong><p>${esc(label)} \u00b7 ${number.format(metricValue(row))}</p></div>`;
+      const counts=row.geo_category_counts||row.category_counts||{};
+      const cause=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+      if(state.layer==="client"){
+        ui.hoverTooltip.innerHTML=`<div class="state-tooltip"><strong>${esc(stateNames[code])}</strong><p>Links CMDB \u00b7 ${number.format(metricValue(row))}</p></div>`;
+      }else{
+        const cname=cause?.[0]||"Sem dados de categoria";
+        const ufTotal=Object.values(counts).reduce((a,b)=>a+b,0);
+        const pct=ufTotal&&cause?` (${(cause[1]/ufTotal*100).toLocaleString("pt-BR",{maximumFractionDigits:1})}%)`:"";
+        ui.hoverTooltip.innerHTML=`<div class="state-tooltip"><strong>${esc(stateNames[code])}</strong><p><span style="display:inline-flex;align-items:center;gap:6px;"><i style="width:8px;height:8px;border-radius:50%;background:${causeColor(cname,theme())};display:inline-block;"></i><kbd class="geo-legend-code">${causeBadge(cname)}</kbd>${esc(cname)}</span> \u00b7 ${number.format(cause?.[1]??metricValue(row))}${pct}</p></div>`;
+      }
       ui.hoverTooltip.hidden=false;positionTooltip(event.point);return;
     }
     if(climateKeys[state.layer]){
@@ -1015,7 +1042,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
     Object.entries(smallStateCallouts).forEach(([code,p])=>{if(codes.has(code))bounds.extend(p.label);});
     map.fitBounds(bounds,{padding:mapFitPadding(false),maxZoom:6,duration:window.matchMedia("(prefers-reduced-motion: reduce)").matches?0:duration});
   }
-  const geoController=mountGeoIntelligence({page,root,state,urlFor,refresh:fetchData,fitRegion:()=>setTimeout(fitRegion,100),selectUF:code=>code?selectState(code):clearSelection(),onWeather:(payload,day)=>{
+  const geoController=mountGeoIntelligence({page,root,state,urlFor,refresh:fetchData,fitRegion:()=>setTimeout(fitRegion,100),selectUF:code=>code?selectState(code):clearSelection(),onFilterUpdate:()=>updateModeControls(),onWeather:(payload,day)=>{
     lastWeatherPayload=payload;weatherIcons?.update(payload,day);
     state.day=day||"";
     if(!data)return;
@@ -1031,14 +1058,25 @@ import { mountWeatherIcons } from "./weather-icons.js";
   page.querySelectorAll("[data-client]").forEach(item=>{const selected=item.dataset.client===state.client;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});
   bind();setNationalCollapsed(window.innerWidth<=760);initialize();
   const resizeBand=()=>{
-    const controls=page.querySelector(".geo-analysis-controls"),legend=ui.legend;
+    const controls=page.querySelector(".geo-analysis-controls"),actions=page.querySelector("[data-top-actions]"),filters=page.querySelector(".geo-filter-panel"),subband=page.querySelector("[data-top-subband]");
     const offset=isPresentation?64:0;
-    const top=controls.offsetTop+controls.offsetHeight+8;
-    legend.style.top=`${top}px`;
-    page.style.setProperty("--geo-band-height",`${top+legend.offsetHeight+10-offset}px`);
+    const row1Bottom=Math.max(
+      controls?controls.offsetTop+controls.offsetHeight:0,
+      actions?actions.offsetTop+actions.offsetHeight:0,
+      filters?filters.offsetTop+filters.offsetHeight:0
+    );
+    if(subband){
+      subband.style.top=`${row1Bottom+6}px`;
+      page.style.setProperty("--geo-band-height",`${subband.offsetTop+subband.offsetHeight+8-offset}px`);
+    }else{
+      page.style.setProperty("--geo-band-height",`${row1Bottom+10-offset}px`);
+    }
+    if(window.innerWidth<=1180&&!state.collapsed&&rightSurface)setNationalCollapsed(true);
     updateMapLayout();
   };
   new ResizeObserver(resizeBand).observe(page.querySelector(".geo-analysis-controls"));
+  if(page.querySelector("[data-top-subband]"))new ResizeObserver(resizeBand).observe(page.querySelector("[data-top-subband]"));
+  if(page.querySelector("[data-top-actions]"))new ResizeObserver(resizeBand).observe(page.querySelector("[data-top-actions]"));
   new ResizeObserver(resizeBand).observe(ui.legend);
   if(window.ResizeObserver){
     let layoutFrame=0;

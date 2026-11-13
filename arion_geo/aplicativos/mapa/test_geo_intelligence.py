@@ -46,10 +46,12 @@ class GeoIntelligenceTests(TestCase):
         self.ticket(10,status="UNKNOWN");self.ticket(11,responsibility="IMPROCEDENTE")
         self.ticket(12,reason="PendenciaFinanceira")
         result=MapAnalyticsService.query(self.user,{"mode":"calls","period":"2026-10","client":"Claro"})
-        self.assertEqual(result["ticket_count"],2)
-        self.assertEqual(sum(result["daily_counts"].values()),2)
-        self.assertEqual(sum(result["technical_daily_counts"].values()),1)
+        # Claro exclui cancelados, improcedentes, sem atuacao e UNKNOWN, mas mantem SemIntervencaoTecnica.
+        self.assertEqual(result["ticket_count"],3)
+        self.assertEqual(sum(result["daily_counts"].values()),3)
+        self.assertEqual(sum(result["technical_daily_counts"].values()),2)
         self.assertEqual(result["states"]["RJ"]["ticket_count"],1)
+        self.assertFalse(result["operator_policy"]["excludes_sem_intervencao"])
 
     def test_reason_and_category_use_same_selection_in_api_and_drawer(self):
         self.ticket(1,reason="FalhaMassiva");self.ticket(2,reason="RompimentoFibra")
@@ -291,3 +293,66 @@ class GeoIntelligenceTests(TestCase):
             with self.subTest(path=path):
                 response=self.client.get(path,follow=True)
                 self.assertEqual(response.status_code,200)
+
+    def test_operator_eligibility_policies_differentiate_claro_vivo_and_other(self):
+        isp_claro=CMDBOperatorMirror.objects.create(source_config_item_id="isp-claro",name="CLARO")
+        self.other.operator=isp_claro
+        self.other.save(update_fields=["operator"])
+        algar=CMDBLinkMirror.objects.create(source_config_item_id="algar-link",name="ALGAR - ESCOLAS",state="MG",contracting_client="Algar",business_project="ESCOLAS CONECTADAS")
+        def make_ticket(num,link,reason,status="RESOLVED",resp="PROCEDENTE"):
+            stamp=datetime(2026,10,16,tzinfo=dt_timezone.utc)
+            t=OTRSTicket.objects.create(external_id=num,ticket_number=str(num),queue_name="NOC - ATACADO",queue_external_id=107,external_state_id=num,external_state_name=status,business_status=status,responsibility_normalized=resp,source_created_at=stamp,resolved_at=stamp,terminal_state_at=stamp,closing_code_raw=reason)
+            OTRSTicketConfigItem.objects.create(ticket=t,cmdb_link=link,config_item_id=link.source_config_item_id)
+            return t
+        # Claro: keeps SemIntervencaoTecnica and normalized variants; excludes Cancelado/Improcedente
+        claro_valid=self.ticket(601,"SP",reason="SemIntervencaoTecnica")
+        claro_var=make_ticket(602,self.links["SP"],"Sem Intervenção Técnica")
+        claro_norm=make_ticket(603,self.links["SP"],"sem intervencao")
+        make_ticket(604,self.links["SP"],"CancelamentoServico")
+        make_ticket(605,self.links["SP"],"FalhaMassiva",resp="IMPROCEDENTE")
+        # Vivo (even with ISP mirror named CLARO!): excludes Sem intervenção
+        vivo_ok=make_ticket(611,self.other,"RompimentoFibra")
+        make_ticket(612,self.other,"SemIntervencaoTecnica")
+        make_ticket(613,self.other,"Sem Intervenção")
+        make_ticket(614,self.other,"ChamadoCancelado")
+        # Algar (other): preserves default policy (excludes SemIntervencaoTecnica)
+        algar_ok=make_ticket(621,algar,"FalhaEletrica")
+        make_ticket(622,algar,"SemIntervencaoTecnica")
+
+        mixed=self.client.get(reverse("base_links:map-aggregates"),{"mode":"calls","period":"2026-10","client":"all"}).json()
+        self.assertEqual(mixed["ticket_count"],5)
+        vivo_data=self.client.get(reverse("base_links:map-aggregates"),{"mode":"calls","period":"2026-10","client":"Vivo"}).json()
+        self.assertEqual(vivo_data["ticket_count"],1)
+        self.assertTrue(vivo_data["operator_policy"]["excludes_sem_intervencao"])
+        claro_motives=self.client.get(reverse("base_links:map-aggregates"),{"mode":"motives","period":"2026-10","client":"Claro"}).json()
+        self.assertEqual(claro_motives["terminal_ticket_count"],3)
+        algar_data=self.client.get(reverse("base_links:map-aggregates"),{"mode":"calls","period":"2026-10","client":"Algar"}).json()
+        self.assertEqual(algar_data["ticket_count"],1)
+        # Detail table and local weather mirror exact eligibility
+        vivo_detail=self.client.get(reverse("base_links:map-state-detail"),{"mode":"calls","period":"2026-10","client":"Vivo","uf":"SP","tab":"tickets"}).json()
+        self.assertEqual([t["ticket_number"] for t in vivo_detail["tickets"]],[str(vivo_ok.ticket_number)])
+        claro_detail=self.client.get(reverse("base_links:map-state-detail"),{"mode":"calls","period":"2026-10","client":"Claro","uf":"SP","tab":"tickets"}).json()
+        self.assertEqual({t["ticket_number"] for t in claro_detail["tickets"]},{str(claro_valid.ticket_number),str(claro_var.ticket_number),str(claro_norm.ticket_number)})
+        # Repeat mode & presentation follow same Claro vs Vivo differentiation
+        make_ticket(606,self.links["SP"],"SemIntervencaoTecnica")
+        claro_repeat=self.client.get(reverse("base_links:map-aggregates"),{"mode":"repeat","period":"2026-10","client":"Claro"}).json()
+        self.assertEqual(claro_repeat["recurrence_link_count"],1)
+        key=self.start()
+        pres=self.client.get(reverse("mapa:presentation-data",args=[key]),{"mode":"calls","period":"2026-10","uf":"SP"}).json()
+        self.assertEqual(pres["ticket_count"],4)
+
+    def test_geo_intelligence_period_comparison_and_region_breakdown_contract(self):
+        prev_stamp=datetime(2026,9,15,tzinfo=dt_timezone.utc)
+        t_prev=OTRSTicket.objects.create(external_id=701,ticket_number="701",queue_name="NOC - ATACADO",queue_external_id=107,external_state_id=701,external_state_name="RESOLVED",business_status="RESOLVED",responsibility_normalized="PROCEDENTE",source_created_at=prev_stamp,resolved_at=prev_stamp,terminal_state_at=prev_stamp,closing_code_raw="RompimentoFibra")
+        OTRSTicketConfigItem.objects.create(ticket=t_prev,cmdb_link=self.links["SP"],config_item_id=self.links["SP"].source_config_item_id)
+        self.ticket(702,"SP",reason="RompimentoFibra")
+        self.ticket(703,"BA",reason="FalhaEletrica")
+        data=self.client.get(reverse("mapa:intelligence"),{"period":"2026-10","mode":"calls"}).json()
+        comp=data["summary"]["period_comparison"]
+        self.assertEqual(comp["ticket_count"],1)
+        self.assertEqual(comp["delta"],1)
+        self.assertEqual(comp["delta_percent"],100.0)
+        self.assertIn("Sudeste",data["summary"]["region_category_counts"])
+        self.assertIn("Nordeste",data["summary"]["region_category_counts"])
+        self.assertIn("df_included",data["climate"])
+        self.assertIn("coverage_headline",data["climate"])

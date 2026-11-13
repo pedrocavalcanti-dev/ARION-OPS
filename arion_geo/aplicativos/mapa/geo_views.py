@@ -150,8 +150,15 @@ def local_weather(request):
               "model":row.model if row else None,"method":row.method if row else None,"revision":row.revision if row else None,"consolidated":bool(row and row.consolidated_at)}
         if row and (row.status=="success" or row.collected_at) and values.get("ticket"):
             if not values["ticket"].isdigit(): raise ValueError("TicketID inválido.")
-            ticket=IncidentRules.valid(TicketQueryService.base(request.user,links=links)).filter(external_id=int(values["ticket"]),config_items__cmdb_link__in=links,config_items__is_present_in_source=True).first()
-            if not ticket or IncidentRules.category(ticket.closing_code_raw) in {None,"financeiro","sem_classificacao"}: raise PermissionDenied
+            ticket=(
+                IncidentRules.valid_for_operator(TicketQueryService.base(request.user,links=links),client=values.get("client","all"))
+                .filter(external_id=int(values["ticket"]),config_items__cmdb_link__in=links,config_items__is_present_in_source=True)
+                .distinct()
+                .first()
+            )
+            ticket_link=links.filter(ticket_relations__ticket=ticket,ticket_relations__is_present_in_source=True).first() if ticket else None
+            ticket_client=IncidentRules.resolve_ticket_operator(ticket,ticket_link) if ticket else ""
+            if not ticket or not IncidentRules.is_valid_ticket(ticket,ticket_client) or IncidentRules.category(ticket.closing_code_raw) in {None,"financeiro","sem_classificacao"}: raise PermissionDenied
             data["window"]=incident_window(row,ticket.source_created_at)
         return geo_json(data,status=202 if request.method=="POST" and row.status in {"pending","running"} else 200)
     except ValueError as error:

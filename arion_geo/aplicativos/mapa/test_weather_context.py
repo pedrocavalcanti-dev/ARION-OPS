@@ -131,3 +131,32 @@ class WeatherContextTests(TestCase):
         events=[{"city":"São Paulo","uf":"SP","at":stamp,"ticket":1,"link":1,"category":"rompimento"}]
         result=correlate(events,date(2026,10,1),date(2026,10,31),1)
         self.assertEqual((result["covered_tickets"],result["rain"]),(1,1))
+
+    def test_multi_level_correlation_states_denominators_and_local_rankings(self):
+        from .services.weather_context import correlate
+        stamp=datetime(2026,10,14,15,tzinfo=utc.utc)
+        times=[int((stamp-timedelta(hours=6)).timestamp())+i*3600 for i in range(10)]
+        WeatherLocalCache.objects.create(
+            location_key="SP:sao paulo",city="São Paulo",uf="SP",ibge_code="3550308",period=date(2026,10,1),source="open_meteo_public",status="success",
+            payload={"summary":{"precipitation_mm":45.0,"rainy_days":4,"daily":[{"date":"2026-10-14","precipitation_sum":15.0,"wind_gusts_10m_max":48.0}]},"hourly":{"time":times,**{key:[3 if key=="precipitation" else 20]*10 for key in HOURLY}}},
+        )
+        WeatherLocalCache.objects.create(
+            location_key="RJ:rio de janeiro",city="Rio de Janeiro",uf="RJ",ibge_code="3304557",period=date(2026,10,1),source="open_meteo_public",status="success",
+            payload={"summary":{"precipitation_mm":10.0,"rainy_days":1,"daily":[{"date":"2026-10-14","precipitation_sum":0.0,"wind_gusts_10m_max":15.0}]},"hourly":{"time":times,**{key:[0.0 if key=="precipitation" else 20]*10 for key in HOURLY}}},
+        )
+        events=[
+            {"city":"São Paulo","uf":"SP","at":stamp,"ticket":1,"link":1,"category":"rompimento"},
+            {"city":"Rio de Janeiro","uf":"RJ","at":stamp,"ticket":2,"link":2,"category":"massiva"},
+            {"city":"","uf":"MG","at":stamp,"ticket":3,"link":3,"category":"energia"},
+            {"city":"Curitiba","uf":"PR","at":stamp,"ticket":4,"link":4,"category":"equipamento"},
+        ]
+        result=correlate(events,date(2026,10,1),date(2026,10,31),4,scoped_cities={("SP","São Paulo"),("RJ","Rio de Janeiro")})
+        self.assertEqual(result["status_counts"],{"insufficient":2,"none":1,"coincidence":1,"confirmed_cause":0})
+        self.assertEqual(result["by_category"]["rompimento"]["covered"],1)
+        self.assertEqual(result["by_category"]["rompimento"]["coincident"],1)
+        self.assertEqual(result["by_category"]["energia"]["without_location"],1)
+        self.assertEqual(result["by_category"]["equipamento"]["without_cache"],1)
+        self.assertEqual(result["uf_only_tickets"],1)
+        self.assertFalse(result["causality"])
+        self.assertEqual(result["local_rankings"]["ruptures_rain"][0]["city"],"São Paulo")
+        self.assertEqual(result["local_rankings"]["precipitation_mm"][0]["value"],45.0)

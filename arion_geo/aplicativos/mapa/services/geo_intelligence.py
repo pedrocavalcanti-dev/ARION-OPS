@@ -107,9 +107,30 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
     total_area = sum(sum(p["area_km2"] for p in sampling_points(uf)) for uf in ufs)
     covered_area = sum(row["area_km2"]*row["completeness"] for row in weather.values())
     complete_ufs = sum(row["completeness"]>=.99 and not row["partial"] and not row["stale"] for row in weather.values())
-    regional.update(temporal_partial=any(row.get("partial") for row in weather.values()),expected_ufs=len(ufs),complete_ufs=complete_ufs,territorial_percent=round(100*covered_area/total_area,2) if total_area else 0,
+    universe_ufs = region_states(selected.get("region",""))
+    excluded_scope_ufs = [code for code in universe_ufs if code in authorized_ufs and code not in ufs]
+    df_included = "DF" in weather and weather["DF"].get("completeness",0)>=.99
+    if complete_ufs == len(ufs) and ufs:
+        scope_text = f"Clima disponível · {complete_ufs}/{len(ufs)} UFs" + (" (DF incluído)" if df_included else "")
+        if excluded_scope_ufs and not selected.get("uf"):
+            scope_text += f" · {', '.join(excluded_scope_ufs)} sem links no filtro"
+    elif ufs:
+        scope_text = f"Cobertura parcial · {complete_ufs} de {len(ufs)} UFs"
+    else:
+        scope_text = "Sem UFs com vínculo neste recorte"
+    regional.update(
+        temporal_partial=any(row.get("partial") for row in weather.values()),
+        expected_ufs=len(ufs),
+        national_expected_ufs=len(universe_ufs),
+        excluded_scope_ufs=excluded_scope_ufs,
+        df_included=df_included,
+        complete_ufs=complete_ufs,
+        territorial_percent=round(100*covered_area/total_area,2) if total_area else 0,
         coverage_label=f"Cobertura {'completa' if complete_ufs==len(ufs) and ufs else 'parcial'}: {complete_ufs} de {len(ufs)} UFs",
-        partial=complete_ufs<len(ufs),estimate_scope="Recorte coberto; não representa todo o território enquanto a cobertura for parcial.")
+        coverage_headline=scope_text,
+        partial=complete_ufs<len(ufs),
+        estimate_scope="Recorte coberto; não representa todo o território enquanto a cobertura for parcial.",
+    )
     # Daily ticket observations are deduplicated; no projection enters coincidence.
     operational = summary["technical_daily_counts"]
     for uf,row in weather.items():

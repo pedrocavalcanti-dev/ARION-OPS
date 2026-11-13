@@ -71,8 +71,25 @@ def presentation_payload(user,params):
         states[uf].update({"ticket_reason_counts":proven,"reason_counts":proven,"category_counts":proven,
                            "distribution_projected":estimated,"client_counts":{params["client"]:row["total_links"]}})
     # Explicit allowlist: no original motives, titles, tickets, accounts or financial data.
+    safe_regions = {
+        reg: {k: v for k, v in cats.items() if k in TECHNICAL}
+        for reg, cats in (source.get("region_category_counts") or {}).items()
+    }
+    safe_regions = {reg: cats for reg, cats in safe_regions.items() if cats}
+    prev = source.get("period_comparison") or {}
+    safe_prev = {
+        "date_from": prev.get("date_from", ""),
+        "date_to": prev.get("date_to", ""),
+        "ticket_count": prev.get("ticket_count", 0),
+        "delta": prev.get("delta", 0),
+        "delta_percent": prev.get("delta_percent"),
+        "category_counts": {k: v for k, v in (prev.get("category_counts") or {}).items() if k in TECHNICAL},
+    } if prev else {}
     return {"mode":params.get("mode","calls"),"states":states,"period":source["period"],"region_link_counts":region_links,
             "correlation":source.get("correlation",{}),
+            "operator_policy":source.get("operator_policy",{}),
+            "region_category_counts":safe_regions,
+            "period_comparison":safe_prev,
             "project_colors":source.get("project_colors",{}),
             "region":source["region"],"allowed_ufs":allowed_ufs,"projects":source["projects"],
             "selected_project":params.get("project",""),"providers":source["providers"],"clients":[params["client"]],"priority_options":source.get("priority_options",[]),

@@ -21,7 +21,7 @@ from aplicativos.integracoes.services.ticket_business_identity import TicketBusi
 from aplicativos.integracoes.services.link_business_identity import BusinessIdentityRules
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
 from aplicativos.integracoes.services.project_names import canonical_project_name, project_alias_groups
-from aplicativos.integracoes.services.geography import region_states, state_query
+from aplicativos.integracoes.services.geography import REGIONS, STATE_BY_UF, region_states, state_query
 from aplicativos.integracoes.services.incidents import IncidentRules
 
 
@@ -300,21 +300,22 @@ class MapAnalyticsService:
         terminal_relations = OTRSTicketConfigItem.objects.none()
         priority_options = []
         if mode in {"projects", "calls", "repeat", "motives"}:
+            valid_noc_tickets = IncidentRules.valid_for_operator(TicketQueryService.noc_tickets(), client=client)
             period_relations = OTRSTicketConfigItem.objects.filter(
-                is_present_in_source=True, ticket__in=IncidentRules.valid(TicketQueryService.noc_tickets()),
+                is_present_in_source=True, ticket__in=valid_noc_tickets,
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).filter(business_statuses_query(
                 "ticket__business_status", VALID_TICKET_STATES,
             )).select_related("ticket")
             current_relations = OTRSTicketConfigItem.objects.filter(
-                is_present_in_source=True, ticket__in=IncidentRules.valid(TicketQueryService.noc_tickets()),
+                is_present_in_source=True, ticket__in=valid_noc_tickets,
                 ticket__business_status__in=ACTIVE_TICKET_STATES,
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).select_related("ticket")
             terminal_relations = OTRSTicketConfigItem.objects.annotate(**{
                 OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
             }).filter(
-                is_present_in_source=True, ticket__in=IncidentRules.valid(TicketQueryService.noc_tickets()),
+                is_present_in_source=True, ticket__in=valid_noc_tickets,
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).filter(business_statuses_query(
                 "ticket__business_status", TERMINAL_TICKET_STATES,
@@ -327,8 +328,14 @@ class MapAnalyticsService:
             if end:
                 period_relations = period_relations.filter(ticket__source_created_at__lt=end_exclusive)
                 terminal_relations = terminal_relations.filter(**{f"{OPERATIONAL_RESOLUTION_FIELD}__lt": end_exclusive})
-            priority_options = list(period_relations.filter(cmdb_link__in=scoped).exclude(
-                ticket__priority_name="").values_list("ticket__priority_name", flat=True).distinct().order_by("ticket__priority_name"))
+            priority_options = sorted({
+                rel.ticket.priority_name
+                for rel in period_relations.filter(cmdb_link__in=scoped).exclude(ticket__priority_name="").select_related("ticket", "cmdb_link").only(
+                    "ticket__priority_name", "ticket__title", "ticket__closing_code_raw",
+                    "ticket__business_status", "ticket__responsibility_normalized", "cmdb_link__contracting_client",
+                )
+                if IncidentRules.is_valid_ticket(rel.ticket, IncidentRules.resolve_ticket_operator(rel.ticket, rel.cmdb_link))
+            })
             if status_filter:
                 status_query = business_status_query("ticket__business_status", status_filter)
                 period_relations = period_relations.filter(status_query)
@@ -372,10 +379,16 @@ class MapAnalyticsService:
             client=client, project=project, provider=provider, uf_filter=uf_filter,
             arion_status=arion_status, assignee=assignee, provenance=provenance,
         )
-        unlinked_tickets = IncidentRules.filter(IncidentRules.valid(unlinked_tickets), params)
+        unlinked_tickets = IncidentRules.filter(IncidentRules.valid_for_operator(unlinked_tickets, client=client), params)
         if region:
             unlinked_tickets = unlinked_tickets.none()
-        unlinked_ticket_count = unlinked_tickets.count()
+        unlinked_rows = [
+            ticket for ticket in unlinked_tickets.only(
+                "pk", "title", "source_created_at", "closing_code_raw", "business_status", "responsibility_normalized",
+            ).iterator(chunk_size=500)
+            if IncidentRules.is_valid_ticket(ticket, TicketBusinessIdentityService.parse(ticket.title).client)
+        ]
+        unlinked_ticket_count = len(unlinked_rows)
 
         result = {}
         global_tickets, global_ticket_statuses, global_ticket_priorities, global_ticket_reasons, active_ids, global_terminal = set(), {}, {}, {}, set(), set()
@@ -383,6 +396,8 @@ class MapAnalyticsService:
         global_ticket_contexts = {}
         global_ticket_dates, global_ticket_categories = {}, {}
         weather_events = []
+        scoped_cities = set()
+        region_category_ticket_ids = defaultdict(lambda: defaultdict(set))
         ticket_identity_cache = {}
         def identity_for(ticket):
             if ticket.pk not in ticket_identity_cache:
@@ -403,6 +418,8 @@ class MapAnalyticsService:
             uf = _uf(link.state)
             if not uf:
                 invalid_uf_count += int(link_matches)
+            if link_matches and uf and link.city.strip():
+                scoped_cities.add((uf, link.city.strip()))
             item = result.setdefault(uf, {
                 "total_links": 0, "client_counts": {}, "project_counts": {}, "account_counts": {},
                 "provider_counts": {}, "city_counts": {}, "ticket_status_counts": {},
@@ -433,6 +450,8 @@ class MapAnalyticsService:
             def context_matches(ticket):
                 parsed = identity_for(ticket)
                 ticket_client = parsed.client or client_label
+                if not IncidentRules.is_valid_ticket(ticket, ticket_client):
+                    return False
                 ticket_project = parsed.project or link.business_project
                 return _client_label_matches(ticket_client, client) and (
                     not project or canonical_project_name(ticket_project) == project
@@ -441,6 +460,8 @@ class MapAnalyticsService:
             for ticket in tickets.values():
                 category = IncidentRules.category(ticket.closing_code_raw)
                 if category not in {None,"financeiro","sem_classificacao"}:
+                    if uf in STATE_BY_UF:
+                        region_category_ticket_ids[STATE_BY_UF[uf]["region_id"]][category].add(ticket.pk)
                     weather_events.append({"uf":uf,"city":link.city.strip(),"link":link.pk,"ticket":ticket.pk,"at":ticket.source_created_at,"category":category})
             active = {rel.ticket_id for rel in active_rows if context_matches(rel.ticket)}
             terminal = {rel.ticket_id: rel.ticket for rel in terminal_rows if context_matches(rel.ticket)}
@@ -553,8 +574,8 @@ class MapAnalyticsService:
         for status in global_ticket_statuses.values():
             _inc(status_counts, status)
         if mode == "calls" or monthly_motives:
-            for row in unlinked_tickets.values("business_status").annotate(total=Count("pk")):
-                _inc(status_counts, normalize_business_status(row["business_status"]), row["total"])
+            for ticket in unlinked_rows:
+                _inc(status_counts, normalize_business_status(ticket.business_status))
         for priority in global_ticket_priorities.values():
             if priority:
                 _inc(priority_counts, priority)
@@ -580,10 +601,16 @@ class MapAnalyticsService:
                          "repeat": "recurrence_links", "motives": "motives"}
         metric = metric_fields[mode]
         daily_counts, technical_daily_counts, category_counts = {}, {}, {}
-        for ticket in unlinked_tickets.only("pk","source_created_at","closing_code_raw"):
-            global_ticket_categories[ticket.pk] = IncidentRules.category(ticket.closing_code_raw)
+        for ticket in unlinked_rows:
+            cat = IncidentRules.category(ticket.closing_code_raw)
+            global_ticket_categories[ticket.pk] = cat
             if ticket.source_created_at:
                 global_ticket_dates[ticket.pk] = timezone.localtime(ticket.source_created_at).date().isoformat()
+            if cat not in {None, "financeiro", "sem_classificacao"}:
+                weather_events.append({
+                    "uf": "", "city": "", "link": None, "ticket": ticket.pk,
+                    "at": ticket.source_created_at, "category": cat,
+                })
         for ticket_id, day in global_ticket_dates.items():
             _inc(daily_counts, day)
             if global_ticket_categories.get(ticket_id) not in {None, "financeiro", "sem_classificacao"}:
@@ -595,9 +622,31 @@ class MapAnalyticsService:
         from .weather_context import correlate
         correlation = {}
         if mode in {"calls","motives","repeat"}:
-            correlation = correlate(weather_events,start,end,sum(c not in {None,"financeiro","sem_classificacao"} for c in global_ticket_categories.values()))
+            correlation = correlate(weather_events,start,end,sum(c not in {None,"financeiro","sem_classificacao"} for c in global_ticket_categories.values()),scoped_cities=scoped_cities)
+        region_category_counts = {
+            reg["nome"]: {
+                IncidentRules.LABELS[cat]: len(ids)
+                for cat, ids in region_category_ticket_ids[reg["id"]].items()
+                if ids
+            }
+            for reg in REGIONS
+            if any(region_category_ticket_ids[reg["id"]].values())
+        }
+        period_comparison = {}
+        if requested_mode in {"calls", "motives", "climate"} and start and end:
+            period_comparison = cls._previous_period_comparison(
+                user=user, scoped=scoped, ticket_candidates=ticket_candidates,
+                start=start, end=end, mode=mode, monthly_motives=monthly_motives,
+                client=client, project=project, provider=provider, uf_filter=uf_filter,
+                region=region, status_filter=status_filter, priority_filter=priority_filter,
+                reason_filter=reason_filter, arion_status=arion_status, assignee=assignee,
+                provenance=provenance, params=params, current_total=incident_total,
+            )
         return {
             "correlation":correlation,
+            "operator_policy": IncidentRules.operator_policy(client if client != "all" else ""),
+            "region_category_counts": region_category_counts,
+            "period_comparison": period_comparison,
             "reconciliation":{"incidents":incident_total,"classified":sum(category_counts.values())-unclassified,
                               "unclassified":unclassified,"with_uf":len(located_ticket_ids),
                               "without_uf":incident_total-len(located_ticket_ids),
@@ -640,6 +689,99 @@ class MapAnalyticsService:
                 for option in ClosingReasonCanonicalizer.options(reason_options)
             ],
             "period": {"date_from": start.isoformat() if start else "", "date_to": end.isoformat() if end else ""},
+        }
+
+    @classmethod
+    def _previous_period_comparison(
+        cls, *, user, scoped, ticket_candidates, start, end, mode, monthly_motives,
+        client, project, provider, uf_filter, region, status_filter, priority_filter,
+        reason_filter, arion_status, assignee, provenance, params, current_total,
+    ):
+        span_days = (end - start).days + 1
+        prev_end = start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=span_days - 1)
+        if prev_start.year < 2020:
+            return {}
+        prev_start_at, prev_end_exclusive = _datetime_bounds(prev_start, prev_end)
+        valid_tickets = IncidentRules.valid_for_operator(TicketQueryService.noc_tickets(), client=client)
+        relations = OTRSTicketConfigItem.objects.filter(
+            is_present_in_source=True, ticket__in=valid_tickets, cmdb_link__in=ticket_candidates,
+            ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
+        )
+        if mode == "motives" and not monthly_motives:
+            relations = relations.annotate(**{
+                OPERATIONAL_RESOLUTION_FIELD: operational_resolution_expression("ticket__"),
+            }).filter(business_statuses_query("ticket__business_status", TERMINAL_TICKET_STATES)).exclude(
+                ticket__closing_code_raw="",
+            ).exclude(**{f"{OPERATIONAL_RESOLUTION_FIELD}__isnull": True}).filter(**{
+                f"{OPERATIONAL_RESOLUTION_FIELD}__gte": prev_start_at,
+                f"{OPERATIONAL_RESOLUTION_FIELD}__lt": prev_end_exclusive,
+            })
+            if reason_filter:
+                relations = relations.filter(ticket__closing_code_raw__in=ClosingReasonCanonicalizer.raw_values(reason_filter))
+        else:
+            relations = relations.filter(business_statuses_query("ticket__business_status", VALID_TICKET_STATES)).filter(
+                ticket__source_created_at__gte=prev_start_at,
+                ticket__source_created_at__lt=prev_end_exclusive,
+            )
+        if status_filter:
+            relations = relations.filter(business_status_query("ticket__business_status", status_filter))
+        if priority_filter:
+            relations = relations.filter(ticket__priority_name=priority_filter)
+        relations = IncidentRules.filter(filter_tracking_relations(relations, arion_status=arion_status, assignee=assignee), params, "ticket__")
+
+        prev_categories = {}
+        seen_ids = set()
+        identity_cache = {}
+        for rel in relations.select_related("ticket", "cmdb_link").only(
+            "ticket_id", "ticket__title", "ticket__closing_code_raw", "ticket__business_status",
+            "ticket__responsibility_normalized", "cmdb_link__contracting_client", "cmdb_link__business_project",
+        ).iterator(chunk_size=1000):
+            t = rel.ticket
+            if t.pk in seen_ids:
+                continue
+            parsed = identity_cache.get(t.pk)
+            if parsed is None:
+                parsed = TicketBusinessIdentityService.parse(t.title)
+                identity_cache[t.pk] = parsed
+            link_client = BusinessIdentityRules.client_for_token(rel.cmdb_link.contracting_client) or rel.cmdb_link.contracting_client
+            t_client = parsed.client or link_client
+            if not IncidentRules.is_valid_ticket(t, t_client):
+                continue
+            t_project = parsed.project or rel.cmdb_link.business_project
+            if not _client_label_matches(t_client, client) or (project and canonical_project_name(t_project) != project):
+                continue
+            seen_ids.add(t.pk)
+            prev_categories[t.pk] = IncidentRules.category(t.closing_code_raw)
+
+        unlinked = cls._unlinked_ticket_queryset(
+            user=user, scoped_links=scoped, mode="calls" if monthly_motives else mode,
+            start_at=prev_start_at, end_exclusive=prev_end_exclusive, status_filter=status_filter,
+            priority_filter=priority_filter, reason_filter=reason_filter,
+            client=client, project=project, provider=provider, uf_filter=uf_filter,
+            arion_status=arion_status, assignee=assignee, provenance=provenance,
+        )
+        unlinked = IncidentRules.filter(IncidentRules.valid_for_operator(unlinked, client=client), params)
+        if not region:
+            for ticket in unlinked.only("pk", "title", "closing_code_raw", "business_status", "responsibility_normalized").iterator(chunk_size=500):
+                if ticket.pk in seen_ids:
+                    continue
+                if IncidentRules.is_valid_ticket(ticket, TicketBusinessIdentityService.parse(ticket.title).client):
+                    seen_ids.add(ticket.pk)
+                    prev_categories[ticket.pk] = IncidentRules.category(ticket.closing_code_raw)
+
+        prev_total = len(seen_ids)
+        cat_counts = {}
+        for cat in prev_categories.values():
+            _inc(cat_counts, IncidentRules.LABELS[cat])
+        delta = current_total - prev_total
+        return {
+            "date_from": prev_start.isoformat(),
+            "date_to": prev_end.isoformat(),
+            "ticket_count": prev_total,
+            "delta": delta,
+            "delta_percent": round(delta / prev_total * 100, 1) if prev_total else None,
+            "category_counts": cat_counts,
         }
 
     @staticmethod
