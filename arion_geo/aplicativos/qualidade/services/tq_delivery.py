@@ -1,21 +1,37 @@
 """Idempotent TQ delivery state transitions; this module never performs network calls."""
 import uuid
 
+from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
 from aplicativos.auditoria.models import AuditEvent
-from ..models import QualityTreatment
+from ..models import QualityDeletedOrder, QualityOrder, QualityTreatment, QualityTreatmentIdentity
 
 
+@transaction.atomic
 def claim_quality_treatment_send(treatment_id, *, allow_retry=False, method="api_rest"):
     """Atomically claim a new send or an explicitly requested definitive retry."""
     now = timezone.now()
     eligible = Q(status=QualityTreatment.Status.PENDING_SEND, send_status=QualityTreatment.SendStatus.NOT_SENT)
     if allow_retry:
         eligible |= Q(status=QualityTreatment.Status.SEND_FAILED, send_status=QualityTreatment.SendStatus.FAILED)
-    treatment = QualityTreatment.objects.filter(pk=treatment_id).only("pk", "send_attempt_count").first()
+    treatment = (
+        QualityTreatment.objects.select_for_update()
+        .filter(pk=treatment_id)
+        .only("pk", "code", "correlation_id", "quality_order_id", "send_attempt_count")
+        .first()
+    )
     if treatment is None:
+        return {"status": "NOT_CLAIMED", "treatment": None}
+    if (
+        QualityTreatmentIdentity.objects.filter(
+            Q(correlation_id=treatment.correlation_id) | Q(code=treatment.code),
+            deleted_at__isnull=False,
+        ).exists()
+        or QualityDeletedOrder.objects.filter(original_order_id=treatment.quality_order_id).exists()
+        or not QualityOrder.objects.filter(pk=treatment.quality_order_id).exists()
+    ):
         return {"status": "NOT_CLAIMED", "treatment": None}
     reconciled_uncertain = AuditEvent.objects.filter(
         category="QUALITY", action="TREATMENT_UNCERTAIN_RECONCILED_NOT_DELIVERED",
@@ -42,9 +58,18 @@ def claim_quality_treatment_send(treatment_id, *, allow_retry=False, method="api
     return {"status": "CLAIMED", "treatment": QualityTreatment.objects.get(pk=treatment_id)}
 
 
+@transaction.atomic
 def record_tq_send_accepted(treatment_id, message_id=""):
     """Record Brevo acceptance only; this is not proof that an OTRS ticket exists."""
     now = timezone.now()
+    treatment = (
+        QualityTreatment.objects.select_for_update()
+        .filter(pk=treatment_id)
+        .only("pk", "quality_order_id", "send_status")
+        .first()
+    )
+    if treatment is None or QualityDeletedOrder.objects.filter(original_order_id=treatment.quality_order_id).exists():
+        return False
     updated = QualityTreatment.objects.filter(
         pk=treatment_id, send_status=QualityTreatment.SendStatus.IN_PROGRESS,
     ).update(
@@ -58,8 +83,17 @@ def record_tq_send_accepted(treatment_id, message_id=""):
     return updated == 1
 
 
+@transaction.atomic
 def record_tq_send_failure(treatment_id, message, *, uncertain=False):
     """Persist safe known/ambiguous failures; ambiguous outcomes remain non-retryable."""
+    treatment = (
+        QualityTreatment.objects.select_for_update()
+        .filter(pk=treatment_id)
+        .only("pk", "quality_order_id", "send_status")
+        .first()
+    )
+    if treatment is None or QualityDeletedOrder.objects.filter(original_order_id=treatment.quality_order_id).exists():
+        return False
     status = QualityTreatment.SendStatus.UNCERTAIN if uncertain else QualityTreatment.SendStatus.FAILED
     treatment_status = QualityTreatment.Status.PENDING_SEND if uncertain else QualityTreatment.Status.SEND_FAILED
     updated = QualityTreatment.objects.filter(

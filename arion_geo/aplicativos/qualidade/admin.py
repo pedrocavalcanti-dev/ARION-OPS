@@ -3,6 +3,8 @@ from django.contrib import admin
 from .models import (
     QualityAuditEvent,
     QualityContact,
+    QualityDeletedOrder,
+    QualityEvidence,
     QualityMonitoringCycle,
     QualityOccurrence,
     QualityOrder,
@@ -66,3 +68,17 @@ class QualityAuditEventAdmin(admin.ModelAdmin):
     list_filter = ("event_type", "created_at")
     search_fields = ("quality_order__code", "description", "actor__username")
     readonly_fields = ("quality_order", "event_type", "actor", "description", "metadata", "created_at")
+
+
+@admin.register(QualityEvidence)
+class QualityEvidenceAdmin(admin.ModelAdmin):
+    list_display = ("quality_order", "quality_treatment", "title", "original_filename", "uploaded_by", "created_at")
+    search_fields = ("quality_order__code", "quality_treatment__code", "title", "original_filename")
+    autocomplete_fields = ("quality_order", "quality_treatment", "uploaded_by")
+
+
+@admin.register(QualityDeletedOrder)
+class QualityDeletedOrderAdmin(admin.ModelAdmin):
+    list_display = ("order_code", "original_order_id", "deleted_at")
+    search_fields = ("order_code",)
+    readonly_fields = ("order_code", "original_order_id", "deleted_at")

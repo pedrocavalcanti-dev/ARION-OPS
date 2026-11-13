@@ -6,7 +6,7 @@ from django.contrib.auth.decorators import login_required, permission_required
 from django.db import transaction
 from django.db.utils import OperationalError
 from django.db.models import Count, Q
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -45,9 +45,9 @@ from .services.constants import QUALITY_PRIORITY_DEFAULT_PERIOD, QUALITY_RREIP_D
 from .services.data_scope import QualityDataScopeService
 from .services.orders import (
     ActiveQualityOrderExists,
-    QualityOrderArchiveBlocked,
-    archive_quality_order,
     create_quality_order,
+    delete_quality_order,
+    get_quality_order_delete_impact,
     update_quality_order_field,
 )
 from .services.orders_queue import get_quality_orders_queue
@@ -456,14 +456,14 @@ def order_update(request, codigo):
 @login_required
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 def order_detail(request, codigo):
-    can_archive_order = request.user.is_superuser or request.user.has_perm(DELETE_QUALITY_ORDER_PERMISSION)
+    can_delete_order = request.user.is_superuser or request.user.has_perm(DELETE_QUALITY_ORDER_PERMISSION)
     order = get_object_or_404(
         QualityDataScopeService.orders_for(
-            request.user, include_archived=can_archive_order,
+            request.user, include_archived=can_delete_order,
         ).select_related("owner", "link", "link__operator"),
         code=codigo,
     )
-    if order.archived_at and not can_archive_order:
+    if order.archived_at and not can_delete_order:
         raise Http404
     tab = request.GET.get("tab", "resumo")
     context = get_quality_order_detail(
@@ -478,7 +478,8 @@ def order_detail(request, codigo):
     context.update({
         "active_section": "orders",
         "can_manage_orders": request.user.has_perm(MANAGE_QUALITY_PERMISSION) and not order.archived_at,
-        "can_archive_order": can_archive_order and not order.archived_at,
+        "can_delete_order": can_delete_order,
+        "can_archive_order": can_delete_order,
         "is_archived": bool(order.archived_at),
         "open_edit_dialog": request.GET.get("edit") == "1" and request.user.has_perm(MANAGE_QUALITY_PERMISSION),
         "rreip_days": QUALITY_RREIP_DAYS,
@@ -558,7 +559,7 @@ def order_detail(request, codigo):
     context["checklist_total"] = len(context["quality_actions"])
     context["checklist_completed"] = sum(action.completed for action in context["quality_actions"])
     context["checklist_progress"] = round(context["checklist_completed"] / context["checklist_total"] * 100) if context["checklist_total"] else 0
-    context["archive_ticket_count"] = order.quality_tickets.exclude(ticket_external_id_snapshot__isnull=True).count() + order.treatments.exclude(quality_ticket_external_id__isnull=True).count()
+    context["delete_impact"] = get_quality_order_delete_impact(order) if can_delete_order else None
     context["can_manage_contacts"] = request.user.has_perm(MANAGE_CONTACTS_PERMISSION)
     context["recommended_contacts"] = recommended_contacts_for_order(
         request.user,
@@ -634,28 +635,30 @@ def order_detail(request, codigo):
 @permission_required(QUALITY_PERMISSION, raise_exception=True)
 @permission_required(DELETE_QUALITY_ORDER_PERMISSION, raise_exception=True)
 @require_POST
-def quality_order_archive(request, codigo):
+def quality_order_delete(request, codigo):
     order = get_object_or_404(
-        QualityDataScopeService.orders_for(request.user).select_related("link"), code=codigo,
+        QualityDataScopeService.orders_for(request.user, include_archived=True).select_related("link"),
+        code=codigo,
     )
-    if request.POST.get("confirm_code", "").strip() != order.code:
-        messages.error(request, "O código informado não corresponde à OQ. Nenhuma alteração foi feita.")
-        return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}))
     try:
-        _order, archived = archive_quality_order(
+        result = delete_quality_order(
             order_id=order.pk,
+            confirm_code=request.POST.get("confirm_code", ""),
             actor=request.user,
-            request=request,
             reason=request.POST.get("reason", ""),
+            request=request,
         )
-    except QualityOrderArchiveBlocked as exc:
-        messages.error(request, str(exc))
-    except ValueError as exc:
-        messages.error(request, str(exc))
-    else:
-        if archived:
-            messages.success(request, f"{order.code} foi arquivada. O histórico e os registros relacionados foram preservados.")
-    return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}))
+    except PermissionDenied:
+        raise
+    except (ValidationError, QualityOrder.DoesNotExist) as exc:
+        error_text = " ".join(exc.messages) if isinstance(exc, ValidationError) else str(exc)
+        messages.error(request, error_text or "Não foi possível excluir a Ordem de Qualidade.")
+        return redirect(reverse("qualidade:ordem_detail", kwargs={"codigo": codigo}))
+    messages.success(
+        request,
+        f"Ordem de Qualidade {result['order_code']} excluída definitivamente junto com {result['total_dependents']} registro(s) dependente(s) exclusivo(s).",
+    )
+    return redirect(reverse("qualidade:ordens"))
 
 
 def _scoped_treatment(request, codigo, treatment_id):
@@ -863,6 +866,9 @@ def quality_treatment_send(request, codigo, treatment_id):
             module="Qualidade", description=description, obj=treatment, result=outcome, metadata=metadata,
         )
         (messages.success if accepted else messages.error)(request, success_message)
+    elif not QualityOrder.objects.filter(pk=order.pk).exists():
+        messages.warning(request, "A Ordem de Qualidade foi excluída durante o processamento; nenhuma alteração pendente permaneceu.")
+        return redirect(reverse("qualidade:ordens"))
     else:
         messages.error(request, "O estado da tentativa mudou antes de o resultado ser registrado. Consulte o histórico da TQ.")
     return redirect("qualidade:ordem_detail", codigo=order.code)

@@ -1,7 +1,9 @@
+import os
+import uuid
+
 from django.conf import settings
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils import timezone
-import uuid
 
 from aplicativos.auditoria.services import sanitize_metadata
 
@@ -117,11 +119,28 @@ class QualityOrder(models.Model):
         if update_fields is not None:
             kwargs["update_fields"] = update_fields
 
+        using = kwargs.get("using") or self._state.db or DEFAULT_DB_ALIAS
+        kwargs["using"] = using
         super().save(*args, **kwargs)
         if not self.code:
             year = timezone.localtime(self.created_at).year
-            self.code = f"OQ-{year}-{self.pk:06d}"
-            type(self).objects.filter(pk=self.pk).update(code=self.code)
+            with transaction.atomic(using=using):
+                max_deleted = QualityDeletedOrder.objects.using(using).aggregate(
+                    max_id=models.Max("original_order_id"),
+                )["max_id"] or 0
+                sequence, _ = QualityTreatmentSequence.objects.using(using).select_for_update().get_or_create(
+                    key="oq", defaults={"last_value": 0},
+                )
+                seq_number = max(sequence.last_value + 1, self.pk, max_deleted + 1)
+                while (
+                    QualityDeletedOrder.objects.using(using).filter(order_code=f"OQ-{year}-{seq_number:06d}").exists()
+                    or type(self).objects.using(using).filter(code=f"OQ-{year}-{seq_number:06d}").exists()
+                ):
+                    seq_number += 1
+                sequence.last_value = seq_number
+                sequence.save(update_fields=("last_value",), using=using)
+                self.code = f"OQ-{year}-{seq_number:06d}"
+                type(self).objects.using(using).filter(pk=self.pk).update(code=self.code)
 
 
 class QualityOccurrence(models.Model):
@@ -356,11 +375,38 @@ class QualityTreatmentIdentity(models.Model):
     code = models.CharField(max_length=24, unique=True)
     correlation_id = models.CharField(max_length=44, unique=True)
     reserved_at = models.DateTimeField(default=timezone.now)
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ("sequence_number",)
         verbose_name = "identificador reservado de TQ"
         verbose_name_plural = "identificadores reservados de TQ"
+
+
+class QualityDeletedOrder(models.Model):
+    """Minimal technical tombstone preventing deleted OQ code reuse and delayed-job recreation."""
+
+    order_code = models.CharField(max_length=24, unique=True)
+    original_order_id = models.PositiveBigIntegerField(unique=True)
+    deleted_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ("-deleted_at", "-pk")
+        verbose_name = "registro técnico de OQ excluída"
+        verbose_name_plural = "registros técnicos de OQ excluída"
+
+    def __str__(self):
+        return self.order_code
+
+
+def quality_evidence_upload_to(instance, filename):
+    safe_name = os.path.basename(str(filename or "evidencia.bin")).replace(" ", "_") or "evidencia.bin"
+    order_key = (
+        instance.quality_order.code
+        if instance.quality_order_id and getattr(instance.quality_order, "code", None)
+        else f"order-{instance.quality_order_id or 'pending'}"
+    )
+    return f"qualidade/orders/{order_key}/{uuid.uuid4().hex[:12]}-{safe_name[:120]}"
 
 
 class QualityCorrelationCheckpoint(models.Model):
@@ -517,3 +563,29 @@ class QualityAuditEvent(models.Model):
 
     def __str__(self):
         return f"{self.get_event_type_display()} · {self.quality_order}"
+
+
+class QualityEvidence(models.Model):
+    """Technical or operational evidence file attached exclusively to a Quality Order/TQ."""
+
+    quality_order = models.ForeignKey(QualityOrder, on_delete=models.CASCADE, related_name="evidences")
+    quality_treatment = models.ForeignKey(
+        QualityTreatment, null=True, blank=True, on_delete=models.SET_NULL, related_name="evidences",
+    )
+    title = models.CharField("descrição", max_length=240, blank=True)
+    file = models.FileField("arquivo", upload_to=quality_evidence_upload_to, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True)
+    notes = models.TextField(blank=True)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="uploaded_quality_evidences",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        verbose_name = "evidência de qualidade"
+        verbose_name_plural = "evidências de qualidade"
+
+    def __str__(self):
+        return self.title or self.original_filename or f"Evidência #{self.pk or 'nova'}"

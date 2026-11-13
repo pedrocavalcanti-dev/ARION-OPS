@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from aplicativos.auditoria.services import AuditService
 
-from ..models import QualityCorrelationCheckpoint, QualityTreatment
+from ..models import QualityCorrelationCheckpoint, QualityDeletedOrder, QualityOrder, QualityTreatment
 from .tq_correlation import link_quality_ticket_from_article
 
 ARTICLE_ID_OVERLAP = 40
@@ -60,7 +60,7 @@ def reconcile_quality_articles(client, *, limit=100):
                 result["already_linked"] += 1
             elif status in {"TREATMENT_TICKET_CONFLICT", "TICKET_TREATMENT_CONFLICT", "MULTIPLE_CORRELATION_IDS"}:
                 result["conflicts"] += 1
-            elif status in {"MISSING_CORRELATION_ID", "TREATMENT_NOT_FOUND"}:
+            elif status in {"MISSING_CORRELATION_ID", "TREATMENT_NOT_FOUND", "TREATMENT_DELETED", "ORDER_DELETED"}:
                 result["without_qid"] += 1
             next_cursor = max(next_cursor, article_id)
         checkpoint.last_article_id = next_cursor
@@ -83,7 +83,7 @@ def refresh_linked_quality_ticket_states(client, *, queue_names, limit=100):
     """Refresh linked ticket snapshots and retain a local audit if an ID disappears."""
     treatments = list(
         QualityTreatment.objects.filter(quality_ticket_external_id__isnull=False)
-        .only("pk", "quality_ticket_external_id")
+        .only("pk", "code", "quality_order_id", "quality_ticket_external_id", "quality_ticket_state_snapshot")
         .order_by("pk")[:max(1, min(int(limit), 200))]
     )
     if not treatments:
@@ -97,6 +97,8 @@ def refresh_linked_quality_ticket_states(client, *, queue_names, limit=100):
     refreshed = 0
     unavailable_label = "Indisponivel no OTRS"
     for ticket_id, treatment in by_ticket_id.items():
+        if QualityDeletedOrder.objects.filter(original_order_id=treatment.quality_order_id).exists():
+            continue
         row = rows_by_id.get(ticket_id)
         if row is None:
             was_unavailable = treatment.quality_ticket_state_snapshot == unavailable_label
@@ -108,17 +110,20 @@ def refresh_linked_quality_ticket_states(client, *, queue_names, limit=100):
                 updated_at=now,
             )
             if updated and not was_unavailable:
-                AuditService.record(
-                    user=None, category="QUALITY", action="QUALITY_TICKET_UNAVAILABLE",
-                    module="Qualidade",
-                    description=f"O vínculo OTRS da TQ {treatment.code} não foi localizado na consulta por ID.",
-                    obj=treatment.quality_order,
-                    metadata={
-                        "treatment_code": treatment.code,
-                        "ticket_external_id": treatment.quality_ticket_external_id,
-                        "issue": "linked_ticket_id_not_found",
-                    },
-                )
+                order = QualityOrder.objects.filter(pk=treatment.quality_order_id).first()
+                if order is not None and not QualityDeletedOrder.objects.filter(original_order_id=order.pk).exists():
+                    AuditService.record(
+                        user=None, category="QUALITY", action="QUALITY_TICKET_UNAVAILABLE",
+                        module="Qualidade",
+                        description=f"O vínculo OTRS da TQ {treatment.code} não foi localizado na consulta por ID.",
+                        obj=order,
+                        metadata={
+                            "code": order.code,
+                            "treatment_code": treatment.code,
+                            "ticket_external_id": treatment.quality_ticket_external_id,
+                            "issue": "linked_ticket_id_not_found",
+                        },
+                    )
             refreshed += updated
             continue
         updated = QualityTreatment.objects.filter(pk=treatment.pk).update(

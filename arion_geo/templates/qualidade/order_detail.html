@@ -19,7 +19,7 @@
       <div><dt>Responsável</dt><dd>{{ owner_label }}</dd></div>
       <div><dt>Prazo</dt><dd>{% if order.treatment_deadline %}{{ order.treatment_deadline|date:"d/m/Y" }}{% else %}Sem prazo{% endif %}</dd></div>
     </dl>
-    <div class="quality-order-hero__actions">{% if can_manage_orders %}<button class="quality-action-button" type="button" data-quality-edit-order>Abrir edição</button>{% endif %}{% if can_archive_order %}<details class="quality-more-actions"><summary>Mais ações</summary><div><button type="button" data-quality-open-archive>Excluir OQ</button></div></details>{% endif %}</div>
+    <div class="quality-order-hero__actions">{% if can_manage_orders %}<button class="quality-action-button" type="button" data-quality-edit-order>Abrir edição</button>{% endif %}{% if can_delete_order %}<details class="quality-more-actions"><summary>Mais ações</summary><div><button type="button" class="quality-more-actions__danger" data-quality-open-delete>Excluir OQ</button></div></details>{% endif %}</div>
   </header>
 
   <section class="quality-order-lifecycle" aria-label="Fase atual da ordem">
@@ -383,18 +383,31 @@
   {% endif %}
 </main>
 
-{% if can_archive_order %}
-  <dialog class="quality-dialog quality-archive-dialog" id="quality-order-archive-dialog" aria-labelledby="quality-order-archive-title">
-    <form method="post" action="{% url 'qualidade:ordem_arquivar' codigo=order.code %}" class="quality-dialog__form">
+{% if can_delete_order %}
+  <dialog class="quality-dialog quality-archive-dialog quality-delete-dialog" id="quality-order-delete-dialog" aria-labelledby="quality-order-delete-title">
+    <form method="post" action="{% url 'qualidade:ordem_excluir' codigo=order.code %}" class="quality-dialog__form" data-quality-delete-form>
       {% csrf_token %}
-      <header class="quality-dialog__header"><div><p class="quality-eyebrow">ARQUIVAMENTO ADMINISTRATIVO</p><h2 id="quality-order-archive-title">Excluir OQ {{ order.code }}</h2><p>A ordem será ocultada das operações. Registros, evidências e histórico permanecem no ARION OPS.</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
+      <header class="quality-dialog__header"><div><p class="quality-eyebrow">EXCLUSÃO DEFINITIVA</p><h2 id="quality-order-delete-title">Excluir OQ {{ order.code }}</h2><p>Esta ação excluirá permanentemente a Ordem de Qualidade e seus registros dependentes, incluindo TQs, monitoramentos, tratativas, históricos e anexos exclusivos. Esta ação não poderá ser desfeita.</p></div><button type="button" class="quality-dialog__close" data-quality-dialog-close aria-label="Fechar">×</button></header>
       <div class="quality-dialog__body">
-        <dl class="quality-archive-facts"><div><dt>Código</dt><dd>{{ order.code }}</dd></div><div><dt>Designação</dt><dd>{{ designation }}</dd></div><div><dt>Cliente / projeto</dt><dd>{{ client }} · {{ project }}</dd></div><div><dt>Ocorrências</dt><dd>{{ all_ticket_count }}</dd></div><div><dt>TQs relacionadas</dt><dd>{{ quality_ticket_count }}</dd></div><div><dt>Ticket OTRS vinculado</dt><dd>{% if archive_ticket_count %}Sim · {{ archive_ticket_count }} referência(s){% else %}Não{% endif %}</dd></div></dl>
-        <p class="quality-dialog__notice">O arquivamento não apaga tickets ou dados relacionados. OQs com envio pendente/incerto, TQ em acompanhamento ou ciclo RREIP ativo serão bloqueadas.</p>
-        <label class="quality-dialog__field quality-dialog__field--wide"><span>Motivo do arquivamento</span><textarea name="reason" required maxlength="1000" rows="3"></textarea></label>
-        <label class="quality-dialog__field quality-dialog__field--wide"><span>Digite {{ order.code }} para confirmar</span><input name="confirm_code" required autocomplete="off" pattern="{{ order.code }}" title="Digite exatamente o código desta OQ"></label>
+        <dl class="quality-archive-facts">
+          <div><dt>Código</dt><dd>{{ order.code }}</dd></div>
+          <div><dt>Designação</dt><dd>{{ designation }}</dd></div>
+          <div><dt>Cliente / projeto</dt><dd>{{ client }} · {{ project }}</dd></div>
+          <div><dt>TQs exclusivas</dt><dd>{{ delete_impact.quality_tickets|default:0 }}</dd></div>
+          <div><dt>Monitoramentos RREIP</dt><dd>{{ delete_impact.monitoring_cycles|default:0 }}</dd></div>
+          <div><dt>Tratativas</dt><dd>{{ delete_impact.treatments|default:0 }}</dd></div>
+          <div><dt>Ocorrências / vínculos</dt><dd>{{ delete_impact.occurrences|default:0 }}</dd></div>
+          <div><dt>Ações / pendências</dt><dd>{{ delete_impact.actions|default:0 }}</dd></div>
+          <div><dt>Evidências exclusivas</dt><dd>{{ delete_impact.evidences|default:0 }}</dd></div>
+          <div><dt>Históricos exclusivos</dt><dd>{{ delete_impact.audit_events|default:0 }}</dd></div>
+          <div><dt>Workflows em andamento</dt><dd>{{ delete_impact.pending_workflows|default:0 }}</dd></div>
+          <div><dt>Total dependentes</dt><dd>{{ delete_impact.total_dependents|default:0 }}</dd></div>
+        </dl>
+        <p class="quality-dialog__notice quality-dialog__notice--danger">Todos os registros operacionais exclusivos desta OQ serão apagados em cascata, independentemente do status. Tickets OTRS originais, registros CMDB, contatos compartilhados e outras OQs serão preservados.</p>
+        <label class="quality-dialog__field quality-dialog__field--wide"><span>Motivo da exclusão (opcional)</span><textarea name="reason" maxlength="1000" rows="3" placeholder="Informe o motivo operacional ou administrativo, se aplicável"></textarea></label>
+        <label class="quality-dialog__field quality-dialog__field--wide"><span>Digite {{ order.code }} para confirmar</span><input name="confirm_code" required autocomplete="off" pattern="{{ order.code }}" title="Digite exatamente o código desta OQ" data-quality-delete-confirm data-expected-code="{{ order.code }}"></label>
       </div>
-      <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit quality-dialog__submit--archive">Arquivar OQ</button></footer>
+      <footer class="quality-dialog__footer"><button type="button" class="quality-dialog__cancel" data-quality-dialog-close>Cancelar</button><button type="submit" class="quality-dialog__submit quality-dialog__submit--danger" data-quality-delete-submit disabled>Excluir OQ definitivamente</button></footer>
     </form>
   </dialog>
 {% endif %}

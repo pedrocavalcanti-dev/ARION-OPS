@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from aplicativos.auditoria.services import AuditService
 
-from ..models import QualityAuditEvent, QualityOrder, QualityTreatment
+from ..models import QualityAuditEvent, QualityDeletedOrder, QualityOrder, QualityTreatment, QualityTreatmentIdentity
 
 
 logger = logging.getLogger(__name__)
@@ -200,10 +200,18 @@ def link_quality_ticket_from_article(*, ticket, article_body, allowed_queue_name
         )
         return {"status": "MULTIPLE_CORRELATION_IDS"}
 
-    treatment = QualityTreatment.objects.filter(correlation_id=identifiers[0]).first()
+    if QualityTreatmentIdentity.objects.filter(correlation_id=identifiers[0], deleted_at__isnull=False).exists():
+        return {"status": "TREATMENT_DELETED"}
+    treatment = QualityTreatment.objects.select_for_update().filter(correlation_id=identifiers[0]).first()
     if treatment is None:
+        if QualityTreatmentIdentity.objects.filter(correlation_id=identifiers[0], deleted_at__isnull=False).exists():
+            return {"status": "TREATMENT_DELETED"}
         return {"status": "TREATMENT_NOT_FOUND"}
-    treatment = QualityTreatment.objects.select_for_update().get(pk=treatment.pk)
+    order = QualityOrder.objects.select_for_update().filter(pk=treatment.quality_order_id).first()
+    if order is None or QualityDeletedOrder.objects.filter(
+        order_code=order.code,
+    ).exists() or QualityDeletedOrder.objects.filter(original_order_id=treatment.quality_order_id).exists():
+        return {"status": "ORDER_DELETED"}
     if treatment.quality_ticket_external_id == ticket.external_id:
         treatment.quality_ticket_last_read_at = timezone.now()
         treatment.quality_ticket_state_snapshot = ticket.external_state_name
@@ -254,7 +262,6 @@ def link_quality_ticket_from_article(*, ticket, article_body, allowed_queue_name
     except IntegrityError:
         return {"status": "TICKET_TREATMENT_CONFLICT", "treatment": treatment}
 
-    order = QualityOrder.objects.select_for_update().get(pk=treatment.quality_order_id)
     if order.status in {QualityOrder.Status.NOVA, QualityOrder.Status.TRIAGEM}:
         previous_order_status = order.status
         order.status = QualityOrder.Status.TRATAMENTO

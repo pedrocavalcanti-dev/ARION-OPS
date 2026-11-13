@@ -82,7 +82,7 @@ PERMISSION_LABELS = {
     "view_ari": ("ARI I.A", "Acessar a experiência em modo Preview"),
     "view_quality": ("Qualidade", "Visualizar Qualidade Operacional"),
     "manage_quality_orders": ("Qualidade", "Gerenciar Ordens de Qualidade"),
-    "delete_qualityorder": ("Qualidade", "Arquivar Ordens de Qualidade"),
+    "delete_qualityorder": ("Qualidade", "Excluir Ordens de Qualidade"),
 }
 PERMISSION_LABELS.update({code: ("Cancelamentos", label) for code, label in CANCELLATION_PERMISSION_CATALOG})
 
