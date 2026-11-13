@@ -1,4 +1,4 @@
-# GEO Intelligence nacional, regional e local
+# GEO Inteligência nacional, regional e local
 
 O Mapa 2D existente permanece a superfície de exploração, em layout focado na viewport com filtros flutuantes, seis modos (Base, Projetos, Chamados, Reincidência, Motivos e Clima), indicadores compactos, análises expansíveis e drawer por UF. Região e UF são enquadradas pela geometria; exploração manual é preservada no resize. CMDB e OTRS continuam como fontes oficiais; catálogo geográfico e reanálise meteorológica são contexto analítico. Não há escrita nos bancos remotos.
 
@@ -11,7 +11,7 @@ Análises inicia recolhido por padrão no drawer lateral direito (acionável pel
 - Cliente, projeto canônico, ISP, motivo, categoria e permissões/escopos existentes são reutilizados.
 - Mês padrão: último mês completo. O mês atual é parcial. Links representam o snapshot CMDB atual, mesmo ao consultar incidentes de meses passados; não são inventários históricos retroativos.
 - Incidentes são TicketIDs distintos, criados no período, com status OPEN/PENDING/SCHEDULED/RESOLVED (CLOSED legado é RESOLVED) e responsabilidade PROCEDENTE/INDETERMINADO. Resolvidos válidos permanecem no mês.
-- Elegibilidade de incidentes por operadora contratante (sem confundir com ISP): Cancelados, improcedentes e `UNKNOWN` são excluídos globalmente. Na **Vivo** e demais operadoras padrão, chamados de cancelamento, sem atuação ou **Sem intervenção técnica** também ficam fora dos indicadores válidos. Na **Claro**, chamados classificados como **Sem intervenção** são preservados como elegíveis quando possuem procedência válida, sem afetar a política da Vivo. `IncidentRules.valid_for_operator` e `IncidentRules.is_valid_ticket` concentram essa seleção no Mapa, detalhes por UF, GEO Intelligence, clima local e Apresentação, preservando `IncidentRules.valid` para Painel e Rankings. A consulta interna de histórico preserva os registros originais no banco. O Cockpit preserva sua política histórica própria. O backlog continua com sua regra `OPEN`/`PENDING`.
+- Elegibilidade de incidentes por operadora contratante (sem confundir com ISP): Cancelados, improcedentes e `UNKNOWN` são excluídos globalmente. Na **Vivo** e demais operadoras padrão, chamados de cancelamento, sem atuação ou **Sem intervenção técnica** também ficam fora dos indicadores válidos. Na **Claro**, chamados classificados como **Sem intervenção** são preservados como elegíveis quando possuem procedência válida, sem afetar a política da Vivo. `IncidentRules.valid_for_operator` e `IncidentRules.is_valid_ticket` concentram essa seleção no Mapa, detalhes por UF, GEO Inteligência, clima local e Apresentação, preservando `IncidentRules.valid` para Painel e Rankings. A consulta interna de histórico preserva os registros originais no banco. O Cockpit preserva sua política histórica própria. O backlog continua com sua regra `OPEN`/`PENDING`.
 - As categorias usam paleta visual distinta por causa com códigos compactos (`RMP`, `ENG`, `MSV`, `EQP`, `CFG`, `RST`, `FIN`, `TEC`, `S/C`), comparação com período anterior (`period_comparison`) e distribuição por macrorregião (`region_category_counts`), derivadas do catálogo de motivos confirmado sem regravar `closing_code_raw`. Motivos financeiros válidos entram na contagem interna e permanecem bloqueados na Apresentação.
 - Um ticket com vários links conta uma vez no total; pode aparecer em mais de uma UF vinculada. Não some contagens estaduais para obter o total nacional. Tickets sem localização não são atribuídos artificialmente a uma região.
 
@@ -19,7 +19,7 @@ Camadas: análise existente, cliente/projeto, incidentes válidos, categoria dom
 
 ## IBGE
 
-Central → Integrações → GEO Intelligence → IBGE — Regiões e Estados.
+Central → Integrações → GEO Inteligência → IBGE — Regiões e Estados.
 
 O backend consulta `/api/v1/localidades/regioes` e `/api/v1/localidades/estados`, valida os cinco IDs regionais e as 27 associações UF/ID/região e só então substitui `GeographyCatalog`. O Mapa usa catálogo persistente ou catálogo offline versionado. Falhas preservam o último catálogo completo.
 
@@ -29,7 +29,7 @@ Referência: [API de localidades do IBGE](https://servicodados.ibge.gov.br/api/d
 
 ## Open-Meteo — fontes e operação
 
-Central → Integrações → GEO Intelligence → Open-Meteo — Clima e Histórico. IBGE e Open-Meteo usam os cards existentes da Central, com saúde, Worker, cache, consumo e datas reais. As páginas possuem Visão geral, Estado operacional, Configurações, Coletas e sincronização e Histórico de operações, com suporte a temas e mobile.
+Central → Integrações → GEO Inteligência → Open-Meteo — Clima e Histórico. IBGE e Open-Meteo usam os cards existentes da Central, com saúde, Worker, cache, consumo e datas reais. As páginas possuem Visão geral, Estado operacional, Configurações, Coletas e sincronização e Histórico de operações, com suporte a temas e mobile.
 
 O bootstrap idempotente executa após `migrate` e é reutilizado pelos serviços GEO quando falta cadastro. Novos registros ficam habilitados, com fonte pública, agendamento desligado e nenhuma UF agendada. Registros existentes, credenciais e desabilitações explícitas são preservados. Habilitar a funcionalidade não dispara coleta externa, não concede licença comercial e não depende de `ARION_ENV`.
 

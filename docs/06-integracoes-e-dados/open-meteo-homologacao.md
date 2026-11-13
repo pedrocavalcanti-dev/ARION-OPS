@@ -4,7 +4,7 @@
 
 **Rodada nacional atual:** **27/27 UFs**, 373 células territoriais, 31 dias e 100% da área da quadratura/completude em outubro/2026. As dez pendências foram concluídas em 13/11/2026 às 09:15:03 (America/Sao_Paulo), com 19 tentativas HTTP para 130 localizações, sem elevar o orçamento existente de 250. Estimativa conservadora: 287,86 unidades do fornecedor; não é cobrança/saldo informado pela API. Os cinco checkpoints de PI e os hashes das 17 UFs anteriores foram preservados. O bloqueio anterior foi o orçamento interno antes do HTTP, sem evento persistido de 429. Worker GEO observado em vários ciclos com heartbeat ativo e encerrado graciosamente; estado final parado. SQLite DEV, não MySQL. São Paulo/SP, IBGE 3550308, conserva o cache municipal diário/horário real (31 dias e 792 horas com margens); nenhum outro município foi declarado coletado. Ver [fontes, consumo e evidências atuais](geo-multifonte.md). A tabela abaixo registra o ensaio inicial de SP, anterior à expansão.
 
-O fluxo **Central → teste real → solicitação de uma UF → Worker → cache → GEO Intelligence → Mapa** foi executado com sucesso no **SQLite DEV disponível**. Não foi usado MySQL de produção, banco OTRS ou dado meteorológico fictício.
+O fluxo **Central → teste real → solicitação de uma UF → Worker → cache → GEO Inteligência → Mapa** foi executado com sucesso no **SQLite DEV disponível**. Não foi usado MySQL de produção, banco OTRS ou dado meteorológico fictício.
 
 | Evidência SP / outubro de 2026 | Resultado |
 |---|---|
@@ -34,7 +34,7 @@ O agendamento nasce desligado, com lista de UFs vazia. Não há coleta nacional 
 
 ## Fonte e configurações
 
-Com `view_integrations`, abrir Central de Configurações → Integrações → GEO Intelligence → Open-Meteo. A rota é `/configuracoes/administracao/integracoes/geo/open_meteo/`. A página reúne Visão geral, Estado operacional, Configurações, Coletas e sincronização e Histórico de operações. Alterações exigem `manage_integrations` e CSRF.
+Com `view_integrations`, abrir Central de Configurações → Integrações → GEO Inteligência → Open-Meteo. A rota é `/configuracoes/administracao/integracoes/geo/open_meteo/`. A página reúne Visão geral, Estado operacional, Configurações, Coletas e sincronização e Histórico de operações. Alterações exigem `manage_integrations` e CSRF.
 
 | Fonte selecionável | Endpoint / credencial |
 |---|---|

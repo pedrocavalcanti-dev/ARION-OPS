@@ -1,4 +1,4 @@
-# Atualização GEO Intelligence — Windows Server
+# Atualização GEO Inteligência — Windows Server
 
 A evolução nacional/local acrescenta a migration aditiva **integracoes.0018_weathercollectionjob_progress_and_more** (progresso da fila e cache municipal), seguida de **integracoes.0019_weatherrequestlog_weathergridcache** (grade persistente e consumo por tentativa). A política de histórico acrescenta **integracoes.0020/0021**, com metadados, versões e índice municipal. Ver [operação histórica](../06-integracoes-e-dados/historico-climatico.md). Manter tabelas, snapshots e caches ao reverter código; não reverter migrations destrutivamente. Ver [operação nacional/local](../05-funcionalidades/geo-intelligence-nacional-local.md).
 

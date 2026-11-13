@@ -1,4 +1,4 @@
-﻿# Central de Integrações
+# Central de Integrações
 
 ## Papel
 
@@ -67,4 +67,4 @@ Antes de habilitar envio TQ, a readiness tambem exige integracao OTRS somente le
 
 ## Catálogo geográfico e clima
 
-A Central inclui IBGE e Open-Meteo, usando ExternalAPIIntegration, credenciais protegidas, ExternalAPIHealthCheck, IntegrationSyncState e leases existentes. IBGE sincroniza pelo worker e conserva catálogo offline. Open-Meteo coleta UF/mês sob demanda, com cache persistente, limite de requisições e modalidade comercial obrigatória para uso regular em produção. Configuração não comprova acesso ativo. Ver [GEO Intelligence](geo-intelligence.md).
+A Central inclui IBGE e Open-Meteo, usando ExternalAPIIntegration, credenciais protegidas, ExternalAPIHealthCheck, IntegrationSyncState e leases existentes. IBGE sincroniza pelo worker e conserva catálogo offline. Open-Meteo coleta UF/mês sob demanda, com cache persistente, limite de requisições e modalidade comercial obrigatória para uso regular em produção. Configuração não comprova acesso ativo. Ver [GEO Inteligência](geo-intelligence.md).

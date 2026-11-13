@@ -105,6 +105,6 @@ No modo Chamados, Tickets são IDs distintos da fila NOC nos estados operacionai
 
 Reincidência é outra métrica: cada Link conta uma vez se tiver pelo menos dois Tickets distintos válidos no período. A quantidade de Tickets em Links reincidentes deduplica IDs globalmente e por UF, mesmo quando o mesmo Ticket participa de mais de um Link reincidente. Não é sinônimo de Links afetados nem de Tickets ativos agora.
 
-## GEO Intelligence regional e mensal
+## GEO Inteligência regional e mensal
 
-A evolução adiciona região/UF, último mês completo como padrão, categorias e camadas climáticas, com apresentação sanitizada por cliente. O backlog continua independente da análise mensal de incidentes válidos. Consulte [GEO Intelligence](geo-intelligence.md) para contratos, exclusões globais, método de amostragem, cobertura, licenciamento e isolamento de apresentação. O Mapa permanece disponível sem coleta meteorológica.
+A evolução adiciona região/UF, último mês completo como padrão, categorias e camadas climáticas, com apresentação sanitizada por cliente. O backlog continua independente da análise mensal de incidentes válidos. Consulte [GEO Inteligência](geo-intelligence.md) para contratos, exclusões globais, método de amostragem, cobertura, licenciamento e isolamento de apresentação. O Mapa permanece disponível sem coleta meteorológica.

@@ -1,4 +1,4 @@
-# GEO Intelligence — cobertura nacional e investigação local
+# GEO Inteligência — cobertura nacional e investigação local
 
 ## Operação e cobertura
 
@@ -43,7 +43,7 @@ Não existe confirmação automática de causalidade. O espelho atual não forne
 
 ## Mapa, ícones e filtros
 
-O cabeçalho principal preserva logo e perfil, identifica GEO Intelligence e oferece navegação geral, **Análises** e **Apresentar** aos usuários autorizados, inclusive no mobile. A barra secundária reúne os seis modos, período, busca de UF e acesso aos filtros, com quebra de linha e sem rolagem horizontal. A faixa superior (`geo-top-subband`) reúne legenda dinâmica e chips de filtros ativos com remoção individual, sem obstruir a barra inferior ou o palco do Mapa.
+O cabeçalho principal preserva logo e perfil, identifica GEO Inteligência e oferece navegação geral, **Análises** e **Apresentar** aos usuários autorizados, inclusive no mobile. A barra secundária reúne os seis modos, período, busca de UF e acesso aos filtros, com quebra de linha e sem rolagem horizontal. A faixa superior (`geo-top-subband`) reúne legenda dinâmica e chips de filtros ativos com remoção individual, sem obstruir a barra inferior ou o palco do Mapa.
 
 Em desktops largos (> 1180 px), o painel esquerdo (**Panorama Territorial**: abas Regiões, Ranking e Concentração) e a superfície direita (**Análises**, Filtros ou Detalhes da UF) funcionam simultaneamente; o recolhimento de qualquer lado atualiza a área útil do canvas Mapbox. Em larguras ≤ 1180 px e mobile, esquerda e direita alternam automaticamente para evitar sobreposição. A barra de **Timeline** temporal possui botão próprio de recolhimento/expansão independente dos demais painéis, e o diagnóstico técnico de cota/worker permanece recolhido em `<details>`. Análises preserva os estados fechado/resumo/expandido sem reconsultar APIs ao alternar leitura.
 
