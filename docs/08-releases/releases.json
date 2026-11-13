@@ -5,7 +5,7 @@
       "version": "1.4.1",
       "released_at": "2026-11-13",
       "title": "ARION OPS 1.4.1 — GEO Inteligência, Qualidade e Cancelamentos",
-      "summary": "Consolidação de GEO Inteligência com listagem paginada de Chamados no drawer de UF no Mapa e Modo Apresentação, altura ampliada sem sobreposição, exclusão definitiva de OQs na Qualidade, cálculo financeiro unificado em Cancelamentos e sincronização de novas permissões no bootstrap de acessos. Implantação no Windows Server e homologação MySQL permanecem pendentes de janela autorizada.",
+      "summary": "Consolidação de GEO Inteligência com listagem paginada de Chamados no drawer de UF no Mapa e Modo Apresentação, altura ampliada sem sobreposição, exclusão definitiva de OQs na Qualidade, cálculo financeiro unificado em Cancelamentos e atualização automática de novas permissões administrativas.",
       "sections": [
         {
           "category": "GEO Inteligência",
@@ -42,7 +42,7 @@
           "category": "Infraestrutura e Documentação",
           "items": [
             "Oito migrations aditivas/metadados desde v1.4.0 (configuracoes.0012, qualidade.0016, cancelamentos.0007 e integracoes.0017–0021), sem reversão destrutiva recomendada e sem novas dependências obrigatórias de produção.",
-            "Documentação GEO Inteligência, catálogo interno e roteiro Windows Server 1.4.1 publicados em Git; aplicação em produção Windows Server e validação MySQL seguem pendentes de janela autorizada."
+            "Documentação de GEO Inteligência, catálogo interno e roteiro operacional da versão 1.4.1 atualizados na Central de Documentação."
           ]
         }
       ]
