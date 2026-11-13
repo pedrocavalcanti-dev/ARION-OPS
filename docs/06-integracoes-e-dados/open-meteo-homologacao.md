@@ -2,7 +2,7 @@
 
 ## Estado validado em 12/11/2026
 
-**Rodada nacional atual:** 17/27 UFs em cache completo (238 células, aproximadamente 80,39% da área da quadratura). Dez UFs e cerca de 130 requisições antes de retries aguardam quota; cinco células estão salvas em progresso. Consumo climático do dia: 250/250. Um município com cache real diário/horário: São Paulo/SP, IBGE 3550308, com 792 horas incluindo margens. O cache original de SP foi preservado. Worker GEO encerrou após a rodada; persistência SQLite DEV. Ver [operação nacional e local](../05-funcionalidades/geo-intelligence-nacional-local.md). A tabela abaixo registra o ensaio inicial de SP, anterior à expansão.
+**Rodada nacional atual:** **27/27 UFs**, 373 células territoriais, 31 dias e 100% da área da quadratura/completude em outubro/2026. As dez pendências foram concluídas em 13/11/2026 às 09:15:03 (America/Sao_Paulo), com 19 tentativas HTTP para 130 localizações, sem elevar o orçamento existente de 250. Estimativa conservadora: 287,86 unidades do fornecedor; não é cobrança/saldo informado pela API. Os cinco checkpoints de PI e os hashes das 17 UFs anteriores foram preservados. O bloqueio anterior foi o orçamento interno antes do HTTP, sem evento persistido de 429. Worker GEO observado em vários ciclos com heartbeat ativo e encerrado graciosamente; estado final parado. SQLite DEV, não MySQL. São Paulo/SP, IBGE 3550308, conserva o cache municipal diário/horário real (31 dias e 792 horas com margens); nenhum outro município foi declarado coletado. Ver [fontes, consumo e evidências atuais](geo-multifonte.md). A tabela abaixo registra o ensaio inicial de SP, anterior à expansão.
 
 O fluxo **Central → teste real → solicitação de uma UF → Worker → cache → GEO Intelligence → Mapa** foi executado com sucesso no **SQLite DEV disponível**. Não foi usado MySQL de produção, banco OTRS ou dado meteorológico fictício.
 
@@ -79,15 +79,15 @@ Confirmar job concluído, cache da fonte selecionada, método `area-grid-v2`, mo
 
 No Mapa, selecionar Clima/SP/2026-10 e alternar chuva, temperatura, vento/rajada. Expandir a série mensal e reproduzir os dias. As séries locais alimentam cores e indicadores sem novas consultas meteorológicas por frame. Zero observado continua distinto de ausência; falta de clima não interrompe a análise OTRS/CMDB. Coincidência permanece factual, sem causalidade automática ou uso de projeções.
 
-HTTP 429 interrompe retries imediatos e conserva `Retry-After` no próximo processamento. Novas solicitações não antecipam o job pendente. Autenticação, quotas ou indisponibilidade não provocam troca automática de fonte. Erros são sanitizados; o cache anterior é preservado. O cache grava fonte, endpoint sem segredo, atribuição e condições de utilização. Caches `open_meteo_evaluation` anteriores continuam legíveis como fonte pública; fontes comerciais e instâncias próprias ficam separadas.
+HTTP 429 interrompe retries imediatos e conserva `Retry-After` no próximo processamento. Novas solicitações não antecipam o job pendente. Autenticação/quotas não provocam troca de fonte. Fallback em transporte/5xx requer autorização explícita e mantém caches/modelos/fusos separados. Erros são sanitizados; o cache anterior é preservado. O cache grava fonte, endpoint sem segredo, atribuição e condições de utilização. Caches `open_meteo_evaluation` anteriores continuam legíveis como fonte pública; fontes comerciais e instâncias próprias ficam separadas.
 
 ## Aceite
 
 - [x] Bootstrap idempotente, sem rede ou jobs automáticos; configuração existente preservada.
 - [x] Pública sem chave em DEV/produção nos testes de contrato; comercial e self-hosted configuráveis.
-- [x] Ensaio inicial SP e expansão real para 17/27 UFs em outubro/2026, respeitando quota.
+- [x] Ensaio inicial SP e expansão real para 27/27 UFs em outubro/2026, respeitando quota.
 - [x] São Paulo municipal: diário/horário real, sem alteração do espelho ou causa automática.
-- [ ] Concluir dez UFs pendentes com quota renovada e Worker autorizado.
+- [x] Dez UFs concluídas após renovação interna, em 19 HTTP, sem elevar orçamento e preservando hashes/checkpoints.
 - [x] Worker GEO executado, sucesso na primeira tentativa e cache real persistido no SQLite DEV.
 - [x] Indicadores, camadas e timeline no Mapa com os dados reais.
 - [x] Interface em temas claro/escuro e desktop/notebook/mobile, sem overflow horizontal.
@@ -95,6 +95,6 @@ HTTP 429 interrompe retries imediatos e conserva `Retry-After` no próximo proce
 - [ ] Homologar credencial/DPAPI comercial ou instância self-hosted real, se essas fontes forem utilizadas.
 - [ ] Configurar e confirmar execução contínua do Worker no ambiente de destino.
 
-Evidências atuais em `var/geo-national/` e diagnóstico `var/geo-national-result.json`. Migration nova aditiva: `integracoes.0018_weathercollectionjob_progress_and_more`, aplicada no SQLite DEV; homologação MySQL pendente. Evidências iniciais em `var/geo-simple/`: Central, páginas Open-Meteo/IBGE em 1440/1024/390 pixels, chuva/temperatura reais de SP no Mapa. Diagnóstico de coleta em `var/geo-simple-real-result.json`, fora do Git. Nenhuma credencial, cookie ou banco deve ser publicado.
+Evidências atuais em `var/geo-multi/` e diagnósticos `var/geo-multi-*.json`; evidências anteriores em `var/geo-national/`. Migrations aditivas `integracoes.0018` e `0019`, aplicadas no SQLite DEV; homologação MySQL pendente. Evidências iniciais em `var/geo-simple/`: Central, páginas Open-Meteo/IBGE em 1440/1024/390 pixels, chuva/temperatura reais de SP no Mapa. Diagnóstico de coleta em `var/geo-simple-real-result.json`, fora do Git. Nenhuma credencial, cookie ou banco deve ser publicado.
 
 Ver [candidata 1.4.1](../08-releases/v1.4.1-candidata.md) e [implantação Windows](../08-releases/geo-intelligence-implantacao-windows.md). Rollback para código anterior à simplificação pode indisponibilizar as novas fontes; preservar os caches e restaurar somente configuração prévia compatível e autorizada, sem converter fonte pública em comercial nem reverter migrations destrutivamente.
