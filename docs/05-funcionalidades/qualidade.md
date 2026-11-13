@@ -25,7 +25,7 @@ As rotas usam o namespace `qualidade` sob `/qualidade/`. O dashboard combina OQs
 
 ## Arquitetura e acesso
 
-O app Django `aplicativos.qualidade` contém os models `QualityOrder`, `QualityOccurrence`, `QualityTicket`, `QualityMonitoringCycle`, `QualityContact` e `QualityAuditEvent`. `services/recurrence.py` centraliza a formação de episódios por circuito; dashboard, Links Prioritários, detalhe do Link, detalhe da OQ e monitoramento reutilizam essa política.
+O app Django `aplicativos.qualidade` contém os models `QualityOrder`, `QualityOccurrence`, `QualityTicket`, `QualityTreatment`, `QualityTreatmentIdentity`, `QualityTreatmentSequence`, `QualityMonitoringCycle`, `QualityAction`, `QualityEvidence`, `QualityContact`, `QualityAuditEvent` e `QualityDeletedOrder`. `services/recurrence.py` centraliza a formação de episódios por circuito; dashboard, Links Prioritários, detalhe do Link, detalhe da OQ e monitoramento reutilizam essa política.
 
 OQ pode se relacionar ao `CMDBLinkMirror` e mantém snapshots de designação, ConfigItem, cliente, projeto, ISP e UF. Referências de tickets usam o mirror `OTRSTicket` quando disponível e preservam identificadores e rótulos locais. Consultas de tela são locais. Envios Brevo são POSTs explícitos autorizados; não há escrita direta no OTRS/CMDB.
 
@@ -232,11 +232,11 @@ A aba **Tratativas** da Ordem de Qualidade foi refinada para máxima clareza e a
 5. Validar integridade e ausência de pendências com `python arion_geo/gerenciar.py check`.
 6. Reiniciar os serviços Web e Worker.
 
-## Arquivamento logico de OQ
+## Exclusão definitiva de OQ
 
-O detalhe da OQ oferece arquivamento administrativo somente para superuser ou para quem possui `qualidade.delete_qualityorder`, permissao disponivel no editor de Grupos e acessos. A confirmacao exige motivo e repeticao do codigo da OQ via POST. O registro recebe data, usuario e motivo de arquivamento e permanece consultavel por quem possui a permissao de exclusao; ocorrencias, TQs, ciclos, checklist e auditoria nao sao apagados.
+O detalhe da OQ oferece **Excluir OQ** somente para superuser ou para quem possui `qualidade.delete_qualityorder` (*Excluir Ordens de Qualidade*), respeitando o `QualityDataScopeService` no backend. A confirmação via modal exibe o aviso de irremediabilidade, o impacto quantitativo dos dependentes (`TQs exclusivas`, `Monitoramentos RREIP`, `Tratativas`, `Ocorrências / vínculos`, `Ações / pendências`, `Evidências exclusivas`, `Históricos exclusivos` e `Workflows em andamento`), campo opcional de motivo e digitação exata do código da OQ (`confirm_code`) via POST para `qualidade:ordem_excluir`.
 
-OQs arquivadas saem das consultas operacionais, indicadores e rankings. O arquivamento e bloqueado enquanto houver envio pendente/incerto, TQ em acompanhamento, ticket de Qualidade sem encerramento confirmado ou ciclo RREIP ativo. A operacao e transacional e registrada no historico local e na auditoria central.
+A exclusão não é bloqueada por status da OQ, TQ aberta/pendente/incerta ou ciclo RREIP ativo. Dentro de uma transação atômica (`delete_quality_order`), os registros exclusivos são removidos em ordem segura de dependências (`QualityMonitoringCycle`, `QualityEvidence`, `QualityTreatment`, `QualityTicket`, `QualityOccurrence`, `QualityAction`, `QualityAuditEvent`, eventos `AuditEvent` de categoria `QUALITY` associados e `QualityOrder`), preservando integralmente dados compartilhados (`CMDBLinkMirror`, `OTRSTicket`, `QualityContact`, evidências também referenciadas por outras ordens e demais OQs, desacoplando apenas eventuais referências cruzadas). Arquivos e diretórios exclusivos de mídia são removidos somente em `transaction.on_commit` com retry; falhas de banco revertem tudo sem apagar arquivos. Tombstones mínimos em `QualityDeletedOrder`, monotonicidade em `QualityTreatmentSequence` (`key="oq"`) e `QualityTreatmentIdentity.deleted_at` impedem reutilização de código e bloqueiam jobs atrasados de envio ou correlação OTRS. A auditoria central mantém apenas o evento administrativo mínimo `OQ_DELETED` (`category="ADMINISTRATION"`).
 
 
 ## Homologacao final de TQ e roteamento

@@ -1,4 +1,4 @@
-﻿# Usuários, Grupos e Escopos de Dados
+# Usuários, Grupos e Escopos de Dados
 
 ## RBAC e Data Scope
 
@@ -109,7 +109,7 @@ Até existir uma correção funcional homologada, conceder acesso a Relatórios 
 
 | Grupo provisionado | Intenção/capacidades iniciais | Escopo inicial |
 |---|---|---|
-| Administrador do Sistema | Catálogo geral/admin e Relatórios, gestão/arquivamento de OQ; não inclui automaticamente Cancelamentos nem gestão de contatos | ALL |
+| Administrador do Sistema | Catálogo geral/admin e Relatórios, gestão e exclusão definitiva de OQ; não inclui automaticamente Cancelamentos nem gestão de contatos | ALL |
 | Gestor | Consulta dos módulos gerais/Qualidade/Relatórios, gestão local de Chamados/OQs, visões salvas e parte das ações de tratativa | CUSTOM vazio |
 | Analista NOC | Consulta geral/Qualidade, tracking de Chamados e visões salvas | CUSTOM vazio |
 | Consulta / Auditoria | Consulta geral/Qualidade e auditoria; sem Relatórios por padrão | CUSTOM vazio |
