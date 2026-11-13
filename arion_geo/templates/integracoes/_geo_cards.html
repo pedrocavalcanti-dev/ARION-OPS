@@ -11,7 +11,7 @@
     </a>
     <a class="integration-card integration-card--portal" data-integration-card href="{% url 'configuracoes:integracoes:geo-detail' 'open_meteo' %}">
       <div class="integration-card-top"><span class="integration-icon" aria-hidden="true">☁</span><span class="integration-source-badge">METEOROLOGIA</span><span class="integration-status integration-status--{{ geo_weather.health }}"><i></i>{% if not geo_weather.enabled %}Desabilitada{% elif geo_readiness.status == 'ready' %}Configurada{% else %}Revisar configuração{% endif %}</span></div>
-      <h3>Open-Meteo — Clima e Histórico</h3><p class="integration-kind">Chuva, temperatura e vento · estimativa territorial</p>
+      <h3>Clima e Histórico — GEO</h3><p class="integration-kind">{{ geo_source_info.attribution }} · estimativa territorial</p>
       <dl class="integration-facts integration-facts--compact">
         <div><dt>Worker</dt><dd>{{ geo_worker.label }}{% if geo_pending %} · {{ geo_pending }} na fila{% endif %}</dd></div><div><dt>Última coleta</dt><dd>{{ geo_last_weather.collected_at|date:"d/m/Y H:i"|default:"Nenhuma coleta" }}</dd></div>
         <div><dt>Recortes em cache</dt><dd>{{ geo_cache_count }} UF / mês</dd></div><div><dt>Requisições neste mês</dt><dd>{{ geo_requests }}</dd></div>

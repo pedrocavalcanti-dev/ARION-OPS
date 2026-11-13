@@ -696,7 +696,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
     ui.panelScope.textContent=labels[state.layer]+" · "+(state.day||state.period);
     const metrics=[["Chuva estimada",c?.[state.day?"precipitation_sum":"precipitation_mm"],"mm"],["Temperatura média",c?.[state.day?"temperature_2m_mean":"temperature_mean_c"],"°C"],["Vento máximo",c?.[state.day?"wind_speed_10m_max":"wind_max_kmh"],"km/h"],["Rajada máxima",c?.[state.day?"wind_gusts_10m_max":"gust_max_kmh"],"km/h"]];
     ui.panelOverview.innerHTML=metrics.map(([label,n,unit])=>`<div class="panel-overview-kpi"><strong>${format(n,unit)}</strong><span>${label}</span></div>`).join("");
-    ui.panelOverviewContext.textContent=c?"Estimativa territorial · Open-Meteo / Copernicus ERA5. Método e cobertura nas análises.":"Sem cache climático neste recorte. Os chamados permanecem disponíveis.";
+    ui.panelOverviewContext.textContent=c?"Estimativa territorial · fonte, modelo e cobertura nas análises.":"Sem cache climático neste recorte. Os chamados permanecem disponíveis.";
   }
   function panelWidth(element,fallback){const width=parseFloat(getComputedStyle(element).width);return Number.isFinite(width)&&width>0?width:fallback;}
   function updateMapLayout(){
@@ -705,6 +705,9 @@ import { mountWeatherIcons } from "./weather-icons.js";
     page.style.setProperty("--geo-detail-reserve",`${state.selectedUF?drawerWidth+52:36}px`);
     root.style.setProperty("--map-national-width",`${nationalWidth}px`);
     root.style.setProperty("--map-control-inset",`${drawerWidth+16}px`);
+    const analytics=page.querySelector("[data-geo-intelligence]");
+    const side=window.innerWidth>760?(page.classList.contains("has-analytics-drawer")?panelWidth(analytics,480)+36:state.selectedUF?drawerWidth+36:0):0;
+    page.style.setProperty("--geo-side-space",`${side}px`);
     root.classList.toggle("national-collapsed",state.collapsed);
     root.classList.toggle("has-selection",Boolean(state.selectedUF));
   }
@@ -718,13 +721,13 @@ import { mountWeatherIcons } from "./weather-icons.js";
     }else{
       const left=ui.moreFilters.open?ui.moreFilters.querySelector(".geo-toolbar").getBoundingClientRect().width+36:state.collapsed?28:panelWidth(national,300)+28;
       const analyticsExpanded=page.classList.contains("has-analytics-drawer");
-      const right=analyticsExpanded?page.querySelector("[data-geo-intelligence]").getBoundingClientRect().width+28:focused?panelWidth(panel,356)+28:28;
+      const right=24; // The side panel now has its own layout space outside the canvas.
       const maxOccupied=Math.max(0,stageWidth*.62),occupied=left+right;
       const factor=occupied>maxOccupied&&occupied?maxOccupied/occupied:1;
       const analytics=page.querySelector("[data-geo-intelligence]");
       const analyticsHeight=analytics.dataset.panelState==="summary"?analytics.getBoundingClientRect().height:0;
       const bottom=analyticsHeight+(page.classList.contains("has-timeline")?92:52);
-      padding={top:96,right:right*factor,bottom:Math.min(bottom,stageHeight*.52),left:left*factor};
+      padding={top:100,right:right*factor,bottom:Math.min(bottom,stageHeight*.52),left:left*factor};
     }
     return padding;
   }
@@ -778,7 +781,7 @@ import { mountWeatherIcons } from "./weather-icons.js";
   function chooseSearchResult(code){closeSearch(true);closeTooltip();selectState(code);}
 
   function bind(){
-    page.addEventListener("geo:analysis",event=>{if(event.detail.expanded){panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");}else if(state.selectedUF)openPanel();});
+    page.addEventListener("geo:analysis",event=>{if(event.detail.expanded){panel.classList.remove("is-open");panel.inert=true;panel.setAttribute("aria-hidden","true");panelBackdrop.classList.remove("is-visible");}else if(state.selectedUF)openPanel();updateMapLayout();});
     page.addEventListener("geo:details",()=>geoController.collapse());
     page.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.mode;if(["base","projects","repeat"].includes(state.mode))state.day="";state.layer=state.mode==="climate"?"rain":state.mode==="motives"?"motives":"analysis";state.ufTab=state.mode==="base"&&state.ufTab!=="overview"?"overview":state.ufTab;updateModeControls();fetchData().catch(error=>showError("N\u00e3o foi poss\u00edvel carregar o recorte selecionado. Tente novamente."));}));
     page.querySelectorAll("[data-client]").forEach(button=>button.addEventListener("click",()=>{state.client=button.dataset.client;state.provider="";$("[data-filter-notice]").textContent="Projeto e ISP revalidados para o cliente selecionado.";page.querySelectorAll("[data-client]").forEach(item=>{const selected=item===button;item.classList.toggle("is-selected",selected);item.setAttribute("aria-pressed",String(selected));});state.project="";ui.project.value="";fetchData().catch(()=>showError("Não foi possível filtrar os dados. Tente novamente."));}));
