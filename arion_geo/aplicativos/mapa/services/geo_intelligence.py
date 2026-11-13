@@ -160,10 +160,12 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
             row["source_info"]={key:info[key] for key in ("type","attribution","conditions","terms_url") if key in info}
         # Option catalogs belong to /dados/, never to the local daily series.
         summary={key:value for key,value in summary.items() if key not in {"projects","providers","clients","priority_options","reasons","reason_options"}}
+    catalog_ufs = summary["allowed_ufs"] if presentation else region_states(params.get("region",""))
+    catalog_regions = [r for r in REGIONS if any(s["region_id"]==r["id"] and s["sigla"] in catalog_ufs for s in STATES)]
     return {"summary":summary,"weather":weather,"climate":regional,"daily":series,"comparison_time_compatible":bool(compatible_time),"rankings":climate_rankings(weather),"correlation":summary.get("correlation",{}),
             "icon_thresholds":getattr(settings,"GEO_WEATHER_THRESHOLDS",{"rain":1,"heavy_rain":20,"heat":35,"cold":{"N":18,"NE":16,"CO":12,"SE":10,"S":5},"wind":40}),
             "collection":readiness,
             "period":{"month":first.strftime("%Y-%m") if first.replace(day=1)==end.replace(day=1) else f"{first:%d/%m/%Y} – {end:%d/%m/%Y}","date_from":first.isoformat(),"date_to":end.isoformat(),"partial":end>=timezone.localdate()-timedelta(days=5)},
             "missing_ufs":[uf for uf in ufs if uf not in weather],"eligible_ufs":ufs,
             "notice":"Coincidência temporal é contexto; não confirma causa meteorológica. Chuva representa estimativa territorial, não medição única da UF.",
-            "catalog":{"regions":list(REGIONS),"states":[s for s in STATES if s["sigla"] in region_states(params.get("region",""))]}}
+            "catalog":{"regions":catalog_regions,"states":[s for s in STATES if s["sigla"] in catalog_ufs]}}

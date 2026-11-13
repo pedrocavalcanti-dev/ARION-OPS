@@ -12,7 +12,7 @@ from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem, ExternalAPIIntegration, WeatherCollectionJob
 from aplicativos.integracoes.services.incidents import IncidentRules
 from .services.analytics import MapAnalyticsService
-from .services.presentation import project_distribution
+from .services.presentation import project_distribution, presentation_ufs
 
 
 class GeoIntelligenceTests(TestCase):
@@ -177,6 +177,41 @@ class GeoIntelligenceTests(TestCase):
         response=self.client.post(reverse("mapa:presentation-start"),{"client":"Claro","project":"BRADESCO","period":"2026-10"})
         self.assertEqual(response.status_code,302)
         return self.client.session["geo_presentation"]["key"]
+
+    def test_vivo_presentation_catalogs_and_endpoints_stay_within_client(self):
+        response=self.client.post(reverse("mapa:presentation-start"),{"client":"Vivo","project":"FUST","period":"2026-10"})
+        self.assertEqual(response.status_code,302)
+        key=self.client.session["geo_presentation"]["key"]
+        page=self.client.get(reverse("mapa:presentation",args=[key]))
+        self.assertContains(page,"Cliente fixado: Vivo")
+        self.assertNotContains(page,'data-client="Claro"')
+        self.assertNotContains(page,'data-client="all"')
+        for name in ("presentation-data","presentation-intelligence","presentation-detail"):
+            url=reverse("mapa:"+name,args=[key])
+            for mode in ("base","projects","calls","repeat","motives","climate"):
+                response=self.client.get(url,{"mode":mode,"period":"2026-10","uf":"SP"})
+                self.assertEqual(response.status_code,200,(name,mode,response.content))
+                payload=response.json()
+                if name=="presentation-data":
+                    self.assertEqual(payload["clients"],["Vivo"])
+                    self.assertEqual(payload["projects"],["FUST"])
+                    self.assertEqual(payload["allowed_ufs"],["SP"])
+                elif name=="presentation-intelligence":
+                    self.assertEqual([s["sigla"] for s in payload["catalog"]["states"]],["SP"])
+            for params in ({"client":"Claro"},{"client":"all"},{"project":"BRADESCO"},{"uf":"BA"},{"uf":"UNKNOWN"}):
+                self.assertEqual(self.client.get(url,params).status_code,403,(name,params))
+
+    def test_presentation_start_project_options_follow_selected_client(self):
+        response=self.client.get(reverse("mapa:presentation-start"),{"client":"Vivo"})
+        self.assertEqual(list(response.context["form"].fields["project"].choices),[("","Todos os projetos"),("FUST","FUST")])
+        response=self.client.post(reverse("mapa:presentation-start"),{"client":"Vivo","project":"BRADESCO","period":"2026-10"})
+        self.assertEqual(response.status_code,200)
+        self.assertNotIn("geo_presentation",self.client.session)
+
+    def test_presentation_link_without_state_does_not_grant_geography(self):
+        self.other.state=""
+        self.other.save(update_fields=["state"])
+        self.assertEqual(presentation_ufs(self.user,{"client":"Vivo"}),[])
 
     def test_presentation_sanitizes_payload_and_locks_scope_until_exit(self):
         self.ticket(1,reason="PendenciaFinanceira");self.ticket(2,reason="FalhaMassiva")

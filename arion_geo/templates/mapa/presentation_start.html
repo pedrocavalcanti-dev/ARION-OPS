@@ -2,3 +2,5 @@
 {% block title %}Apresentar GEO Intelligence · ARION OPS{% endblock %}
 {% block extra_css %}<link rel="stylesheet" href="{% static 'css/mapa/intelligence.css' %}">{% endblock %}
 {% block content %}<section class="geo-presentation-start"><a href="{% url 'mapa:index' %}">← Voltar ao Mapa</a><p class="section-kicker">APRESENTAÇÃO POR CLIENTE</p><h1>GEO Intelligence</h1><p>Escolha o cliente e o mês. O escopo ficará protegido durante toda a apresentação.</p><form method="post">{% csrf_token %}{{ form.non_field_errors }}{% for field in form %}<label for="{{ field.id_for_label }}">{{ field.label }}{{ field }}{{ field.errors }}</label>{% endfor %}<p class="geo-method-note">Somente dados agregados. Distribuições projetadas são identificadas como estimativas e preservam os diagnósticos originais.</p><button class="geo-text-action" type="submit">Iniciar apresentação →</button></form></section>{% endblock %}
+
+{% block extra_js %}{{ project_catalog|json_script:"presentation-projects" }}<script type="module" src="{% arion_js 'js/mapa/presentation-start.js' %}"></script>{% endblock %}

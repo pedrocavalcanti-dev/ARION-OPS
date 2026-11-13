@@ -2,11 +2,25 @@
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from django.conf import settings
 
-from aplicativos.integracoes.services.geography import REGIONS, STATE_BY_UF
+from aplicativos.integracoes.services.geography import REGIONS, STATE_BY_UF, region_states
+from aplicativos.integracoes.services.analytics import LinkQueryService
+from aplicativos.integracoes.services.project_names import project_alias_groups
 from aplicativos.integracoes.services.incidents import IncidentRules
-from .analytics import MapAnalyticsService
+from .analytics import MapAnalyticsService, _client_filter, STATE_NAMES, STATE_NAMES_ACCENTED
 
 TECHNICAL = ("Massiva","Rompimento","Equipamento","Energia","Configuração","Reset remoto","Demais motivos técnicos","Sem classificação")
+
+
+def presentation_ufs(user, params):
+    links = _client_filter(LinkQueryService.base(user), params["client"])
+    if params.get("project"):
+        aliases = project_alias_groups(links.values_list("business_project", flat=True).distinct())
+        links = links.filter(business_project__in=aliases.get(params["project"], ()))
+    if params.get("provider"):
+        links = links.filter(operator_id=int(params["provider"]))
+    names = {str(value).strip().casefold() for value in links.values_list("state", flat=True).distinct() if value}
+    return [uf for uf in region_states(params.get("region", ""))
+            if names.intersection({uf.casefold(), STATE_NAMES[uf].casefold(), STATE_NAMES_ACCENTED.get(uf, STATE_NAMES[uf]).casefold()})]
 
 
 def project_distribution(total, weights):
@@ -42,11 +56,14 @@ def _causes(row):
 
 def presentation_payload(user,params):
     source = MapAnalyticsService.query(user,params,fixed_client=True)
+    allowed_ufs = presentation_ufs(user, params)
     technical,projection = _causes(source)
     state_fields = ("total_links","ticket_count","affected_links","recurrence_links","recurrence_tickets","daily_counts","technical_daily_counts","project_counts","provider_counts","ticket_project_counts","ticket_provider_counts")
     states = {}
     region_links = {region["nome"]:0 for region in REGIONS}
     for uf,row in source["states"].items():
+        if uf not in allowed_ufs:
+            continue
         region_name = next(r["nome"] for r in REGIONS if r["id"]==STATE_BY_UF[uf]["region_id"])
         region_links[region_name] += row["total_links"]
         proven,estimated = _causes(row)
@@ -57,7 +74,7 @@ def presentation_payload(user,params):
     return {"mode":params.get("mode","calls"),"states":states,"period":source["period"],"region_link_counts":region_links,
             "correlation":source.get("correlation",{}),
             "project_colors":source.get("project_colors",{}),
-            "region":source["region"],"allowed_ufs":source["allowed_ufs"],"projects":source["projects"],
+            "region":source["region"],"allowed_ufs":allowed_ufs,"projects":source["projects"],
             "selected_project":params.get("project",""),"providers":source["providers"],"clients":[params["client"]],"priority_options":source.get("priority_options",[]),
             "filtered_source_total":source["filtered_source_total"],"source_total":source["filtered_source_total"],
             "ticket_count":source["ticket_count"],"affected_link_count":source["affected_link_count"],

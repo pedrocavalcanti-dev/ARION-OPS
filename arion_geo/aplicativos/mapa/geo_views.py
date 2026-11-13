@@ -22,7 +22,7 @@ from aplicativos.integracoes.models import WeatherCollectionJob
 from aplicativos.integracoes.services.incidents import IncidentRules
 from .services.analytics import STATE_NAMES, MapAnalyticsService, _client_filter, _bounds
 from .services.geo_intelligence import intelligence_payload
-from .services.presentation import presentation_payload
+from .services.presentation import presentation_payload, presentation_ufs
 
 SESSION_KEY = "geo_presentation"
 
@@ -64,6 +64,9 @@ def _fixed_params(request, key):
     provider = params["provider"]
     if provider and (not provider.isdigit() or not links.filter(operator_id=int(provider)).exists()):
         raise PermissionDenied("ISP fora do escopo autorizado do cliente.")
+    allowed_ufs = presentation_ufs(request.user, params)
+    if params["uf"] and params["uf"] not in allowed_ufs:
+        raise PermissionDenied("UF fora do recorte autorizado do cliente.")
     if params["category"] == "financeiro" or (params["reason"] and IncidentRules.category(params["reason"]) in {"financeiro","sem_classificacao"}):
         raise PermissionDenied("Classificação indisponível na apresentação.")
     return params
@@ -164,7 +167,9 @@ class PresentationForm(forms.Form):
         super().__init__(*args,**kwargs)
         links = LinkQueryService.base(user)
         self.fields["client"].choices = [("","Selecione um cliente"),*((value,value) for value in links.exclude(contracting_client="").exclude(contracting_client="TELMEX").order_by("contracting_client").values_list("contracting_client",flat=True).distinct())]
-        self.fields["project"].choices = [("","Todos os projetos"),*((p,p) for p in sorted(project_alias_groups(links.exclude(business_project="").values_list("business_project",flat=True).distinct())))]
+        self.project_catalog = {client: sorted(project_alias_groups(_client_filter(links, client).exclude(business_project="").values_list("business_project",flat=True).distinct())) for client, _ in self.fields["client"].choices if client}
+        selected = self.data.get("client", self.initial.get("client", ""))
+        self.fields["project"].choices = [("","Todos os projetos"),*((p,p) for p in self.project_catalog.get(selected, []))]
 
     def clean_period(self):
         return month_bounds(self.cleaned_data["period"])[0].strftime("%Y-%m")
@@ -195,7 +200,7 @@ def start(request):
             request.session[SESSION_KEY] = {**values,"key":key,"user_id":request.user.pk,"expires":(timezone.now()+timedelta(hours=2)).timestamp()}
             AuditService.record(request=request,category="mapa",action="presentation.start",description="Apresentação de cliente iniciada.",metadata={"client":values["client"],"project":values["project"],"period":values["period"]})
             return redirect("mapa:presentation",key=key)
-    return render(request,"mapa/presentation_start.html",{"form":form})
+    return render(request,"mapa/presentation_start.html",{"form":form,"project_catalog":form.project_catalog})
 
 
 @login_required
