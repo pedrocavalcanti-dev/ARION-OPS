@@ -22,7 +22,8 @@ ARCHIVE_ENDPOINTS = {
     "evaluation": "https://archive-api.open-meteo.com/v1/archive",
     "commercial": "https://customer-archive-api.open-meteo.com/v1/archive",
 }
-ALLOWED_URLS = {IBGE_BASE + "regioes", IBGE_BASE + "estados", *ARCHIVE_ENDPOINTS.values()}
+ALLOWED_URLS = {IBGE_BASE + "regioes", IBGE_BASE + "estados", *ARCHIVE_ENDPOINTS.values(),
+                "https://power.larc.nasa.gov/api/temporal/daily/point"}
 
 
 class PublicDataError(ValueError):
@@ -124,23 +125,23 @@ class PublicDataClient:
                     raw = response.read(4_000_001)
                     encoding = response.headers.get("Content-Encoding", "").lower()
                 if len(raw) > 4_000_000:
-                    raise PublicDataError("Resposta da integração excede o limite.")
+                    raise PublicDataError("Resposta da integração excede o limite.", code="contract")
                 if encoding == "gzip":
                     with gzip.GzipFile(fileobj=BytesIO(raw)) as compressed:
                         raw = compressed.read(4_000_001)
                     if len(raw)>4_000_000:
-                        raise PublicDataError("Resposta descompactada excede o limite.")
+                        raise PublicDataError("Resposta descompactada excede o limite.", code="contract")
                 return json.loads(raw)
             except HTTPError as error:
                 if error.code == 429:
                     raise PublicDataError("Limite do fornecedor atingido (HTTP 429). Aguarde antes de nova coleta.", code="rate_limited", retry_after=retry_delay((error.headers or {}).get("Retry-After"))) from None
                 if error.code not in {429, 500, 502, 503, 504} or attempt == self.retries:
-                    raise PublicDataError(f"Serviço externo indisponível (HTTP {error.code}).", code="authentication" if error.code in {401, 403} else "unavailable") from None
+                    raise PublicDataError(f"Serviço externo indisponível (HTTP {error.code}).", code="authentication" if error.code in {401, 403} else "contract" if error.code<500 else "unavailable") from None
             except PublicDataError:
                 raise
             except (URLError, TimeoutError, OSError):
                 if attempt == self.retries:
                     raise PublicDataError("Falha de transporte seguro ou timeout no serviço externo.") from None
             except (ValueError, UnicodeError):
-                raise PublicDataError("Resposta inválida do serviço externo.") from None
+                raise PublicDataError("Resposta inválida do serviço externo.", code="contract") from None
             time.sleep(0.5 * 2 ** attempt)

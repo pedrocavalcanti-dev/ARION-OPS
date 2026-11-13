@@ -33,6 +33,7 @@ class Command(BaseCommand):
         parser.add_argument("--once", action="store_true", help="Avalia os jobs uma vez e encerra.")
         parser.add_argument("--interval", type=int, default=5, help="Intervalo de verificação em segundos.")
         parser.add_argument("--geo-only", action="store_true", help="Executa apenas a fila GEO, sem sincronizar OTRS/CMDB ou outros módulos.")
+        parser.add_argument("--max-cycles", type=int, default=0, help="Encerra graciosamente após N ciclos; zero mantém execução contínua.")
 
     def handle(self, *args, **options):
         interval = max(1, min(options["interval"], 60))
@@ -49,6 +50,7 @@ class Command(BaseCommand):
             "Worker iniciado."
         )
         try:
+            cycles=0
             while True:
                 if not worker.heartbeat():
                     self.stderr.write(self.style.ERROR("Worker lease lost; stopping to avoid duplicate scheduling."))
@@ -58,7 +60,8 @@ class Command(BaseCommand):
                     self._backlog_history(timezone.now())
                     self._cancellation_intake()
                 self._geo_intelligence()
-                if options["once"]:
+                cycles+=1
+                if options["once"] or (options.get("max_cycles",0)>0 and cycles>=options["max_cycles"]):
                     break
                 time.sleep(interval)
         except KeyboardInterrupt:

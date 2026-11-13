@@ -596,6 +596,33 @@ class OTRSOperationalTicketSnapshot(models.Model):
         verbose_name = "ticket no snapshot OTRS"
 
 
+class WeatherGridCache(models.Model):
+    """Validated daily cells, independent of UF weights and operational tickets."""
+    identity = models.CharField(max_length=64, unique=True)
+    source = models.CharField(max_length=30, db_index=True)
+    model = models.CharField(max_length=30)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    date_from = models.DateField()
+    date_to = models.DateField()
+    context = models.CharField(max_length=100)
+    payload = models.JSONField(default=dict)
+    collected_at = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=("source", "model", "date_from", "date_to"), name="weather_grid_range_idx")]
+
+
+class WeatherRequestLog(models.Model):
+    """Attempt accounting only; no URLs, credentials or provider bodies."""
+    source = models.CharField(max_length=30, db_index=True)
+    started_at = models.DateTimeField(default=timezone.now, db_index=True)
+    locations = models.PositiveIntegerField(default=1)
+    estimated_units = models.FloatField(default=1)
+    status = models.CharField(max_length=24, default="attempted")
+
+
 class OTRSOperationalConfigItemSnapshot(models.Model):
     ticket_snapshot = models.ForeignKey(
         OTRSOperationalTicketSnapshot, on_delete=models.CASCADE, related_name="config_items",

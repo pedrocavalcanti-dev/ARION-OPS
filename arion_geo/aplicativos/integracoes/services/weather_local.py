@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone as utc_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.utils import timezone
 from ..clients.public_data import IBGE_BASE, PublicDataClient, PublicDataError
-from ..models import GeographyCatalog, IntegrationSyncState, WeatherLocalCache
+from ..models import GeographyCatalog, IntegrationSyncState, WeatherLocalCache, WeatherRequestLog
 from .geography import STATE_BY_UF
 from .geo_configuration import get_geo_integration, weather_source, weather_sources, weather_source_info
 from .weather import MODEL, VARIABLES, _inside, _count_request, configured_weather, month_bounds, parse_daily, summarize, weather_secret
@@ -26,6 +26,8 @@ def request_local(city, uf, period, user):
         raise ValueError("Localidade inválida.")
     integration = get_geo_integration("open_meteo")
     cfg = configured_weather(integration)
+    if cfg.get("preferred_provider","open_meteo")!="open_meteo":
+        raise PublicDataError("A fonte selecionada não oferece série horária municipal neste adaptador.",code="capability")
     first, _ = month_bounds(period)
     row, _ = WeatherLocalCache.objects.get_or_create(location_key=locality_key(city,uf),period=first,source=weather_source(cfg),model=MODEL,
         defaults={"city":city,"uf":uf,"requested_by":user})
@@ -107,7 +109,16 @@ def collect_local(row, integration, client=None):
     # Month plus both adjacent days ensures cross-midnight incident windows.
     params["start_date"] = (first-timedelta(days=1)).isoformat()
     params["end_date"] = (end+timedelta(days=1)).isoformat()
-    payload = client.get(cfg["endpoint"],params,before_attempt=lambda:_count_request(integration,cfg))
+    attempts=[]
+    def before_attempt():
+        log=_count_request(integration,cfg,days=(end-first).days+3,variables=len(VARIABLES)+len(HOURLY))
+        if log: attempts.append(log.pk)
+    try:
+        payload = client.get(cfg["endpoint"],params,before_attempt=before_attempt)
+    except PublicDataError as error:
+        if attempts: WeatherRequestLog.objects.filter(pk=attempts[-1]).update(status=error.code)
+        raise
+    if attempts: WeatherRequestLog.objects.filter(pk=attempts[-1]).update(status="success")
     try:
         local_zone = ZoneInfo(payload["timezone"])
     except (KeyError,TypeError,ValueError,ZoneInfoNotFoundError):
@@ -120,6 +131,11 @@ def collect_local(row, integration, client=None):
     sample = parse_daily(payload,first-timedelta(days=1),end+timedelta(days=1))
     sample["area_km2"] = 1
     sample["daily"]={key:[v for i,v in enumerate(values) if first.isoformat()<=sample["daily"]["time"][i]<=end.isoformat()] for key,values in sample["daily"].items()}
+    if str(local_zone)=="America/Sao_Paulo":
+        from .weather_adapters import get_adapter
+        from .weather_grid import save_cell
+        save_cell(cfg,get_adapter(cfg),{"latitude":row.latitude,"longitude":row.longitude},first,end,
+                  {key:sample[key] for key in ("cell","daily","units")})
     row.payload = {"summary":summarize([sample]),"hourly":hourly,"cell":sample["cell"],"source_info":weather_source_info(cfg),
                    "resolution":"ERA5 · aproximadamente 0,25°","precision":"Estimativa municipal em ponto interior IBGE; não representa o trajeto da fibra.","timezone":str(local_zone),"hourly_timezone":"UTC"}
     row.collected_at,row.expires_at,row.status,row.last_error = timezone.now(),timezone.now()+timedelta(hours=int(cfg["cache_hours"])),"success",""
@@ -161,5 +177,5 @@ def local_worker_tick():
         if getattr(error,"code","") in {"budget","rate_limited"}:
             row.attempts=max(0,row.attempts-1)
             if row.next_attempt_at.year<9999: row.status="pending"
-            IntegrationSyncState.objects.update_or_create(key="weather-cooldown",defaults={"change_cursor":row.next_attempt_at})
+            IntegrationSyncState.objects.update_or_create(key="weather-cooldown",defaults={"change_cursor":row.next_attempt_at,"last_error":error.code})
         row.save()

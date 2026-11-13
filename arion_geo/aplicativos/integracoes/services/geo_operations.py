@@ -1,5 +1,6 @@
 """Shared, read-only GEO health for the portal, detail pages and map."""
 import unicodedata
+from datetime import timedelta
 from django.db.models import Count, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -12,8 +13,11 @@ from ..clients.public_data import PublicDataError
 
 def worker_state():
     lease = IntegrationLease.objects.filter(key="worker").first()
-    alive = bool(lease and lease.heartbeat_at and lease.expires_at > timezone.now())
-    return {"active": alive, "label": "Ativo" if alive else "Parado", "heartbeat_at": lease.heartbeat_at if lease else None}
+    now = timezone.now()
+    alive = bool(lease and lease.owner_token and lease.heartbeat_at and lease.expires_at > now and lease.heartbeat_at > now-timedelta(seconds=60))
+    stale = bool(lease and lease.owner_token and not alive)
+    return {"active": alive, "label": "Ativo" if alive else "Heartbeat vencido" if stale else "Parado", "heartbeat_at": lease.heartbeat_at if lease else None,
+            "heartbeat_age":round((now-lease.heartbeat_at).total_seconds()) if lease and lease.heartbeat_at else None}
 
 
 def allowed_weather_ufs(user):
@@ -27,6 +31,7 @@ def allowed_weather_ufs(user):
 
 
 def geo_operational_context():
+    from .weather_monitor import provider_monitor
     from .weather import collection_readiness
     ibge, weather = (get_geo_integration(provider) for provider in ("ibge", "open_meteo"))
     geo = catalog()
@@ -47,4 +52,4 @@ def geo_operational_context():
             "geo_last_weather":caches.order_by("-collected_at").first(),
             "geo_requests":IntegrationSyncState.objects.filter(key__startswith="meteo-"+timezone.localdate().strftime("%Y-%m")).aggregate(total=Sum("records_count"))["total"] or 0,
             "geo_pending":counts.get("pending",0), "geo_running":counts.get("running",0), "geo_failed":counts.get("error",0),
-            "geo_ibge_sync":IntegrationSyncState.objects.filter(key="ibge").first()}
+            "geo_ibge_sync":IntegrationSyncState.objects.filter(key="ibge").first(), "geo_providers":provider_monitor(weather)}

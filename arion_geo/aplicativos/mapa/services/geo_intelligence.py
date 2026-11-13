@@ -19,6 +19,8 @@ def weather_range(ufs, first, end):
         month = (month.replace(day=28)+timedelta(days=4)).replace(day=1)
     result = {}
     for uf,rows in grouped.items():
+        if len({(row["model"],row.get("source_info",{}).get("timezone","America/Sao_Paulo")) for row in rows})>1:
+            continue
         days = {d["date"]:d for row in rows for d in row["daily"] if first.isoformat()<=d["date"]<=end.isoformat()}
         series = [days[d] for d in sorted(days)]
         if not series: continue
@@ -34,6 +36,8 @@ def weather_range(ufs, first, end):
 
 
 def climate_rankings(weather):
+    if len({(r.get("model","era5"),r.get("source_info",{}).get("timezone","America/Sao_Paulo")) for r in weather.values()})>1:
+        return {}
     complete = {uf:row for uf,row in weather.items() if row.get("completeness",0)>=.99 and not row.get("partial") and not row.get("stale")}
     keys = {"precipitation_mm":False,"rainy_days":False,"gust_max_kmh":False,"temperature_max_c":False,"temperature_min_c":True}
     return {key:[{"uf":uf,"value":row[key]} for uf,row in sorted(complete.items(),key=lambda pair:((pair[1].get(key) if ascending else -(pair[1].get(key) or 0)) if pair[1].get(key) is not None else float('inf'),pair[0])) if row.get(key) is not None] for key,ascending in keys.items()}
@@ -43,6 +47,10 @@ def aggregate_weather(rows):
     """Area-weighted UF means; regional rainfall is never a sum of mm."""
     if not rows:
         return {"available":False,"daily":[]}
+    identities={(r.get("model","era5"),r.get("source_info",{}).get("timezone","America/Sao_Paulo")) for r in rows.values()}
+    if len(identities)>1:
+        return {"available":False,"daily":[],"source":"Múltiplos modelos/referências temporais", "mixed_sources":True,
+                "message":"Consulte as UFs separadamente: séries de modelos ou fusos distintos não são agregadas."}
     daily = {}
     for row in rows.values():
         for item in row["daily"]:
@@ -72,7 +80,8 @@ def aggregate_weather(rows):
             "wind_max_kmh":max(winds) if winds else None,"gust_max_kmh":max(gusts) if gusts else None,
             "points":sum(r["points"] for r in rows.values()),"daily":series,"covered_ufs":len(rows),
             "completeness":min(r["completeness"] for r in rows.values()),"stale":any(r["stale"] for r in rows.values()),
-            "partial":any(r.get("partial") for r in rows.values()),"source":"Open-Meteo / Copernicus ERA5", "method":", ".join(sorted({r.get("method","area-grid-v1") for r in rows.values()}))}
+            "partial":any(r.get("partial") for r in rows.values()),"timezone":next(iter(identities))[1],
+            "source":", ".join(sorted({r.get("source_info",{}).get("attribution",r.get("source","Open-Meteo / Copernicus ERA5")) for r in rows.values()})), "method":", ".join(sorted({r.get("method","area-grid-v1") for r in rows.values()}))}
 
 
 def intelligence_payload(user,params,*,presentation=False,summary=None):
@@ -104,8 +113,9 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
     operational = summary["technical_daily_counts"]
     for uf,row in weather.items():
         daily = summary["states"].get(uf,{}).get("technical_daily_counts",{})
-        row["coincident_days"] = sum(1 for day in row["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and daily.get(day["date"],0)>0) if any(day["precipitation_sum"] is not None for day in row["daily"]) else None
-    regional["coincident_days"] = len({day["date"] for uf,row in weather.items() for day in row["daily"] if day.get("precipitation_sum") is not None and day["precipitation_sum"]>=1 and summary["states"].get(uf,{}).get("technical_daily_counts",{}).get(day["date"],0)>0}) if weather else None
+        row["coincident_days"] = sum(1 for day in row["daily"] if day["precipitation_sum"] is not None and day["precipitation_sum"]>=1 and daily.get(day["date"],0)>0) if row.get("source_info",{}).get("timezone","America/Sao_Paulo")=="America/Sao_Paulo" and any(day["precipitation_sum"] is not None for day in row["daily"]) else None
+    compatible_time=regional.get("available") and regional.get("timezone","America/Sao_Paulo")=="America/Sao_Paulo"
+    regional["coincident_days"] = len({day["date"] for uf,row in weather.items() for day in row["daily"] if day.get("precipitation_sum") is not None and day["precipitation_sum"]>=1 and summary["states"].get(uf,{}).get("technical_daily_counts",{}).get(day["date"],0)>0}) if compatible_time else None
     series = []
     for i in range((end-first).days+1):
         day = (first+timedelta(days=i)).isoformat()
@@ -136,7 +146,7 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
     try:
         cfg=weather_configuration(get_geo_integration("open_meteo"))
         readiness["daily_budget"]=int(cfg["daily_budget"])
-        readiness["requests_today"]=IntegrationSyncState.objects.filter(key="meteo-"+timezone.localdate().isoformat()).values_list("records_count",flat=True).first() or 0
+        readiness["requests_today"]=IntegrationSyncState.objects.filter(key=("nasa-" if cfg["preferred_provider"]=="nasa_power" else "meteo-")+timezone.localdate().isoformat()).values_list("records_count",flat=True).first() or 0
     except PublicDataError:
         pass
     readiness["checkpoint_cells"]=sum(len(p.get("samples",{})) for p in WeatherCollectionJob.objects.filter(uf__in=ufs,period__range=(first.replace(day=1),end),status__in=("running","pending","paused","error")).values_list("progress",flat=True))
@@ -149,7 +159,7 @@ def intelligence_payload(user,params,*,presentation=False,summary=None):
             row["source_info"]={key:info[key] for key in ("type","attribution","conditions","terms_url") if key in info}
         # Option catalogs belong to /dados/, never to the local daily series.
         summary={key:value for key,value in summary.items() if key not in {"projects","providers","clients","priority_options","reasons","reason_options"}}
-    return {"summary":summary,"weather":weather,"climate":regional,"daily":series,"rankings":climate_rankings(weather),"correlation":summary.get("correlation",{}),
+    return {"summary":summary,"weather":weather,"climate":regional,"daily":series,"comparison_time_compatible":bool(compatible_time),"rankings":climate_rankings(weather),"correlation":summary.get("correlation",{}),
             "icon_thresholds":getattr(settings,"GEO_WEATHER_THRESHOLDS",{"rain":1,"heavy_rain":20,"heat":35,"cold":{"N":18,"NE":16,"CO":12,"SE":10,"S":5},"wind":40}),
             "collection":readiness,
             "period":{"month":first.strftime("%Y-%m") if first.replace(day=1)==end.replace(day=1) else f"{first:%d/%m/%Y} – {end:%d/%m/%Y}","date_from":first.isoformat(),"date_to":end.isoformat(),"partial":end>=timezone.localdate()-timedelta(days=5)},

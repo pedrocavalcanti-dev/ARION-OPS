@@ -7,7 +7,7 @@ from functools import lru_cache
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Sum
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
 
@@ -16,7 +16,7 @@ from ..models import ExternalAPIHealthCheck, ExternalAPIIntegration, Integration
 from .external_apis import decrypt_external_api_secret
 from .geography import STATE_BY_UF
 from .sync_lock import Lease
-from .geo_configuration import get_geo_integration, weather_configuration, weather_source, weather_sources, weather_source_info
+from .geo_configuration import get_geo_integration, weather_configuration, weather_source, weather_sources, weather_source_info, weather_model
 
 VARIABLES = {"precipitation_sum": "mm", "wind_speed_10m_max": "km/h", "wind_gusts_10m_max": "km/h",
              "temperature_2m_mean": "°C", "temperature_2m_min": "°C", "temperature_2m_max": "°C",
@@ -78,7 +78,7 @@ def configured_weather(integration, *, automatic=False):
     if not integration or not integration.enabled:
         raise PublicDataError("Integração climática desabilitada ou não configurada.", code="configuration")
     cfg = weather_configuration(integration)
-    if cfg["mode"] == "commercial" and (not integration.secret_ciphertext or cfg.get("credential_endpoint", cfg["endpoint"]) != cfg["endpoint"]):
+    if cfg.get("preferred_provider", "open_meteo")=="open_meteo" and cfg["mode"] == "commercial" and (not integration.secret_ciphertext or cfg.get("credential_endpoint", cfg["endpoint"]) != cfg["endpoint"]):
         raise PublicDataError("Cadastre uma chave para o endpoint comercial selecionado.", code="credential")
     return cfg
 
@@ -166,7 +166,7 @@ def parse_daily(payload, start, end):
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             raise ValueError
     except (KeyError, TypeError, ValueError, OverflowError):
-        raise PublicDataError("Série climática inválida ou unidades incompatíveis.") from None
+        raise PublicDataError("Série climática inválida ou unidades incompatíveis.", code="contract") from None
     return {"cell": [lat,lon], "daily": {"time": expected, **{v:daily[v] for v in VARIABLES}}, "units": dict(VARIABLES)}
 
 
@@ -202,13 +202,34 @@ def summarize(samples):
             "area_km2": area, "completeness": valid_values/(len(samples)*len(days)*len(VARIABLES)), "daily": daily}
 
 
-def _count_request(integration, cfg):
-    key = "meteo-" + timezone.localdate().isoformat()
-    state, _ = IntegrationSyncState.objects.get_or_create(key=key, defaults={"records_count":0})
-    if (state.records_count or 0) >= int(cfg.get("daily_budget", 250)):
-        tomorrow=timezone.make_aware(datetime.combine(timezone.localdate()+timedelta(days=1),datetime.min.time()))
-        raise PublicDataError("Limite diário de consultas climáticas atingido; aguardando o próximo dia.", code="budget", retry_after=max(60,math.ceil((tomorrow-timezone.now()).total_seconds())))
-    IntegrationSyncState.objects.filter(pk=state.pk).update(records_count=F("records_count")+1, last_started_at=timezone.now())
+def _count_request(integration, cfg, *, locations=1, days=31, variables=7):
+    """Count HTTP attempts separately from conservative supplier-weight estimates."""
+    from ..models import WeatherRequestLog
+    source = weather_source(cfg)
+    now = timezone.now()
+    key = ("nasa-" if source=="nasa_power" else "meteo-") + timezone.localdate().isoformat()
+    tomorrow=timezone.make_aware(datetime.combine(timezone.localdate()+timedelta(days=1),datetime.min.time()))
+    with transaction.atomic():
+        state, _ = IntegrationSyncState.objects.get_or_create(key=key, defaults={"records_count":0})
+        state = IntegrationSyncState.objects.select_for_update().get(pk=state.pk)
+        if (state.records_count or 0) >= int(cfg.get("daily_budget", 1000)):
+            raise PublicDataError("Orçamento HTTP interno esgotado; retomada automática no próximo dia.", code="budget", retry_after=max(60,math.ceil((tomorrow-now).total_seconds())))
+        # Estimates are deliberately conservative. The provider does not return
+        # billed units; batching never implies a one-unit supplier charge.
+        units = locations * max(1,days/14) * max(1,variables/10) if source!="nasa_power" else locations
+        limits = [(timedelta(days=1),int(cfg.get("supplier_daily_budget",5000)))]
+        if source=="open_meteo_public":
+            limits += [(timedelta(minutes=1),600),(timedelta(hours=1),5000)]
+            limits[0]=(timedelta(days=1),min(10000,limits[0][1]))
+        for window, limit in limits:
+            recent = WeatherRequestLog.objects.filter(source=source,started_at__gt=now-window)
+            used = recent.aggregate(total=Sum("estimated_units"))["total"] or 0
+            if used+units>limit:
+                oldest=recent.order_by("started_at").first()
+                delay=max(60,math.ceil(((oldest.started_at+window)-now).total_seconds())) if oldest else 86400
+                raise PublicDataError("Orçamento estimado do fornecedor atingido; aguarde renovação da janela.",code="budget",retry_after=delay)
+        IntegrationSyncState.objects.filter(pk=state.pk).update(records_count=F("records_count")+1,last_started_at=now)
+        return WeatherRequestLog.objects.create(source=source,locations=locations,estimated_units=units)
 
 
 @sensitive_variables()
@@ -219,45 +240,50 @@ def collect_month(uf, period, integration, *, client=None, job=None):
     end = min(end, timezone.localdate()-timedelta(days=5))
     if end < start:
         raise PublicDataError("Histórico do mês ainda não disponível no modelo ERA5.")
-    mode = cfg["mode"]
-    source = weather_source(cfg)
-    cache = WeatherMonth.objects.filter(uf=uf, period=start, source__in=weather_sources(cfg), model=MODEL, method=METHOD, expires_at__gt=timezone.now()).order_by("-collected_at").first()
+    from .weather_adapters import get_adapter
+    from .weather_grid import seed_months, fetch_samples
+    adapter = get_adapter(cfg)
+    source, model = weather_source(cfg), adapter.model
+    cache = WeatherMonth.objects.filter(uf=uf, period=start, source__in=weather_sources(cfg), model=model, method=METHOD, expires_at__gt=timezone.now()).order_by("-collected_at").first()
     if cache:
         return cache
-    client = client or PublicDataClient(cfg.get("timeout",15), cfg.get("retries",1), weather_endpoint=cfg["endpoint"])
-    secret = weather_secret(integration,cfg)
-    fingerprint = f"{source}:{MODEL}:{METHOD}:{start}:{end}"
-    progress = job.progress if job and job.progress.get("fingerprint")==fingerprint else {}
-    completed = dict(progress.get("samples", {}))
-    cells = {}
-    for index, point in enumerate(sampling_points(uf)):
-        if str(index) in completed:
-            sample = completed[str(index)]
-        else:
-            if job and not WeatherCollectionJob.objects.filter(pk=job.pk,status="running").exists():
+    seed_months(cfg, adapter, start)
+    fingerprint = f"{source}:{model}:{METHOD}:{start}:{end}"
+    original = job.progress if job else {}
+    variants = dict(original.get("variants",{}))
+    if original.get("fingerprint"):
+        variants[original["fingerprint"]] = original.get("samples",{})
+    completed = variants.get(fingerprint,{})
+    def checkpoint(samples):
+        if job:
+            if not WeatherCollectionJob.objects.filter(pk=job.pk,status="running").exists():
                 raise PublicDataError("Coleta pausada pelo operador.", code="paused")
-            params = {"latitude":point["latitude"], "longitude":point["longitude"], "start_date":start.isoformat(), "end_date":end.isoformat(),
-                      "daily":",".join(VARIABLES), "wind_speed_unit":"kmh", "timezone":"America/Sao_Paulo", "models":MODEL}
-            if secret:
-                params["apikey"] = secret
-            payload = client.get(cfg["endpoint"], params, before_attempt=lambda:_count_request(integration,cfg))
-            sample = parse_daily(payload,start,end)
-            completed[str(index)] = sample
-            if job:
-                job.progress = {"fingerprint":fingerprint,"samples":completed}
-                WeatherCollectionJob.objects.filter(pk=job.pk).update(progress=job.progress,updated_at=timezone.now())
-        cell_key = tuple(sample["cell"])
+            job.progress = {"fingerprint":fingerprint,"samples":samples,"variants":variants}
+            WeatherCollectionJob.objects.filter(pk=job.pk,status="running").update(progress=job.progress,updated_at=timezone.now())
+    checkpoint(completed)
+    points = sampling_points(uf)
+    completed = fetch_samples(integration,cfg,points,start,end,client=client,completed=completed,checkpoint=checkpoint)
+    cells = {}
+    for index, point in enumerate(points):
+        sample = completed[str(index)]
+        # Returned cell alone is insufficient: elevation downscaling may differ.
+        # Merge only cells whose validated daily values are identical.
+        cell_key = json.dumps([sample["cell"],sample["daily"]],sort_keys=True)
         if cell_key in cells:
             cells[cell_key]["area_km2"] += point["area_km2"]
             cells[cell_key]["requested_coordinates"].append([point["latitude"],point["longitude"]])
         else:
-            cells[cell_key] = {**sample, "area_km2":point["area_km2"], "requested_coordinates":[[point["latitude"],point["longitude"]]], "model":MODEL, "source":source, "collected_at":timezone.now().isoformat()}
+            cells[cell_key] = {**sample,"area_km2":point["area_km2"],"requested_coordinates":[[point["latitude"],point["longitude"]]],"model":model,"source":source,"collected_at":timezone.now().isoformat()}
     samples = list(cells.values())
     summary = summarize(samples)
     summary["partial"] = end < start.replace(day=calendar.monthrange(start.year,start.month)[1])
     summary["source_info"] = weather_source_info(cfg)
+    summary["supported_variables"] = samples[0].get("supported_variables",list(VARIABLES))
+    summary["missing_capabilities"] = samples[0].get("missing_capabilities",[])
+    summary["provider_metadata"] = samples[0].get("provider_metadata",{})
+    summary["supported_completeness"] = sum(v is not None for sample in samples for var in summary["supported_variables"] for v in sample["daily"][var])/(len(samples)*len(samples[0]["daily"]["time"])*len(summary["supported_variables"]))
     now = timezone.now()
-    row, _ = WeatherMonth.objects.update_or_create(uf=uf, period=start, source=source, model=MODEL, method=METHOD, defaults={
+    row, _ = WeatherMonth.objects.update_or_create(uf=uf, period=start, source=source, model=model, method=METHOD, defaults={
         "region":str(STATE_BY_UF[uf]["region_id"]), "samples":samples, "summary":summary, "completeness":summary["completeness"],
         "collected_at":now, "expires_at":now+timedelta(hours=int(cfg.get("cache_hours",720)) if not summary["partial"] else min(24,int(cfg.get("cache_hours",720))))})
     return row
@@ -268,16 +294,10 @@ def test_weather(integration):
     """One cell verifies the contract; it is not persisted as a UF estimate."""
     cfg = configured_weather(integration)
     first,end = month_bounds()
-    mode = cfg["mode"]
-    point = sampling_points("SP")[0]
-    params = {"latitude":point["latitude"],"longitude":point["longitude"],"start_date":first.isoformat(),"end_date":end.isoformat(),
-              "daily":",".join(VARIABLES),"wind_speed_unit":"kmh","timezone":"America/Sao_Paulo","models":MODEL}
-    secret = weather_secret(integration,cfg)
-    if secret:
-        params["apikey"] = secret
-    payload = PublicDataClient(cfg.get("timeout",15),cfg.get("retries",1),weather_endpoint=cfg["endpoint"]).get(cfg["endpoint"],params,before_attempt=lambda:_count_request(integration,cfg))
-    result = parse_daily(payload,first,end)
-    return len(result["daily"]["time"])
+    from .weather_grid import fetch_samples
+    result = fetch_samples(integration,cfg,[sampling_points("SP")[0]],first,end,force_refresh=True)
+    return len(result["0"]["daily"]["time"])
+
 
 
 def request_collection(ufs, period, user):
@@ -291,7 +311,7 @@ def request_collection(ufs, period, user):
         for uf in sorted(set(ufs)):
             if uf not in STATE_BY_UF:
                 raise ValueError("UF inválida.")
-            cached = WeatherMonth.objects.filter(uf=uf,period=start,source__in=weather_sources(cfg),model=MODEL,method=METHOD,expires_at__gt=now).exists()
+            cached = WeatherMonth.objects.filter(uf=uf,period=start,source__in=weather_sources(cfg),model=weather_model(cfg),method=METHOD,expires_at__gt=now).exists()
             if cached:
                 continue
             job, created = WeatherCollectionJob.objects.get_or_create(uf=uf, period=start, defaults={"requested_by":user})
@@ -311,8 +331,12 @@ def cached_weather(ufs, period):
     except PublicDataError:
         return {}
     sources = weather_sources(cfg)
-    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source__in=sources,model=MODEL,method__in=("area-grid-v1",METHOD)).defer("samples").order_by("uf","method","collected_at")
+    rows = WeatherMonth.objects.filter(uf__in=ufs, period=start,source__in=sources,model=weather_model(cfg),method__in=("area-grid-v1",METHOD)).defer("samples").order_by("uf","method","collected_at")
     result = {}
+    if cfg.get("allow_fallback") and cfg.get("secondary_provider") and cfg["secondary_provider"]!=cfg["preferred_provider"]:
+        alternative = {**cfg,"preferred_provider":cfg["secondary_provider"]}
+        for row in WeatherMonth.objects.filter(uf__in=ufs,period=start,source__in=weather_sources(alternative),model=weather_model(alternative),method=METHOD).defer("samples").order_by("collected_at"):
+            result[row.uf] = {**row.summary,"source":row.source,"model":row.model,"method":row.method,"collected_at":row.collected_at.isoformat(),"stale":row.expires_at<=timezone.now(),"fallback":True}
     # Current method always wins over v1, then use the latest collection.
     for row in rows:
         result[row.uf] = {**row.summary, "source":row.source, "model":row.model, "method":row.method,
@@ -349,7 +373,19 @@ def worker_tick():
         IntegrationSyncState.objects.filter(pk=turn.pk).update(records_count=F("records_count")+1)
         integration = get_geo_integration("open_meteo")
         try:
-            collect_month(job.uf,job.period,integration,job=job)
+            try:
+                collect_month(job.uf,job.period,integration,job=job)
+            except PublicDataError as primary_error:
+                cfg = configured_weather(integration)
+                secondary = cfg.get("secondary_provider")
+                # Only transport/5xx failure. Never quotas, auth, contract or licensing.
+                if primary_error.code!="unavailable" or not cfg.get("allow_fallback") or not secondary or secondary==cfg["preferred_provider"]:
+                    raise
+                from copy import copy
+                alternative = copy(integration)
+                alternative.config = {**cfg,"preferred_provider":secondary,"allow_fallback":False}
+                collect_month(job.uf,job.period,alternative,job=job)
+                ExternalAPIHealthCheck.objects.create(integration=integration,status="success",message=f"Fallback autorizado {job.uf}: {secondary}; cache separado, referência temporal e variáveis próprias.")
             job.status, job.last_error = "success",""
             integration.last_success_at, integration.last_error = timezone.now(),""
             integration.health = "available"
@@ -368,8 +404,8 @@ def worker_tick():
             if getattr(error,"code","") in {"budget","rate_limited"}:
                 job.attempts=max(0,job.attempts-1)
                 if job.next_attempt_at.year<9999: job.status="pending"
-                cooldown.change_cursor = job.next_attempt_at
-                cooldown.save(update_fields=("change_cursor",))
+                cooldown.change_cursor, cooldown.last_error = job.next_attempt_at, error.code
+                cooldown.save(update_fields=("change_cursor","last_error"))
             if integration:
                 integration.last_error, integration.health = job.last_error,"error"
         # A pause/cancel request made while the final HTTP response arrived wins.

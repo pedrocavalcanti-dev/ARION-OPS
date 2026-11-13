@@ -182,6 +182,11 @@ class GeographyConfigurationForm(forms.Form):
 
 
 class WeatherConfigurationForm(forms.Form):
+    preferred_provider = forms.ChoiceField(label="Fornecedor preferencial", required=False, choices=(("open_meteo","Open-Meteo · ERA5"),("nasa_power","NASA POWER · diário UTC")))
+    secondary_provider = forms.ChoiceField(label="Fornecedor secundário", required=False, choices=(("","Sem fallback"),("open_meteo","Open-Meteo · ERA5"),("nasa_power","NASA POWER · diário UTC")))
+    allow_fallback = forms.BooleanField(label="Autorizar fonte secundária em falha de conexão", required=False, help_text="Um recorte completo por fonte. Nunca alterna após quota, autenticação ou contrato inválido. Séries de modelos/fusos diferentes não são agregadas.")
+    batch_size = forms.IntegerField(label="Coordenadas por HTTP Open-Meteo", min_value=1, max_value=8, required=False, initial=8)
+    supplier_daily_budget = forms.IntegerField(label="Orçamento de unidades estimadas do fornecedor / 24h", min_value=1, max_value=1000000, required=False, initial=5000, help_text="Estimativa conservadora; não representa saldo informado pelo fornecedor. Público permanece limitado a 10.000/dia, 5.000/h e 600/min.")
     enabled = forms.BooleanField(label="Disponibilizar meteorologia no GEO", required=False, initial=True)
     mode = forms.ChoiceField(label="Fonte meteorológica", choices=(("public","Pública — Open-Meteo"),("commercial","Comercial — Open-Meteo"),("self_hosted","Self-hosted — instância própria")))
     endpoint = forms.URLField(label="Endpoint HTTPS", max_length=500, initial="https://archive-api.open-meteo.com/v1/archive", help_text="O destino deve responder ao contrato histórico Open-Meteo. TLS permanece obrigatório.")
@@ -192,7 +197,7 @@ class WeatherConfigurationForm(forms.Form):
     timeout = forms.IntegerField(label="Timeout (segundos)", min_value=2, max_value=30, initial=15)
     retries = forms.IntegerField(label="Tentativas adicionais", min_value=0, max_value=2, initial=1)
     cache_hours = forms.IntegerField(label="Validade do cache (horas)", min_value=24, max_value=8760, initial=720)
-    daily_budget = forms.IntegerField(label="Limite diário de requisições HTTP", min_value=1, max_value=1000, initial=250)
+    daily_budget = forms.IntegerField(label="Orçamento interno diário de tentativas HTTP", min_value=1, max_value=100000, initial=1000, help_text="Independente da quota externa e da cobrança por localização/variáveis/período.")
 
     def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -204,6 +209,11 @@ class WeatherConfigurationForm(forms.Form):
     def clean(self):
         from .clients.public_data import PublicDataError, validate_weather_endpoint
         cleaned = super().clean()
+        cleaned["preferred_provider"] = cleaned.get("preferred_provider") or "open_meteo"
+        cleaned["batch_size"] = cleaned.get("batch_size") or 8
+        cleaned["supplier_daily_budget"] = cleaned.get("supplier_daily_budget") or 5000
+        if cleaned.get("allow_fallback") and (not cleaned.get("secondary_provider") or cleaned["secondary_provider"]==cleaned["preferred_provider"]):
+            self.add_error("secondary_provider", "Escolha um fornecedor secundário diferente do preferencial.")
         mode, endpoint = cleaned.get("mode"), cleaned.get("endpoint")
         if mode == "public":
             cleaned["api_key"] = ""
@@ -213,7 +223,7 @@ class WeatherConfigurationForm(forms.Form):
             except PublicDataError as error:
                 self.add_error("endpoint", str(error))
         stored_for_endpoint = self.initial.get("credential_configured") and self.initial.get("credential_endpoint")==endpoint
-        if cleaned.get("enabled") and mode=="commercial" and not (cleaned.get("api_key") or stored_for_endpoint):
+        if cleaned.get("enabled") and cleaned["preferred_provider"]=="open_meteo" and mode=="commercial" and not (cleaned.get("api_key") or stored_for_endpoint):
             self.add_error("api_key", "Cadastre uma chave para o endpoint comercial selecionado.")
         if cleaned.get("automatic") and not cleaned.get("scheduled_ufs"):
             self.add_error("scheduled_ufs", "Selecione pelo menos uma UF para o agendamento.")

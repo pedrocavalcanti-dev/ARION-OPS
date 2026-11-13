@@ -49,6 +49,8 @@ class NationalWeatherTests(TestCase):
         self.assertEqual(other.status,"pending")
 
     def test_checkpoint_reuses_completed_cell_after_quota(self):
+        # A one-cell batch deliberately exercises a quota between checkpoints.
+        self.integration.config={**self.integration.config,"batch_size":1};self.integration.save()
         job=WeatherCollectionJob.objects.create(uf="SP",period=date(2026,10,1),status="running")
         points=[{"latitude":-23,"longitude":-46,"area_km2":1},{"latitude":-24,"longitude":-47,"area_km2":2}]
         client=Mock();client.get.side_effect=[weather_response(),PublicDataError("Quota",code="rate_limited",retry_after=600)]
