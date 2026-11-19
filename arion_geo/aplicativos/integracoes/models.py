@@ -848,3 +848,78 @@ class OTRSBacklogCheckpoint(models.Model):
 
     def __str__(self):
         return f"{self.slot_at:%Y-%m-%d %H:%M} · backlog={self.total_backlog}"
+
+
+class CMDBPlantMonthlySnapshot(models.Model):
+    """Idempotent monthly snapshot of the active CMDB link plant for proportional analytics."""
+
+    class Source(models.TextChoices):
+        CMDB_SYNC = "CMDB_SYNC", "Sincronização CMDB"
+        CMDB_IMPORT = "CMDB_IMPORT", "Importação CMDB (XLSX)"
+        MANUAL_CAPTURE = "MANUAL_CAPTURE", "Captura administrativa"
+
+    class CoverageStatus(models.TextChoices):
+        CONFIRMED = "CONFIRMED", "Base confirmada"
+        PARTIAL = "PARTIAL", "Cobertura parcial"
+
+    month = models.DateField("mês de referência", unique=True, db_index=True)
+    captured_at = models.DateTimeField("capturado em", db_index=True)
+    source = models.CharField("fonte", max_length=24, choices=Source.choices, default=Source.CMDB_SYNC)
+    coverage_status = models.CharField(
+        "cobertura", max_length=24, choices=CoverageStatus.choices, default=CoverageStatus.CONFIRMED,
+    )
+    is_partial_month = models.BooleanField("mês em andamento", default=False)
+    total_links = models.PositiveIntegerField(default=0)
+    active_links = models.PositiveIntegerField(default=0)
+    canceled_links = models.PositiveIntegerField(default=0)
+    maintenance_links = models.PositiveIntegerField(default=0)
+    source_run = models.ForeignKey(
+        IntegrationRun,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="cmdb_plant_snapshots",
+    )
+    notes = models.CharField(max_length=255, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("month",)
+        verbose_name = "snapshot mensal da planta CMDB"
+        verbose_name_plural = "snapshots mensais da planta CMDB"
+
+    def __str__(self):
+        return f"{self.month:%Y-%m} · ativos={self.active_links}/{self.total_links} ({self.get_coverage_status_display()})"
+
+
+class CMDBPlantMonthlySlice(models.Model):
+    """Dimensional slice (contracting operator × canonical project × UF) of a monthly plant snapshot."""
+
+    snapshot = models.ForeignKey(
+        CMDBPlantMonthlySnapshot,
+        on_delete=models.CASCADE,
+        related_name="slices",
+    )
+    contracting_client = models.CharField(max_length=120, blank=True, db_index=True)
+    canonical_project = models.CharField(max_length=160, blank=True, db_index=True)
+    uf = models.CharField(max_length=10, blank=True, db_index=True)
+    total_links = models.PositiveIntegerField(default=0)
+    active_links = models.PositiveIntegerField(default=0)
+    canceled_links = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("snapshot", "contracting_client", "canonical_project", "uf"),
+                name="uniq_cmdb_plant_monthly_slice",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("snapshot", "contracting_client", "canonical_project"), name="cmdb_plant_slice_op_proj_idx"),
+            models.Index(fields=("snapshot", "uf"), name="cmdb_plant_slice_uf_idx"),
+        ]
+        verbose_name = "recorte mensal da planta CMDB"
+        verbose_name_plural = "recortes mensais da planta CMDB"
+
+    def __str__(self):
+        return f"{self.snapshot.month:%Y-%m} · {self.contracting_client or 'Sem operadora'} · {self.canonical_project or 'Sem projeto'} · {self.uf or '—'}"

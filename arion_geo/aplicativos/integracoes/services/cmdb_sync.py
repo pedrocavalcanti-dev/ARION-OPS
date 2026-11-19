@@ -335,7 +335,14 @@ class CMDBSyncService:
             summaries["links"] = self._upsert(CMDBLinkMirror, link_rows, LINK_FIELDS, now=now, apply=apply)
             if apply:
                 from .operational_identity import OperationalIdentityService
+                from .cmdb_plant_snapshot import capture_current_cmdb_plant_snapshot
                 summaries["operational_identity"] = OperationalIdentityService.reconcile_all(apply=True)
+                snapshot = capture_current_cmdb_plant_snapshot(now=now)
+                summaries["plant_snapshot"] = {
+                    "month": snapshot.month.strftime("%Y-%m"),
+                    "active_links": snapshot.active_links,
+                    "total_links": snapshot.total_links,
+                }
         return {
             "status": "APPLIED" if apply else "DRY_RUN", "operators": summaries["operators"], "links": summaries["links"],
             "operational_identity": summaries.get("operational_identity"),

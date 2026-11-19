@@ -452,3 +452,43 @@ html[data-theme="light"] .kpi-operators .op-dot { box-shadow: 0 0 0 2px #fff; }
 .dashboard-breakdown-name a:focus-visible { outline:2px solid var(--accent-blue); outline-offset:3px; }
 .tip-swatch--neutral { background:var(--text-muted); }
 .tip-swatch--other { background:#73848a; }.tip-swatch--unidentified { background:#aeb4b1; }
+
+/* ---------- Inteligência histórica: Planta CMDB × Chamados ---------- */
+.plant-history-panel { margin-top:16px; }
+.plant-history-panel.is-loading { opacity:.68; transition:opacity 140ms ease; }
+.plant-history-header { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px; }
+.plant-history-subtitle { margin:4px 0 0; color:var(--text-muted); font-size:11px; line-height:1.45; }
+.plant-history-mode { display:inline-flex; gap:4px; padding:3px; border:1px solid var(--border-primary); border-radius:8px; background:var(--bg-secondary); }
+.plant-history-mode button { min-height:28px; padding:0 11px; border:0; border-radius:6px; background:transparent; color:var(--text-secondary); font:inherit; font-size:10px; font-weight:500; cursor:pointer; transition:background-color 140ms ease,color 140ms ease; }
+.plant-history-mode button[aria-pressed="true"] { background:var(--surface-primary); color:var(--text-primary); box-shadow:0 1px 3px rgba(0,0,0,.12); }
+.plant-history-filters { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin:0 0 14px; }
+.plant-history-filters label { display:grid; gap:4px; color:var(--text-muted); font-size:10px; }
+.plant-history-filters select { min-width:155px; height:32px; padding:0 24px 0 9px; border:1px solid var(--border-primary); border-radius:7px; background:var(--surface-primary); color:var(--text-primary); font:inherit; font-size:11px; }
+.plant-history-reset { height:32px; padding:0 11px; border:1px solid var(--border-primary); border-radius:7px; background:transparent; color:var(--text-secondary); font:inherit; font-size:10px; cursor:pointer; }
+.plant-history-reset:hover { border-color:var(--accent-teal); color:var(--text-primary); }
+.plant-history-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-bottom:14px; }
+.plant-history-kpis article { display:grid; gap:3px; padding:11px 13px; border:1px solid var(--border-primary); border-radius:9px; background:var(--bg-secondary); }
+.plant-history-kpis span { color:var(--text-muted); font-size:9px; }
+.plant-history-kpis strong { color:var(--text-primary); font-size:18px; font-weight:550; font-variant-numeric:tabular-nums; letter-spacing:-.03em; }
+.plant-history-kpis small { color:var(--text-muted); font-size:9px; line-height:1.35; }
+.plant-history-legend { display:flex; flex-wrap:wrap; gap:14px; margin:0 0 8px; color:var(--text-muted); font-size:10px; }
+.plant-history-legend span { display:inline-flex; align-items:center; gap:6px; }
+.plant-history-legend i { display:inline-block; width:9px; height:9px; border-radius:2px; }
+.plant-history-chart { width:100%; min-height:220px; margin-bottom:14px; overflow-x:auto; }
+.plant-history-svg { display:block; width:100%; max-height:255px; }
+.plant-svg-axis { fill:var(--text-faint); font-size:10px; font-variant-numeric:tabular-nums; }
+.plant-svg-label { fill:var(--text-secondary); font-size:10px; }
+.plant-history-table-wrap { width:100%; overflow-x:auto; border:1px solid var(--border-primary); border-radius:9px; }
+.plant-history-table { width:100%; border-collapse:collapse; font-size:11px; font-variant-numeric:tabular-nums; }
+.plant-history-table th { padding:8px 10px; border-bottom:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-muted); font-size:9px; font-weight:600; text-align:left; white-space:nowrap; }
+.plant-history-table td { padding:7px 10px; border-bottom:1px solid var(--border-primary); color:var(--text-secondary); white-space:nowrap; }
+.plant-history-table tbody tr:last-child td { border-bottom:0; }
+.plant-history-table tbody tr.is-unavailable td { color:var(--text-muted); }
+.plant-history-table tbody tr:hover td { background:var(--track-bg); }
+.plant-muted { color:var(--text-faint); font-size:10px; }
+.plant-badge { display:inline-flex; align-items:center; padding:2px 6px; border:1px solid var(--border-primary); border-radius:999px; font-size:9px; font-weight:500; }
+.plant-badge--confirmed { border-color:color-mix(in srgb,var(--accent-green) 35%,var(--border-primary)); color:var(--accent-green); }
+.plant-badge--partial { border-color:color-mix(in srgb,var(--accent-orange) 40%,var(--border-primary)); color:var(--accent-orange); }
+.plant-badge--unavailable { color:var(--text-faint); background:var(--bg-secondary); }
+@media(max-width:960px) { .plant-history-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px) { .plant-history-kpis { grid-template-columns:1fr; } .plant-history-filters select { min-width:120px; width:100%; } }

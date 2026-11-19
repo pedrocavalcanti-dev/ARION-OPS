@@ -18,6 +18,7 @@ from config.errors import api_error, require_media_type
 from aplicativos.auditoria.services import AuditService
 from .models import SavedAnalyticsView
 from .services.analytics import AnalyticsQueryService, DashboardAnalyticsService, STATE_NAMES
+from .services.plant_history import PlantHistoryService
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,13 @@ def dashboard(request):
         start, end, period_error = default_start, now.date(), True
 
     context = DashboardAnalyticsService.build(user=request.user, start=start, end=end)
+    plant_history = PlantHistoryService.build(
+        request.user,
+        {"start": start.isoformat(), "end": end.isoformat()},
+    )
     return render(request, "painel/dashboard.html", {
         **context,
+        "plant_history": plant_history,
         "data_source_mode": "cmdb",
         "date_from": start.isoformat(),
         "date_to": end.isoformat(),
@@ -137,6 +143,27 @@ def analytics_query(request):
         return JsonResponse(AnalyticsQueryService().query(payload, user=request.user))
     except (ValueError, TypeError, json.JSONDecodeError):
         return api_error(request, "VALIDATION_ERROR", status=400)
+
+
+@login_required
+def analytics_plant_history(request):
+    """Return scoped monthly CMDB plant size vs canonical OTRS ticket demand."""
+    if not (
+        request.user.is_superuser
+        or request.user.has_perm("configuracoes.view_dashboard")
+        or request.user.has_perm("configuracoes.view_cockpit")
+    ):
+        return api_error(request, "PERMISSION_DENIED", status=403)
+    params = request.GET.dict()
+    if request.method == "POST":
+        try:
+            body = json.loads(request.body or b"{}")
+            if isinstance(body, dict):
+                params.update(body)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return api_error(request, "VALIDATION_ERROR", status=400)
+    payload = PlantHistoryService.build(request.user, params)
+    return JsonResponse(payload)
 
 
 @login_required
