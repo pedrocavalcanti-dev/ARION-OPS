@@ -67,7 +67,14 @@ def _fixed_params(request, key):
         raise PermissionDenied("ISP fora do escopo autorizado do cliente.")
     allowed_ufs = presentation_ufs(request.user, params)
     if params["uf"] and params["uf"] not in allowed_ufs:
-        raise PermissionDenied("UF fora do recorte autorizado do cliente.")
+        summary_ufs = {
+            uf for uf, row in MapAnalyticsService.query(
+                request.user, {**params, "uf": ""}, fixed_client=True,
+            )["states"].items()
+            if row.get("ticket_count", 0) > 0
+        }
+        if params["uf"] not in summary_ufs:
+            raise PermissionDenied("UF fora do recorte autorizado do cliente.")
     if params["category"] == "financeiro" or (params["reason"] and IncidentRules.category(params["reason"]) in {"financeiro","sem_classificacao"}):
         raise PermissionDenied("Classificação indisponível na apresentação.")
     return params

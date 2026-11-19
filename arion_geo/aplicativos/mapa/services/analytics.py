@@ -254,13 +254,15 @@ class MapAnalyticsService:
             raise ValueError("UF incompatível com a região selecionada.")
 
         # Data Scope is applied first, before option catalogs, dimensions, and counts.
-        scoped = LinkQueryService.base(user)
-        if fixed_client:
-            scoped = _client_filter(scoped,client)
+        base_scoped = LinkQueryService.base(user)
         if region:
-            scoped = scoped.filter(state_query(allowed_ufs))
+            base_scoped = base_scoped.filter(state_query(allowed_ufs))
+        scoped = _client_filter(base_scoped, client) if fixed_client else base_scoped
         filtered = _client_filter(scoped, client)
-        ticket_candidates = scoped
+        # Keep the same authorized ticket candidate population across normal and
+        # presentation modes so valid tickets whose link lacks CMDB operator are
+        # never dropped before context_matches evaluates the ticket identity.
+        ticket_candidates = base_scoped
         if provider:
             if not provider.isdigit():
                 raise ValueError("Provedor do mapa invalido.")
@@ -457,7 +459,11 @@ class MapAnalyticsService:
                 ticket_client = parsed.client or client_label
                 if not IncidentRules.is_valid_ticket(ticket, ticket_client):
                     return False
-                ticket_project = parsed.project or link.business_project
+                ticket_project = (
+                    link.business_project
+                    if (link.business_project and (not parsed.project or parsed.is_generic_project))
+                    else (parsed.project or link.business_project)
+                )
                 return _client_label_matches(ticket_client, client) and (
                     not project or canonical_project_name(ticket_project) == project
                 )
@@ -882,14 +888,15 @@ class MapAnalyticsService:
                 "business_project", flat=True,
             ).distinct()
         )
-        if fixed_client or mode not in {"calls", "repeat", "motives"}:
-            scoped = _client_filter(scoped, client)
-            if project:
-                scoped = scoped.filter(business_project__in=project_groups.get(project, ()))
         state_values = {code, STATE_NAMES[code], STATE_NAMES_ACCENTED.get(code, STATE_NAMES[code])}
         state_q = Q()
         for value in state_values:
             state_q |= Q(state__iexact=value)
+        ticket_state_links = scoped.filter(state_q).order_by("city", "source_number")
+        if fixed_client or mode not in {"calls", "repeat", "motives"}:
+            scoped = _client_filter(scoped, client)
+            if project:
+                scoped = scoped.filter(business_project__in=project_groups.get(project, ()))
         state_links = scoped.filter(state_q).order_by("city", "source_number")
 
         ticket_link_ids = set()
@@ -906,8 +913,9 @@ class MapAnalyticsService:
             else:
                 date_field = "ticket__source_created_at"
             provenance = params.get("provenance")
+            relation_links = ticket_state_links if mode in {"calls", "repeat", "motives"} else state_links
             relations = OTRSTicketConfigItem.objects.filter(
-                is_present_in_source=True, cmdb_link__in=state_links,
+                is_present_in_source=True, cmdb_link__in=relation_links,
                 ticket__in=TicketQueryService.noc_tickets(),
                 ticket__responsibility_normalized__in=(provenance,) if provenance else VALID_PROCEDENCE,
             ).filter(business_statuses_query("ticket__business_status", statuses)).select_related(
@@ -959,7 +967,11 @@ class MapAnalyticsService:
                 )
                 if not IncidentRules.is_valid_ticket(ticket, ticket_client):
                     continue
-                ticket_project = parsed_identity.project or relation.cmdb_link.business_project
+                ticket_project = (
+                    relation.cmdb_link.business_project
+                    if (relation.cmdb_link.business_project and (not parsed_identity.project or parsed_identity.is_generic_project))
+                    else (parsed_identity.project or relation.cmdb_link.business_project)
+                )
                 if not _client_label_matches(ticket_client, client) or (
                     project and canonical_project_name(ticket_project) != project
                 ):
@@ -974,7 +986,7 @@ class MapAnalyticsService:
                 canonical_proj = canonical_project_name(ticket_project) or None
                 reason_category = IncidentRules.category(ticket.closing_code_raw)
                 closing_reason = (
-                    ""
+                    "Outros motivos"
                     if (presentation and reason_category == "financeiro")
                     else ClosingReasonCanonicalizer.display(ticket.closing_code_raw)
                 )

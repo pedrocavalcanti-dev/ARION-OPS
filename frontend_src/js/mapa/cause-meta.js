@@ -7,6 +7,7 @@ export const CAUSE_ORDER = [
   "Reset remoto",
   "Pendência Financeira",
   "Demais motivos técnicos",
+  "Outros motivos",
   "Sem classificação",
 ];
 
@@ -19,6 +20,7 @@ export const CAUSE_META = {
   "Reset remoto": { key: "reset_remoto", color: "#5271d6", darkColor: "#7e9bf0", badge: "RST" },
   "Pendência Financeira": { key: "financeiro", color: "#b84b73", darkColor: "#df7098", badge: "FIN" },
   "Demais motivos técnicos": { key: "demais", color: "#6c788a", darkColor: "#9aa5b5", badge: "TEC" },
+  "Outros motivos": { key: "demais", color: "#6c788a", darkColor: "#9aa5b5", badge: "OUT" },
   "Sem classificação": { key: "sem_classificacao", color: "#787f85", darkColor: "#7a8288", badge: "S/C" },
 };
 

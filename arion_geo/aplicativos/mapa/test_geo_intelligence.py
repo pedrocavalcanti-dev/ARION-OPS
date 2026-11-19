@@ -226,7 +226,8 @@ class GeoIntelligenceTests(TestCase):
         for reserved in ("financeir","pendenciafinanceira","closing_code_raw","title","account_counts"):
             self.assertNotIn(reserved,raw)
         self.assertEqual(data.json()["ticket_count"],2)
-        self.assertEqual(sum(data.json()["distribution_projected"].values()),1)
+        self.assertEqual(data.json()["category_counts"],{"Massiva":1,"Outros motivos":1})
+        self.assertEqual(data.json()["distribution_projected"],{})
         self.assertEqual(OTRSTicket.objects.get(external_id=1).closing_code_raw,"PendenciaFinanceira")
         self.assertEqual(self.client.get(reverse("mapa:presentation-data",args=[key]),{"client":"Vivo"}).status_code,403)
         self.assertEqual(self.client.get(reverse("base_links:map-aggregates")).status_code,403)
@@ -265,9 +266,10 @@ class GeoIntelligenceTests(TestCase):
         self.assertEqual(result["filtered_source_total"],5)
         self.assertEqual(result["ticket_count"],2)
         self.assertEqual(sum(result["daily_counts"].values()),2)
-        self.assertEqual(sum(result["category_counts"].values()),1)
+        self.assertEqual(sum(result["category_counts"].values()),2)
+        self.assertEqual(result["category_counts"],{"Massiva":1,"Outros motivos":1})
         self.assertEqual(sum(result["technical_daily_counts"].values()),1)
-        self.assertEqual(sum(result["distribution_projected"].values()),1)
+        self.assertEqual(result["distribution_projected"],{})
         self.assertIn("TicketID",result["definitions"]["ticket_count"])
         raw=json.dumps(result).casefold()
         for reserved in ("financeir","closing_code_raw","title","assignees","account_counts"):
@@ -446,7 +448,7 @@ class GeoIntelligenceTests(TestCase):
         self.assertEqual(by_num["801"]["identity"]["client"],"Claro")
         self.assertEqual(by_num["801"]["identity"]["project"],"BRADESCO")
         self.assertTrue(by_num["801"]["is_recurring"])
-        self.assertEqual(by_num["803"]["closing_reason"],"")
+        self.assertEqual(by_num["803"]["closing_reason"],"Outros motivos")
         raw=json.dumps(body).casefold()
         for forbidden in ("financeir","pendenciafinanceira","closing_code_raw","title","assignee","arion_status","chamados_url","vivo"):
             self.assertNotIn(forbidden,raw)
