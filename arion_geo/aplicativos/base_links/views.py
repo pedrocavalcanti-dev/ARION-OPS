@@ -44,6 +44,14 @@ def index(request):
     view = "providers" if request.GET.get("view") == "providers" else "links"
     if view == "providers":
         return _providers_view(request, scoped)
+    from aplicativos.integracoes.models import OperationalLinkIdentity
+    from .identity_views import PENDING_ISSUE_TYPES
+    pending_identity_count = OperationalLinkIdentity.objects.filter(
+        link__in=scoped,
+    ).filter(
+        Q(is_internal_arion=False, issue_type__in=PENDING_ISSUE_TYPES)
+        | Q(review_status=OperationalLinkIdentity.ReviewStatus.NEEDS_REVIEW),
+    ).count()
     filters = _read_filters(request)
     links = _filter_links(scoped, filters).select_related("operator")
     sort_options = {"designation": "display_designation", "uf": "state", "provider": "operator__name", "deployment": "deployment_state"}
@@ -93,6 +101,7 @@ def index(request):
         "deployment_states": scoped.exclude(deployment_state="").values_list("deployment_state", flat=True).distinct().order_by("deployment_state"),
         "incident_states": scoped.exclude(incident_state="").values_list("incident_state", flat=True).distinct().order_by("incident_state"),
         "link_types": scoped.exclude(link_type="").values_list("link_type", flat=True).distinct().order_by("link_type"),
+        "pending_identity_count": pending_identity_count,
     })
     return response
 

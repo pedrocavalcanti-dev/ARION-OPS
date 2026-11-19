@@ -151,7 +151,15 @@
     const summary = document.createElement("section");
     summary.className = "drawer-summary";
     appendText(summary, "p", "Status oficial OTRS", "drawer-section-kicker");
-    appendText(summary, "h3", data.ticket.title || "Chamado sem título");
+    const headline = data.ticket.compact_title || data.ticket.title || "Chamado sem título";
+    appendText(summary, "h3", headline, "drawer-compact-title");
+    if (data.ticket.title && data.ticket.title !== headline) {
+      const originalDetails = document.createElement("details");
+      originalDetails.className = "drawer-original-title";
+      appendText(originalDetails, "summary", "Título original OTRS");
+      appendText(originalDetails, "p", data.ticket.title);
+      summary.appendChild(originalDetails);
+    }
     const meta = document.createElement("div");
     meta.className = "drawer-meta";
     appendMeta(meta, "Status oficial OTRS", data.ticket.status_label || data.ticket.external_state);
@@ -189,7 +197,11 @@
       const card = document.createElement("article");
       card.className = "drawer-link-card";
       appendText(card, "strong", link.designation || link.number || link.config_item_id);
-      appendText(card, "span", `${link.client || "Cliente não identificado"} · ${link.project || "Projeto não identificado"}`);
+      const clientPart = link.client || "Operadora não identificada";
+      const projectPart = link.final_client && link.project && link.final_client.toLowerCase() !== link.project.toLowerCase() && link.project !== "Não identificado"
+        ? `${link.final_client} (${link.project})`
+        : (link.final_client || link.project || "Projeto não identificado");
+      appendText(card, "span", link.is_internal_arion ? `${clientPart} · Infraestrutura própria (${link.project || "ARION"})` : `${clientPart} · ${projectPart}`);
       appendText(card, "span", `${link.provider || "Provider não identificado"} · ${[link.city, link.state].filter(Boolean).join(" · ") || "Local não identificado"}`);
       appendText(card, "span", `CI ${link.config_item_id || "—"}${link.number ? ` · Link ${link.number}` : ""}`);
       if (link.deployment_state || link.incident_state) {

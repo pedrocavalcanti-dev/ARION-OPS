@@ -15,7 +15,7 @@ GROUP_EXECUTIVE = "Gestão"
 MODULE_PERMISSIONS = (
     "view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "present_geo",
     "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets",
-    "view_ari", "import_cmdb", "export_base",
+    "view_ari", "import_cmdb", "export_base", "manage_operational_identity",
     "view_quality", "manage_quality_orders",
 )
 ADMIN_PERMISSIONS = (
@@ -38,7 +38,7 @@ CANCELLATION_PERMISSIONS = tuple(code for code, _label in CANCELLATION_PERMISSIO
 ROLE_PERMISSIONS = {
 GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS + ("delete_qualityorder",),
 GROUP_EXECUTIVE: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_reports"),
-GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality", "manage_quality_orders", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
+GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "manage_operational_identity", "view_ari", "view_quality", "manage_quality_orders", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
 GROUP_ANALYST: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality"),
 GROUP_AUDITOR: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_audit_log"),
 }
@@ -64,6 +64,7 @@ PERMISSION_LABELS = {
     "manage_operational_tickets": ("Chamados", "Gerenciar acompanhamento interno"),
     "import_cmdb": ("Base", "Importar / atualizar CMDB"),
     "export_base": ("Base", "Exportar"),
+    "manage_operational_identity": ("Base", "Revisar e classificar identidade operacional"),
     "manage_users": ("Administração", "Gerenciar usuários"),
     "create_users": ("Administração", "Criar usuários"),
     "generate_access_invites": ("Administração", "Gerar convites de acesso"),

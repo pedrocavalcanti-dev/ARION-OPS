@@ -666,6 +666,16 @@ class OTRSSyncService:
                 relation_rows, ticket_map=ticket_map, now=now, apply=apply,
                 affected_ticket_ids=sorted(affected_ticket_ids),
             )
+            if apply:
+                from .operational_identity import OperationalIdentityService
+                affected_link_ids = list(
+                    OTRSTicketConfigItem.objects.filter(
+                        ticket__external_id__in=affected_ticket_ids,
+                        cmdb_link_id__isnull=False,
+                    ).values_list("cmdb_link_id", flat=True).distinct()
+                )
+                if affected_link_ids:
+                    OperationalIdentityService.reconcile_all(apply=True, link_ids=affected_link_ids)
 
         status_counts = {key: status_counts.get(key, 0) for key in OTRSStateMapping.BusinessStatus.values}
         result = {

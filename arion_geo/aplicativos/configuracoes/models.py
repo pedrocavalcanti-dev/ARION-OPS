@@ -48,6 +48,7 @@ class GroupDataScope(models.Model):
               ("manage_operational_tickets", "Can manage local ticket tracking"),
             ("import_cmdb", "Can import and update the CMDB"),
             ("export_base", "Can export CMDB data"),
+            ("manage_operational_identity", "Can review and classify operational link identity"),
             ("manage_users", "Can manage user accounts"),
             ("create_users", "Can create user accounts"),
             ("generate_access_invites", "Can issue first-access invitations"),

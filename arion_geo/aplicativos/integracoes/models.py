@@ -677,3 +677,135 @@ class OTRSOperationalConfigItemSnapshot(models.Model):
             models.Index(fields=("provider_name", "uf"), name="otrs_snap_provider_uf_idx"),
         ]
         verbose_name = "ConfigItem no snapshot OTRS"
+
+
+class OperationalLinkIdentity(models.Model):
+    """Auditable operational identity layer derived from CMDB, OTRS and manual review.
+
+    Never mutates source CMDB/OTRS fields. Manual confirmations are preserved across
+    future synchronizations; contradictory source updates flag a conflict for review.
+    """
+
+    class ReviewStatus(models.TextChoices):
+        PENDING = "PENDING", "Pendente"
+        AUTO_RESOLVED = "AUTO_RESOLVED", "Identificado automaticamente"
+        CONFIRMED = "CONFIRMED", "Confirmado manualmente"
+        NEEDS_REVIEW = "NEEDS_REVIEW", "Encaminhado para revisão"
+        CONFIRMED_UNKNOWN = "CONFIRMED_UNKNOWN", "Desconhecido confirmado"
+
+    class IssueType(models.TextChoices):
+        NONE = "NONE", "Sem pendência"
+        MISSING_OPERATOR = "MISSING_OPERATOR", "Sem operadora"
+        MISSING_CLIENT_PROJECT = "MISSING_CLIENT_PROJECT", "Sem cliente / projeto"
+        MISSING_BOTH = "MISSING_BOTH", "Sem operadora e cliente/projeto"
+        CONFLICT = "CONFLICT", "Conflito entre fontes"
+        OTHER_VERIFY = "OTHER_VERIFY", "Outras — verificar"
+
+    link = models.OneToOneField(
+        CMDBLinkMirror,
+        on_delete=models.CASCADE,
+        related_name="operational_identity",
+    )
+    review_status = models.CharField(
+        max_length=24,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING,
+        db_index=True,
+    )
+    issue_type = models.CharField(
+        max_length=32,
+        choices=IssueType.choices,
+        default=IssueType.NONE,
+        db_index=True,
+    )
+    contracting_client_raw = models.CharField(max_length=300, blank=True)
+    contracting_client = models.CharField(max_length=300, blank=True, db_index=True)
+    final_client = models.CharField(max_length=300, blank=True, db_index=True)
+    business_project = models.CharField(max_length=300, blank=True, db_index=True)
+    business_account = models.CharField(max_length=300, blank=True)
+    business_id = models.CharField(max_length=80, blank=True, db_index=True)
+    is_internal_arion = models.BooleanField(default=False, db_index=True)
+    internal_detail = models.CharField(max_length=200, blank=True)
+    confidence = models.CharField(max_length=16, default="UNCLASSIFIED", db_index=True)
+    source = models.CharField(max_length=40, default="UNKNOWN", db_index=True)
+
+    suggested_operator = models.CharField(max_length=300, blank=True)
+    suggested_final_client = models.CharField(max_length=300, blank=True)
+    suggested_project = models.CharField(max_length=300, blank=True)
+    suggested_is_internal_arion = models.BooleanField(default=False)
+    suggested_confidence = models.CharField(max_length=16, blank=True)
+    suggested_source = models.CharField(max_length=40, blank=True)
+    has_suggestion = models.BooleanField(default=False, db_index=True)
+
+    has_conflict = models.BooleanField(default=False, db_index=True)
+    conflict_reason = models.TextField(blank=True)
+    evidence_summary = models.JSONField(default=dict, blank=True)
+    related_ticket_count = models.PositiveIntegerField(default=0, db_index=True)
+
+    is_manual_override = models.BooleanField(default=False, db_index=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_link_identities",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    review_note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("review_status", "issue_type"), name="opid_review_issue_idx"),
+            models.Index(fields=("has_conflict", "has_suggestion"), name="opid_conflict_sugg_idx"),
+            models.Index(fields=("is_internal_arion", "review_status"), name="opid_internal_rev_idx"),
+        ]
+        verbose_name = "identidade operacional do link"
+        verbose_name_plural = "identidades operacionais dos links"
+
+    def __str__(self):
+        return f"{self.link_id} · {self.contracting_client or 'Sem operadora'} · {self.business_project or 'Sem projeto'}"
+
+
+class OperationalIdentityRevision(models.Model):
+    """Immutable audit trail for manual operational identity reviews."""
+
+    class Action(models.TextChoices):
+        CONFIRM_SUGGESTION = "CONFIRM_SUGGESTION", "Sugestão confirmada"
+        MANUAL_UPDATE = "MANUAL_UPDATE", "Classificação manual"
+        MARK_INTERNAL_ARION = "MARK_INTERNAL_ARION", "Marcado como infraestrutura ARION/POP"
+        MARK_UNKNOWN = "MARK_UNKNOWN", "Confirmado como desconhecido"
+        FORWARD_REVIEW = "FORWARD_REVIEW", "Encaminhado para revisão"
+        REOPEN_AUTO = "REOPEN_AUTO", "Reaberto para classificação automática"
+
+    identity = models.ForeignKey(
+        OperationalLinkIdentity,
+        on_delete=models.CASCADE,
+        related_name="revisions",
+    )
+    link = models.ForeignKey(
+        CMDBLinkMirror,
+        on_delete=models.CASCADE,
+        related_name="identity_revisions",
+    )
+    action = models.CharField(max_length=32, choices=Action.choices)
+    previous_values = models.JSONField(default=dict, blank=True)
+    new_values = models.JSONField(default=dict, blank=True)
+    justification = models.TextField(blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="operational_identity_revisions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        verbose_name = "revisão de identidade operacional"
+        verbose_name_plural = "revisões de identidade operacional"
+
+    def __str__(self):
+        return f"{self.link_id} · {self.get_action_display()}"

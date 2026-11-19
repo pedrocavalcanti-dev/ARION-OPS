@@ -15,6 +15,7 @@ from aplicativos.configuracoes.permissions import access_required
 from aplicativos.integracoes.models import IntegrationSyncState, OTRSTicketConfigItem
 from aplicativos.integracoes.services.analytics import LinkQueryService, TicketQueryService
 from aplicativos.integracoes.services.closing_reason import ClosingReasonCanonicalizer
+from aplicativos.integracoes.services.operational_identity import build_compact_ticket_title
 from aplicativos.integracoes.services.otrs_status import (
     business_status_label, normalize_business_status,
 )
@@ -45,7 +46,7 @@ def _scoped_active_ticket(user, external_id):
             ticket=ticket,
             is_present_in_source=True,
             cmdb_link__in=links,
-        ).select_related("cmdb_link", "cmdb_link__operator")
+        ).select_related("cmdb_link", "cmdb_link__operator", "cmdb_link__operational_identity")
         .order_by("cmdb_link__designation", "config_item_id")
     )
     return ticket, relations
@@ -62,7 +63,7 @@ def _scoped_ticket_for_detail(user, external_id):
             ticket=ticket,
             is_present_in_source=True,
             cmdb_link__in=links,
-        ).select_related("cmdb_link", "cmdb_link__operator")
+        ).select_related("cmdb_link", "cmdb_link__operator", "cmdb_link__operational_identity")
         .order_by("cmdb_link__designation", "config_item_id")
     )
     return ticket, relations
@@ -157,16 +158,24 @@ def detail(request, external_id):
         "assigned_to", "updated_by",
     ).first()
     linked_by_ci = {}
+    linked_models = []
     for relation in relations:
         link = relation.cmdb_link
         if not link:
             continue
+        if relation.config_item_id not in linked_by_ci:
+            linked_models.append(link)
+        op_identity = getattr(link, "operational_identity", None)
+        final_client = (op_identity.final_client if op_identity else "") or link.business_account or ""
+        is_internal_arion = bool(op_identity.is_internal_arion) if op_identity else False
         linked_by_ci.setdefault(relation.config_item_id, {
             "config_item_id": relation.config_item_id,
             "number": link.source_number or "",
             "designation": link.designation or link.name or relation.config_item_id,
             "client": link.contracting_client or "Não identificado",
+            "final_client": final_client,
             "project": link.business_project or "Não identificado",
+            "is_internal_arion": is_internal_arion,
             "provider": provider_label(link),
             "provider_id": link.operator.source_config_item_id if link.operator else "",
             "city": link.city or "",
@@ -179,6 +188,7 @@ def detail(request, external_id):
             }),
         })
     linked = list(linked_by_ci.values())
+    compact_title = build_compact_ticket_title(ticket, linked_models)
     age = max(timedelta(0), timezone.now() - ticket.source_created_at) if ticket.source_created_at else None
     notes = list(tracking.notes.select_related("author")[:50]) if tracking else []
     events = list(tracking.events.select_related("actor")[:50]) if tracking else []
@@ -200,6 +210,7 @@ def detail(request, external_id):
             "source_ticket_id": ticket.external_id,
             "ticket_number": ticket.ticket_number,
             "otrs_url": otrs_ticket_url(ticket.external_id),
+            "compact_title": compact_title,
             "title": ticket.title,
             "queue": ticket.queue_name,
             "external_state": ticket.external_state_name,

@@ -191,7 +191,8 @@ class CMDBSyncService:
                 method = CMDBLinkMirror.OperatorResolution.UNRESOLVED
         project = legacy_projects.get(config_id)
         name = _safe_text(_value(direct, attrs, "Name"), 500)
-        business_identity = classify_link_name(name)
+        designation = _safe_text(_value(direct, attrs, "Designacao"), 300)
+        business_identity = classify_link_name(name, designation=designation)
         return {
             "source_config_item_id": config_id, "source_number": number,
             "name": name, **business_identity,
@@ -199,7 +200,7 @@ class CMDBSyncService:
             "state": _safe_text(_value(direct, attrs, "Estado"), 100),
             "address": _safe_text(_value(direct, attrs, "Endereco"), 500),
             "circuit": _safe_text(_value(direct, attrs, "Circuito"), 300),
-            "designation": _safe_text(_value(direct, attrs, "Designacao"), 300),
+            "designation": designation,
             "operator_designation": _safe_text(_value(direct, attrs, "DesignacaoOperadora"), 300),
             "identification": _safe_text(_value(direct, attrs, "Identificacao"), 300),
             "link_type": _safe_text(_value(direct, attrs, "Tipo"), 160),
@@ -332,8 +333,12 @@ class CMDBSyncService:
                 external_id = row.pop("operator_id")
                 row["operator_id"] = operator_model_by_id.get(external_id).pk if external_id and operator_model_by_id.get(external_id) else None
             summaries["links"] = self._upsert(CMDBLinkMirror, link_rows, LINK_FIELDS, now=now, apply=apply)
+            if apply:
+                from .operational_identity import OperationalIdentityService
+                summaries["operational_identity"] = OperationalIdentityService.reconcile_all(apply=True)
         return {
             "status": "APPLIED" if apply else "DRY_RUN", "operators": summaries["operators"], "links": summaries["links"],
+            "operational_identity": summaries.get("operational_identity"),
             "isp_resolution": {key: operator_resolution.get(key, 0) for key in CMDBLinkMirror.OperatorResolution.values},
             "performance": performance, "duration_ms": performance["duration_ms"],
             "links_with_number": len(cmdb_numbers),

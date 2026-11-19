@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% load static humanize %}
+{% block title %}Não identificados · Base de Links · ARION OPS{% endblock %}
+{% block body_class %}base-links-module{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/base-links.css' %}">
+<link rel="stylesheet" href="{% static 'css/base-links-identity.css' %}">
+{% endblock %}
+{% block content %}
+<section
+  class="links-page identity-page"
+  aria-labelledby="identity-title"
+  data-identity-page
+  data-tab="{{ filters.tab }}"
+  data-can-manage="{% if can_manage_identity %}1{% else %}0{% endif %}"
+  data-link-detail-template="{% url 'base_links:unidentified-link-detail' 0 %}"
+  data-ticket-detail-template="{% url 'base_links:unidentified-ticket-detail' 0 %}"
+  data-row-ids="{{ row_ids_json }}"
+>
+  <header class="links-heading brand-decoration brand-decoration--heading">
+    <div>
+      <p class="section-kicker">NOC ATACADO <span>/</span> BASE <span>/</span> IDENTIDADE OPERACIONAL</p>
+      <h1 id="identity-title">Revisão de registros não identificados</h1>
+      <p>Saneamento supervisionado de operadora contratante, cliente final e projeto canônico sem alterar a origem CMDB/OTRS.</p>
+    </div>
+    <div class="links-heading-actions">
+      <span class="source-badge"><i></i>Camada operacional auditada</span>
+      {% if perms.configuracoes.export_base %}
+      <a class="links-primary-button" href="{% url 'base_links:unidentified-export' %}?{{ request.GET.urlencode }}">Exportar CSV</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <nav class="base-view-switch" aria-label="Visão da base">
+    <a href="{% url 'base_links:index' %}?view=links">Links de Internet</a>
+    <a href="{% url 'base_links:index' %}?view=providers">Provedores / ISP</a>
+    <a href="{% url 'base_links:unidentified' %}" aria-current="page">Não identificados{% if kpis.pending_links %} <span class="base-tab-count" data-kpi="pending_links_tab">{{ kpis.pending_links|intcomma }}</span>{% endif %}</a>
+  </nav>
+
+  <div class="identity-kpis" aria-label="Indicadores de qualidade da identidade operacional">
+    <article><span>Links analisados</span><strong data-kpi="total">{{ kpis.total|intcomma }}</strong></article>
+    <article><span>Sem operadora</span><strong data-kpi="missing_operator">{{ kpis.missing_operator|intcomma }}</strong></article>
+    <article><span>Sem cliente / projeto</span><strong data-kpi="missing_client_project">{{ kpis.missing_client_project|intcomma }}</strong></article>
+    <article class="is-warn"><span>Com conflito</span><strong data-kpi="conflicts">{{ kpis.conflicts|intcomma }}</strong></article>
+    <article><span>Sugestões confiáveis</span><strong data-kpi="suggestions">{{ kpis.suggestions|intcomma }}</strong></article>
+    <article class="is-ok"><span>Corrigidos manualmente</span><strong data-kpi="manual_corrected">{{ kpis.manual_corrected|intcomma }}</strong></article>
+    <article><span>Links pendentes</span><strong data-kpi="pending_links">{{ kpis.pending_links|intcomma }}</strong></article>
+    <article><span>Tickets sem vínculo CMDB</span><strong data-kpi="unlinked_tickets">{{ kpis.unlinked_tickets|intcomma }}</strong></article>
+  </div>
+
+  <nav class="identity-subtabs" aria-label="Filas de revisão">
+    <a href="{% url 'base_links:unidentified' %}?tab=links"{% if filters.tab == 'links' %} aria-current="page"{% endif %}>
+      Links pendentes e revisão <b data-kpi="pending_links_sub">{{ kpis.pending_links|intcomma }}</b>
+    </a>
+    <a href="{% url 'base_links:unidentified' %}?tab=tickets"{% if filters.tab == 'tickets' %} aria-current="page"{% endif %}>
+      Tickets sem vínculo CMDB <b>{{ kpis.unlinked_tickets|intcomma }}</b>
+    </a>
+    <a href="{% url 'base_links:unidentified' %}?tab=arion&amp;review_status=all"{% if filters.tab == 'arion' %} aria-current="page"{% endif %}>
+      Infraestrutura própria ARION / POP <b>{{ kpis.internal_arion|intcomma }}</b>
+    </a>
+  </nav>
+
+  {% if filters.tab == 'tickets' %}
+    <form class="links-filters identity-filters identity-filters--tickets" method="get" action="{% url 'base_links:unidentified' %}">
+      <input type="hidden" name="tab" value="tickets">
+      <div class="links-search">
+        <label class="sr-only" for="identity-ticket-q">Buscar ticket, título OTRS, designação ou CI</label>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8"/><path d="m13.2 13.2 4 4"/></svg>
+        <input id="identity-ticket-q" type="search" name="q" value="{{ filters.q }}" placeholder="Buscar número do ticket, palavras do título OTRS, designação ou CI...">
+      </div>
+      <div class="links-filter-actions">
+        <a href="{% url 'base_links:unidentified' %}?tab=tickets">Limpar</a>
+        <button type="submit">Filtrar</button>
+      </div>
+    </form>
+
+    {% if not is_global_scope %}
+    <div class="identity-notice">
+      Seu grupo utiliza escopo de dados restrito. Tickets sem vínculo comprovado com a CMDB ficam visíveis apenas para perfis com escopo global, evitando vazamento entre clientes.
+    </div>
+    {% else %}
+    <div class="links-table-wrap">
+      <table class="links-table identity-table identity-table--tickets">
+        <thead>
+          <tr>
+            <th>Chamado OTRS</th>
+            <th>Título OTRS</th>
+            <th>Operadora detectada</th>
+            <th>Projeto detectado</th>
+            <th>Designação / CI</th>
+            <th>Status</th>
+            <th>Criado em</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in ticket_rows %}
+          <tr class="links-row identity-row" data-ticket-row="{{ row.id }}" tabindex="0" role="button" aria-label="Investigar ticket {{ row.ticket_number }}">
+            <td><strong>{{ row.ticket_number }}</strong><small>ID {{ row.external_id }}</small></td>
+            <td class="identity-ticket-title-cell">{{ row.title }}</td>
+            <td>{% if row.detected_operator %}{{ row.detected_operator }}{% else %}<span class="unclassified">Não identificada</span>{% endif %}</td>
+            <td>{% if row.detected_project %}{{ row.detected_project }}{% else %}<span class="unclassified">Não identificado</span>{% endif %}</td>
+            <td><strong>{{ row.detected_business_id|default:"—" }}</strong>{% if row.detected_ci %}<small>CI: {{ row.detected_ci }}</small>{% endif %}</td>
+            <td><span class="state-badge">{{ row.status_label }}</span></td>
+            <td>{{ row.created_at|date:"d/m/Y H:i"|default:"—" }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="7" class="table-empty"><strong>Nenhum ticket sem vínculo CMDB encontrado neste recorte.</strong></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  {% else %}
+    <form class="links-filters identity-filters" method="get" action="{% url 'base_links:unidentified' %}">
+      <input type="hidden" name="tab" value="{{ filters.tab }}">
+      <input type="hidden" name="page_size" value="{{ page_size }}">
+      <div class="links-search">
+        <label class="sr-only" for="identity-search-input">Buscar ticket, link, CI ou palavras do título OTRS</label>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8"/><path d="m13.2 13.2 4 4"/></svg>
+        <input id="identity-search-input" type="search" name="q" value="{{ filters.q }}" placeholder="Buscar link, designação, CI, ticket ou palavras do título OTRS...">
+      </div>
+
+      {% if filters.tab == 'links' %}
+      <select name="issue_type" aria-label="Filtrar tipo de problema">
+        <option value="">Todos os problemas</option>
+        {% for code, label in issue_choices %}
+          {% if code != 'NONE' %}
+          <option value="{{ code }}"{% if filters.issue_type == code %} selected{% endif %}>{{ label }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <select name="review_status" aria-label="Filtrar status de revisão">
+        {% for code, label in review_status_choices %}
+        <option value="{{ code }}"{% if filters.review_status == code %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
+
+      <select name="operator" aria-label="Filtrar operadora presumida">
+        <option value="">Todas as operadoras</option>
+        <option value="__empty__"{% if filters.operator == '__empty__' %} selected{% endif %}>Sem operadora / sugestão</option>
+        {% for op in options.operators %}
+        <option value="{{ op }}"{% if filters.operator == op %} selected{% endif %}>{{ op }}</option>
+        {% endfor %}
+      </select>
+
+      <select name="project" aria-label="Filtrar cliente ou projeto">
+        <option value="">Todos clientes / projetos</option>
+        {% for proj in options.projects %}
+        <option value="{{ proj }}"{% if filters.project == proj %} selected{% endif %}>{{ proj }}</option>
+        {% endfor %}
+      </select>
+
+      <select name="provider" aria-label="Filtrar ISP / provedor">
+        <option value="">Todos os ISPs</option>
+        {% for prov in options.providers %}
+        <option value="{{ prov }}"{% if filters.provider == prov %} selected{% endif %}>{{ prov }}</option>
+        {% endfor %}
+      </select>
+
+      <select name="uf" aria-label="Filtrar UF">
+        <option value="">Todas as UFs</option>
+        {% for uf in options.ufs %}
+        <option value="{{ uf }}"{% if filters.uf == uf %} selected{% endif %}>{{ uf }}</option>
+        {% endfor %}
+      </select>
+
+      <select name="confidence" aria-label="Filtrar confiança">
+        <option value="">Todas as confianças</option>
+        {% for code, label in confidence_choices %}
+        <option value="{{ code }}"{% if filters.confidence == code %} selected{% endif %}>Confiança: {{ label }}</option>
+        {% endfor %}
+      </select>
+
+      <select name="suggestion" aria-label="Filtrar sugestão automática">
+        <option value="">Com ou sem sugestão</option>
+        <option value="with"{% if filters.suggestion == 'with' %} selected{% endif %}>Com sugestão automática</option>
+        <option value="without"{% if filters.suggestion == 'without' %} selected{% endif %}>Sem sugestão automática</option>
+      </select>
+
+      <select name="sort" aria-label="Ordenar fila">
+        {% for code, label in sort_choices %}
+        <option value="{{ code }}"{% if filters.sort == code %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+
+      <div class="links-filter-actions">
+        <a href="{% url 'base_links:unidentified' %}?tab={{ filters.tab }}">Limpar</a>
+        <button type="submit">Filtrar</button>
+      </div>
+    </form>
+
+    <div class="links-table-wrap">
+      <table class="links-table identity-table">
+        <thead>
+          <tr>
+            <th>Link / CI</th>
+            <th>Problema / Status</th>
+            <th>Operadora</th>
+            <th>Cliente / Projeto</th>
+            <th>ISP físico</th>
+            <th>Sugestão / Evidência</th>
+            <th>UF / Chamados</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in identity_rows %}
+          <tr class="links-row identity-row" data-link-row="{{ row.link_id }}" tabindex="0" role="button" aria-label="Investigar link {{ row.designation }}">
+            <td>
+              <strong>{{ row.designation }}</strong>
+              <small>CI {{ row.config_item_id }}{% if row.name and row.name != row.designation %} · {{ row.name|truncatechars:64 }}{% endif %}</small>
+            </td>
+            <td data-cell="issue">
+              <span class="identity-pill identity-pill--{{ row.issue_type|lower }}">{{ row.issue_label }}</span>
+              <small>{{ row.review_status_label }}{% if row.is_manual_override %} · Manual{% endif %}</small>
+            </td>
+            <td data-cell="operator">
+              {% if row.operator %}{{ row.operator }}{% else %}<span class="unclassified">Não identificada</span>{% endif %}
+            </td>
+            <td data-cell="project">
+              {% if row.is_internal_arion %}
+                <span>{{ row.internal_detail|default:"Infraestrutura ARION" }}</span>
+              {% elif row.final_client and row.project and row.final_client|lower != row.project|lower %}
+                <strong>{{ row.final_client }}</strong><small>{{ row.project }}</small>
+              {% elif row.project %}
+                {{ row.project }}
+              {% elif row.final_client %}
+                {{ row.final_client }}
+              {% else %}
+                <span class="unclassified">Não identificado</span>
+              {% endif %}
+            </td>
+            <td>{{ row.provider }}</td>
+            <td data-cell="suggestion">
+              {% if row.has_conflict %}
+                <span class="identity-conflict-note">{{ row.conflict_reason|truncatechars:72 }}</span>
+              {% elif row.has_suggestion %}
+                <span class="identity-suggestion-note">Sugestão: {{ row.suggested_operator|default:"—" }}{% if row.suggested_project %} · {{ row.suggested_project }}{% endif %}</span>
+              {% else %}
+                <small>{{ row.source_label }} · {{ row.confidence_label }}</small>
+              {% endif %}
+            </td>
+            <td>
+              <strong>{{ row.state|default:"—" }}</strong>
+              <small>{{ row.related_ticket_count }} chamado{{ row.related_ticket_count|pluralize }}</small>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" class="table-empty">
+              <strong>Nenhum registro encontrado neste recorte.</strong>
+              <span>Tente ajustar os filtros ou alternar o status de revisão.</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  {% if page_obj %}
+  <footer class="links-pagination">
+    <span>{{ page_obj.start_index }}–{{ page_obj.end_index }} de {{ page_obj.paginator.count|intcomma }} registros</span>
+    <nav aria-label="Paginação">
+      {% if page_obj.has_previous %}
+      <a href="?tab={{ filters.tab }}&amp;q={{ filters.q|urlencode }}&amp;issue_type={{ filters.issue_type|urlencode }}&amp;operator={{ filters.operator|urlencode }}&amp;project={{ filters.project|urlencode }}&amp;provider={{ filters.provider|urlencode }}&amp;uf={{ filters.uf|urlencode }}&amp;confidence={{ filters.confidence|urlencode }}&amp;suggestion={{ filters.suggestion|urlencode }}&amp;review_status={{ filters.review_status|urlencode }}&amp;sort={{ filters.sort|urlencode }}&amp;page_size={{ page_size }}&amp;page={{ page_obj.previous_page_number }}">← Anterior</a>
+      {% endif %}
+      <span>Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</span>
+      {% if page_obj.has_next %}
+      <a href="?tab={{ filters.tab }}&amp;q={{ filters.q|urlencode }}&amp;issue_type={{ filters.issue_type|urlencode }}&amp;operator={{ filters.operator|urlencode }}&amp;project={{ filters.project|urlencode }}&amp;provider={{ filters.provider|urlencode }}&amp;uf={{ filters.uf|urlencode }}&amp;confidence={{ filters.confidence|urlencode }}&amp;suggestion={{ filters.suggestion|urlencode }}&amp;review_status={{ filters.review_status|urlencode }}&amp;sort={{ filters.sort|urlencode }}&amp;page_size={{ page_size }}&amp;page={{ page_obj.next_page_number }}">Próxima →</a>
+      {% endif %}
+    </nav>
+  </footer>
+  {% endif %}
+</section>
+
+<datalist id="identity-projects-list">
+  {% for proj in options.projects %}<option value="{{ proj }}">{% endfor %}
+</datalist>
+<datalist id="identity-clients-list">
+  {% for client_name in options.final_clients %}<option value="{{ client_name }}">{% endfor %}
+</datalist>
+
+<div class="links-drawer-backdrop" data-identity-backdrop hidden></div>
+<aside class="links-drawer identity-drawer thin-scroll" data-identity-drawer aria-hidden="true" inert>
+  <div class="identity-drawer-topbar">
+    <div class="identity-drawer-nav">
+      <button type="button" class="identity-nav-btn" data-identity-prev disabled>← Anterior</button>
+      <span class="identity-nav-pos" data-identity-pos>—</span>
+      <button type="button" class="identity-nav-btn" data-identity-next disabled>Próximo →</button>
+    </div>
+    <button type="button" class="drawer-close" data-identity-close aria-label="Fechar investigação">×</button>
+  </div>
+  <div class="identity-drawer-body" data-identity-drawer-body>
+    <p class="drawer-loading">Selecione um registro para investigar.</p>
+  </div>
+</aside>
+{% csrf_token %}
+{% endblock %}
+{% block extra_js %}<script src="{% arion_js 'js/base-links-identity.js' %}" defer></script>{% endblock %}

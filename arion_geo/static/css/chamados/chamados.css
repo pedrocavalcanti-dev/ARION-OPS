@@ -196,6 +196,11 @@ body.has-ticket-drawer { overflow:hidden; }
 .ticket-aged-label { color:var(--warning); }
 .ticket-recurrence { display:block; margin-top:3px; color:var(--accent-rose)!important; }
 .drawer-section-kicker { margin:0 0 5px; color:var(--text-muted); font-size:9px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.drawer-compact-title { margin:0 0 8px; font-size:16px; font-weight:600; line-height:1.35; letter-spacing:-.02em; color:var(--text-primary); }
+.drawer-original-title { margin:0 0 12px; padding:7px 10px; border:1px solid var(--border-primary); border-radius:8px; background:var(--surface-secondary); font-size:10px; }
+.drawer-original-title summary { cursor:pointer; color:var(--text-muted); font-weight:500; user-select:none; }
+.drawer-original-title summary:hover { color:var(--text-primary); }
+.drawer-original-title p { margin:7px 0 0; color:var(--text-secondary); line-height:1.45; overflow-wrap:anywhere; }
 .drawer-meta-item { min-width:0; }
 .drawer-link-card a { display:inline-block; margin-top:7px; color:var(--accent-blue); text-decoration:none; font-size:10px; }
 .drawer-link-card .drawer-recurrent { color:var(--accent-rose); }
