@@ -15,6 +15,7 @@ from aplicativos.integracoes.services.semantics import (
 from ..models import QualityMonitoringCycle, QualityOccurrence, QualityOrder, QualityTicket, QualityTreatment
 from .data_scope import QualityDataScopeService
 from .recurrence import build_quality_recurrence_analysis
+from .recurrence_levels import resolve_order_recurrence_level
 from .ticket_validity import quality_ticket_sets
 
 
@@ -178,6 +179,16 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
         "NOTES_CHANGED": "Observação atualizada",
     }
 
+    level_info = resolve_order_recurrence_level(
+        order,
+        recurrence_summary,
+        has_link_in_scope=bool(link),
+    )
+    if level_info["progression"]:
+        from aplicativos.chamados.services import otrs_ticket_url
+        for step in level_info["progression"]:
+            step["otrs_url"] = otrs_ticket_url(step["external_id"]) if step.get("external_id") else ""
+
     return {
         "order": order,
         "link": link,
@@ -196,7 +207,9 @@ def get_quality_order_detail(user, order, *, tab="resumo", history_filter="all",
         "owner_label": (order.owner.get_full_name() or order.owner.get_username()) if order.owner_id else "Não atribuído",
         "status_label": status_labels.get(order.status, order.get_status_display()),
         "priority_label": order.get_priority_display() or "Sem classificação",
-        "level_label": order.get_recurrence_level_display() if order.recurrence_level else "A classificar",
+        "level_label": level_info["full_label"],
+        "level_short_label": level_info["label"],
+        "level_info": level_info,
         "lifecycle_label": status_labels.get(current_stage, status_labels.get(order.status, order.get_status_display())),
         "lifecycle_steps": lifecycle_steps,
         "latest_event_label": event_labels.get(latest_event.event_type, latest_event.get_event_type_display()) if latest_event else "",

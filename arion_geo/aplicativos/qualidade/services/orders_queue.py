@@ -24,6 +24,8 @@ from ..models import QualityAuditEvent, QualityMonitoringCycle, QualityOrder
 from .constants import QUALITY_LIST_PAGE_SIZES
 from .filters import dimension_catalog, resolve_dimensions, filter_orders
 from .data_scope import QualityDataScopeService
+from .recurrence import build_quality_recurrence_analysis
+from .recurrence_levels import resolve_order_recurrence_level
 
 UserModel = get_user_model()
 PAGE_SIZES = QUALITY_LIST_PAGE_SIZES
@@ -72,7 +74,7 @@ def get_quality_orders_queue(user, params):
     }
     status_values = {value for value, _label in QualityOrder.Status.choices}
     priority_values = {value for value, _label in QualityOrder.Priority.choices}
-    level_values = {value for value, _label in QualityOrder.RecurrenceLevel.choices}
+    level_values = {value for value, _label in QualityOrder.RecurrenceLevel.choices} | {"UNCONFIRMED"}
     if selected["status"] not in status_values:
         selected["status"] = ""
     if selected["priority"] not in priority_values:
@@ -140,7 +142,6 @@ def get_quality_orders_queue(user, params):
         "uf": "uf_snapshot",
         "status": "status",
         "priority": "priority",
-        "level": "recurrence_level",
     }
     for key, field in filter_fields.items():
         if selected[key] and key not in {"project","client","uf"}:
@@ -161,6 +162,29 @@ def get_quality_orders_queue(user, params):
         base = base.filter(has_active_rreip=True)
     elif selected["rreip"] == "none":
         base = base.filter(has_active_rreip=False)
+
+    # Resolve auditable operational recurrence levels once for scoped links.
+    recurrence_analysis = build_quality_recurrence_analysis(
+        user, scope_links=scope_links, scoped_orders=scoped, now=now,
+    )
+    recurrence_by_link = recurrence_analysis["links"]
+    scoped_link_ids = set(scope_links.values_list("source_config_item_id", flat=True))
+
+    if selected["level"]:
+        matching_pks = []
+        for candidate in base.select_related(None).only("pk", "link_id", "ci_snapshot", "recurrence_level"):
+            ci = candidate.link_id or candidate.ci_snapshot
+            info = resolve_order_recurrence_level(
+                candidate,
+                recurrence_by_link.get(ci),
+                has_link_in_scope=bool(ci and ci in scoped_link_ids),
+            )
+            if selected["level"] == "UNCONFIRMED":
+                if info["is_unconfirmed"]:
+                    matching_pks.append(candidate.pk)
+            elif info["code"] == selected["level"]:
+                matching_pks.append(candidate.pk)
+        base = base.filter(pk__in=matching_pks)
 
     counts = base.order_by().aggregate(
         all=Count("pk", distinct=True),
@@ -217,7 +241,19 @@ def get_quality_orders_queue(user, params):
             QualityOrder.Status.CANCELADA: "Cancelada",
         }.get(order.status, order.get_status_display())
         order.priority_label = order.get_priority_display()
-        order.level_label = order.get_recurrence_level_display() if order.recurrence_level else "A classificar"
+        ci = order.link_id or order.ci_snapshot
+        level_info = resolve_order_recurrence_level(
+            order,
+            recurrence_by_link.get(ci),
+            has_link_in_scope=bool(ci and ci in scoped_link_ids),
+        )
+        order.level_info = level_info
+        order.effective_level = level_info["code"]
+        order.level_label = level_info["full_label"]
+        order.level_short_label = level_info["label"]
+        order.level_tooltip = level_info["tooltip"]
+        order.level_source = level_info["source"]
+        order.level_source_label = level_info["source_label"]
         order.owner_label = (order.owner.get_full_name() or order.owner.get_username()) if order.owner_id else "Não atribuído"
         has_live_link = bool(order.link_id and order.link.is_present_in_source)
         order.link_label = link_designation(order.link) if has_live_link else clean_link_designation(order.designation_snapshot)

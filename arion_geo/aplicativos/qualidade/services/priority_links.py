@@ -15,6 +15,7 @@ from .constants import QUALITY_BUSINESS_PRIORITY, QUALITY_LIST_PAGE_SIZES, QUALI
 from .filters import quality_period, dimension_catalog, resolve_dimensions, filter_links, strategic_rank
 from .data_scope import QualityDataScopeService
 from .recurrence import ACTIVE_RECURRENCE, build_quality_recurrence_analysis
+from .recurrence_levels import level_code_from_recurrence_count
 from .ticket_validity import quality_ticket_sets
 
 
@@ -303,7 +304,10 @@ def get_priority_links(user, params):
         }.get(row.active_priority, 4)
         row.days_since_last = max((now - row.last_occurrence).days, 0) if row.last_occurrence else None
         row.priority_label = dict(QualityOrder.Priority.choices).get(row.active_priority, "Sem classificação")
-        row.level_label = row.active_level or "A classificar"
+        row.calculated_level = level_code_from_recurrence_count(row.current_episode_recurrence_count)
+        row.effective_level = row.active_level or row.calculated_level
+        row.level_source = "MANUAL" if row.active_level else ("CALCULATED" if row.calculated_level else "UNCONFIRMED")
+        row.level_label = row.effective_level or "A confirmar"
         row.status_label = {
             QualityOrder.Status.NOVA: "Nova",
             QualityOrder.Status.TRIAGEM: "Triagem",
@@ -341,7 +345,10 @@ def get_priority_links(user, params):
         row.provider_name = provider_semantics[row.pk].provider_name
         row.isp_display = row.provider_name
         row.priority_label = dict(QualityOrder.Priority.choices).get(row.active_priority, "Sem classificação")
-        row.level_label = row.active_level or "A classificar"
+        row.calculated_level = level_code_from_recurrence_count(row.current_episode_recurrence_count)
+        row.effective_level = row.active_level or row.calculated_level
+        row.level_source = "MANUAL" if row.active_level else ("CALCULATED" if row.calculated_level else "UNCONFIRMED")
+        row.level_label = row.effective_level or "A confirmar"
         row.status_label = {
             QualityOrder.Status.NOVA: "Nova",
             QualityOrder.Status.TRIAGEM: "Triagem",

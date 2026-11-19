@@ -9,13 +9,14 @@
   {% if is_archived %}<aside class="quality-archived-banner"><strong>OQ arquivada em {{ order.archived_at|date:"d/m/Y H:i" }}</strong><span>Por {% if order.archived_by %}{{ order.archived_by.get_full_name|default:order.archived_by.get_username }}{% else %}usuário removido{% endif %} · {{ order.archive_reason }}</span></aside>{% endif %}
   <header class="quality-order-hero">
     <div class="quality-order-hero__identity">
-      <div class="quality-order-hero__eyebrow"><span>{{ order.code }}{% if order.is_demo %} <span class="quality-demo-badge">Demonstração local</span>{% endif %}</span><span class="quality-pill quality-pill--status quality-pill--status-{{ order.status|lower }}">{{ order.status_label }}</span></div>
+      <div class="quality-order-hero__eyebrow"><span>{{ order.code }}{% if order.is_demo %} <span class="quality-demo-badge">Demonstração local</span>{% endif %}</span><span class="quality-pill quality-pill--status quality-pill--status-{{ order.status|lower }}">{{ status_label }}</span>{% if level_info.code %}<span class="quality-pill quality-pill--level{% if level_info.is_manual %} quality-pill--level-manual{% else %} quality-pill--level-auto{% endif %}" title="{{ level_info.tooltip }}">{{ level_info.code }}</span>{% else %}<span class="quality-pill quality-pill--level-unconfirmed" title="{{ level_info.tooltip }}">A confirmar</span>{% endif %}</div>
       <h1>{{ designation }}</h1>
       <p class="quality-order-hero__technical">CI {{ ci_display }}{% if source_record %}<span>·</span> Registro nº {{ source_record }}{% endif %}</p>
       <p class="quality-order-hero__context">{{ client }} <span>·</span> {{ project }} <span>·</span> {{ provider_name }} <span>·</span> {{ uf }}</p>
     </div>
     <dl class="quality-order-hero__facts">
-      <div><dt>Prioridade</dt><dd>{{ order.priority_label }}</dd></div>
+      <div><dt>Nível</dt><dd title="{{ level_info.tooltip }}">{{ level_short_label }}</dd></div>
+      <div><dt>Prioridade</dt><dd>{{ priority_label }}</dd></div>
       <div><dt>Responsável</dt><dd>{{ owner_label }}</dd></div>
       <div><dt>Prazo</dt><dd>{% if order.treatment_deadline %}{{ order.treatment_deadline|date:"d/m/Y" }}{% else %}Sem prazo{% endif %}</dd></div>
     </dl>
@@ -23,7 +24,7 @@
   </header>
 
   <section class="quality-order-lifecycle" aria-label="Fase atual da ordem">
-    <div><span>Fase atual</span><strong>{{ order.lifecycle_label }}</strong>{% if order.status == "AGUARDANDO_TERCEIRO" %}<small>Aguardando terceiro</small>{% endif %}</div>
+    <div><span>Fase atual</span><strong>{{ lifecycle_label }}</strong>{% if order.status == "AGUARDANDO_TERCEIRO" %}<small>Aguardando terceiro</small>{% endif %}</div>
     <ol>
       {% for step in lifecycle_steps %}<li{% if step.current %} class="is-current" aria-current="step"{% endif %}><span aria-hidden="true"></span>{{ step.label }}</li>{% endfor %}
     </ol>
@@ -49,7 +50,36 @@
 
     <div class="quality-order-summary-grid">
       <div class="quality-order-summary-main">
-        {% if has_link_history %}<section class="quality-order-section quality-order-episode"><header><div><p class="quality-eyebrow">OTRS + CMDB</p><h2>Episódio operacional</h2></div><span class="quality-operational-state{% if operational_is_active %} quality-operational-state--active{% elif operational_is_stabilized %} quality-operational-state--stabilized{% elif operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ operational_state_label }}</span></header><dl class="quality-order-data-grid"><div><dt>Episódio atual</dt><dd>{% if current_episode_number %}{{ current_episode_number|stringformat:"02d" }}{% else %}—{% endif %}</dd></div><div><dt>Sequência operacional</dt><dd>{{ operational_recurrence_level }} · {{ current_episode_recurrence_count }} reincidências</dd></div><div><dt>Dias sem ocorrência</dt><dd>{% if current_episode_days_since_last != None %}{{ current_episode_days_since_last }}{% else %}—{% endif %}</dd></div><div><dt>Início do episódio</dt><dd>{% if current_episode_started_at %}{{ current_episode_started_at|date:"d/m/Y" }}{% else %}—{% endif %}</dd></div></dl></section>{% endif %}
+        {% if has_link_history %}<section class="quality-order-section quality-order-episode">
+          <header>
+            <div><p class="quality-eyebrow">OTRS + CMDB · REINCIDÊNCIA</p><h2>Episódio operacional e nível</h2></div>
+            <span class="quality-operational-state{% if operational_is_active %} quality-operational-state--active{% elif operational_is_stabilized %} quality-operational-state--stabilized{% elif operational_state == 'NEW_EPISODE' %} quality-operational-state--new{% else %} quality-operational-state--single{% endif %}">{{ operational_state_label }}</span>
+          </header>
+          <dl class="quality-order-data-grid">
+            <div><dt>Nível efetivo</dt><dd><strong title="{{ level_info.tooltip }}">{{ level_label }}</strong><small class="quality-level-source">{{ level_info.source_label }}</small></dd></div>
+            <div><dt>Ocorrências válidas / Reincidências</dt><dd>{{ level_info.valid_occurrence_count }} válida{{ level_info.valid_occurrence_count|pluralize }} · {{ level_info.recurrence_count }} reincidência{{ level_info.recurrence_count|pluralize }}</dd></div>
+            <div><dt>Episódio atual</dt><dd>{% if current_episode_number %}{{ current_episode_number|stringformat:"02d" }}{% else %}—{% endif %}{% if current_episode_started_at %} · início {{ current_episode_started_at|date:"d/m/Y" }}{% endif %}</dd></div>
+            <div><dt>Dias sem ocorrência</dt><dd>{% if current_episode_days_since_last != None %}{{ current_episode_days_since_last }} dias{% else %}—{% endif %}</dd></div>
+          </dl>
+          {% if level_info.has_manual_divergence %}<p class="quality-level-note">Nível confirmado manualmente ({{ level_info.code }}) preservado. O cálculo operacional atual indica <strong>{{ level_info.calculated_code }}</strong> com base nas ocorrências válidas.</p>{% endif %}
+          {% if level_info.basis_note %}<p class="quality-level-note">{{ level_info.basis_note }}</p>{% endif %}
+          {% if level_info.unconfirmed_reason %}<p class="quality-level-note">{{ level_info.unconfirmed_reason }}</p>{% endif %}
+          {% if level_info.progression %}
+          <div class="quality-level-progression">
+            <p class="quality-eyebrow">PROGRESSÃO DO EPISÓDIO (TICKETS VÁLIDOS)</p>
+            <ol class="quality-level-progression__list">
+              {% for step in level_info.progression %}
+              <li>
+                <span class="quality-pill {% if step.is_recurrence %}quality-pill--level quality-pill--level-auto{% else %}quality-pill--level-initial{% endif %}">{{ step.step_label }}</span>
+                {% if step.otrs_url %}<a href="{{ step.otrs_url }}" target="_blank" rel="noopener noreferrer">{{ step.ticket_number }} ↗</a>{% else %}<strong>{{ step.ticket_number }}</strong>{% endif %}
+                <time datetime="{{ step.occurred_at|date:'c' }}">{{ step.occurred_at|date:"d/m/Y H:i" }}</time>
+                {% if step.closing_code_raw %}<small>{{ step.closing_code_raw }}</small>{% endif %}
+              </li>
+              {% endfor %}
+            </ol>
+          </div>
+          {% endif %}
+        </section>{% endif %}
         <section class="quality-order-section quality-order-current">
           <header><div><p class="quality-eyebrow">ACOMPANHAMENTO</p><h2>Situação atual</h2></div>{% if latest_occurrence %}<span class="quality-order-section__date">Última ocorrência · {{ latest_occurrence.source_created_at|date:"d/m/Y H:i" }}</span>{% endif %}</header>
           <dl class="quality-order-data-grid">
@@ -81,9 +111,9 @@
         <section class="quality-order-section">
           <header><div><p class="quality-eyebrow">RESPONSABILIDADE</p><h2>Gestão da OQ</h2></div></header>
           <dl class="quality-order-management">
-            <div><dt>Status</dt><dd>{{ order.status_label }}</dd></div>
-            <div><dt>Nível</dt><dd>{{ order.level_label }}</dd></div>
-            <div><dt>Prioridade</dt><dd>{{ order.priority_label }}</dd></div>
+            <div><dt>Status</dt><dd>{{ status_label }}</dd></div>
+            <div><dt>Nível</dt><dd title="{{ level_info.tooltip }}">{{ level_label }} <small class="quality-level-source">({{ level_info.source_label }})</small></dd></div>
+            <div><dt>Prioridade</dt><dd>{{ priority_label }}</dd></div>
             <div><dt>Responsável</dt><dd>{{ owner_label }}</dd></div>
             <div><dt>Prazo</dt><dd>{% if order.treatment_deadline %}{{ order.treatment_deadline|date:"d/m/Y" }}{% else %}Sem prazo{% endif %}</dd></div>
             <div><dt>Criada em</dt><dd>{{ order.created_at|date:"d/m/Y H:i" }}</dd></div>

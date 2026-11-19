@@ -20,7 +20,7 @@
     <div class="quality-list-filter-panel quality-order-filter-panel">
       <label>Status<select name="status"><option value="">Todos</option>{% for value,label in status_options %}<option value="{{ value }}"{% if selected.status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <label>Prioridade<select name="priority"><option value="">Todas</option>{% for value,label in priority_options %}<option value="{{ value }}"{% if selected.priority == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <label>Nível<select name="level"><option value="">Todos</option>{% for value,label in level_options %}<option value="{{ value }}"{% if selected.level == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+      <label>Nível<select name="level"><option value="">Todos</option>{% for value,label in level_options %}<option value="{{ value }}"{% if selected.level == value %} selected{% endif %}>{{ value }}</option>{% endfor %}<option value="UNCONFIRMED"{% if selected.level == 'UNCONFIRMED' %} selected{% endif %}>A confirmar</option></select></label>
       <label>Responsável<select name="owner"><option value="">Todos</option><option value="unassigned"{% if selected.owner == 'unassigned' %} selected{% endif %}>Não atribuído</option>{% for owner in filter_options.owners %}<option value="{{ owner.pk }}"{% if selected.owner == owner.pk|stringformat:"s" %} selected{% endif %}>{{ owner.get_full_name|default:owner.username }}</option>{% endfor %}</select></label>
 
 
@@ -48,7 +48,15 @@
         <td><strong class="quality-cell-primary">{{ order.link_label }}</strong><small>CI {{ order.ci_snapshot|default:"—" }}</small></td>
         <td><strong class="quality-cell-primary">{{ order.client_snapshot|default:"—" }}</strong><small>{{ order.project_display|default:"Projeto não informado" }}</small></td>
         <td><strong class="quality-cell-primary">{{ order.provider_name|default:"Não classificado" }}</strong><small>{{ order.uf_snapshot|default:"UF não informada" }}</small></td>
-        <td>{% if order.recurrence_level %}<span class="quality-pill quality-pill--level">{{ order.recurrence_level }}</span>{% else %}<span class="quality-muted-value">A classificar</span>{% endif %}</td>
+        <td>
+          {% if order.effective_level %}
+            <span class="quality-pill quality-pill--level{% if order.level_source == 'MANUAL' %} quality-pill--level-manual{% else %} quality-pill--level-auto{% endif %}" title="{{ order.level_tooltip }}">{{ order.effective_level }}</span>
+            <small title="{{ order.level_tooltip }}">{% if order.level_source == 'MANUAL' %}Confirmado{% else %}{{ order.level_info.valid_occurrence_count }} vál. · auto{% endif %}</small>
+          {% else %}
+            <span class="quality-pill quality-pill--level-unconfirmed" title="{{ order.level_tooltip }}">A confirmar</span>
+            <small title="{{ order.level_tooltip }}">Histórico insuficiente</small>
+          {% endif %}
+        </td>
         <td><span class="quality-pill quality-pill--status quality-pill--status-{{ order.status|lower }}">{{ order.status_label }}</span></td>
         <td><span class="quality-pill quality-pill--priority quality-pill--{{ order.priority|lower }}">{{ order.priority_label }}</span></td>
         <td>{% if order.owner_id %}<span class="quality-owner-label">{{ order.owner_label }}</span>{% else %}<span class="quality-owner-label quality-owner-label--unassigned">Não atribuído</span>{% endif %}</td>
@@ -61,7 +69,7 @@
   <div class="quality-order-cards">{% for order in rows %}<article class="quality-order-card">
     <header><span><a href="{% url 'qualidade:ordem_detail' codigo=order.code %}">{{ order.code }}</a>{% if order.is_demo %} <span class="quality-demo-badge">Demonstração local</span>{% endif %}</span><span class="quality-pill quality-pill--priority quality-pill--{{ order.priority|lower }}">{{ order.priority_label }}</span></header>
     <strong class="quality-order-card__link">{{ order.link_label }}</strong><small>CI {{ order.ci_snapshot|default:"—" }} · {{ order.client_snapshot|default:"Cliente não informado" }}</small>
-    <div class="quality-order-card__badges"><span class="quality-pill quality-pill--status quality-pill--status-{{ order.status|lower }}">{{ order.status_label }}</span>{% if order.recurrence_level %}<span class="quality-pill quality-pill--level">{{ order.recurrence_level }}</span>{% endif %}</div>
+    <div class="quality-order-card__badges"><span class="quality-pill quality-pill--status quality-pill--status-{{ order.status|lower }}">{{ order.status_label }}</span>{% if order.effective_level %}<span class="quality-pill quality-pill--level" title="{{ order.level_tooltip }}">{{ order.effective_level }}</span>{% else %}<span class="quality-pill quality-pill--level-unconfirmed" title="{{ order.level_tooltip }}">A confirmar</span>{% endif %}</div>
     <dl><div><dt>Responsável</dt><dd>{{ order.owner_label }}</dd></div><div><dt>Prazo</dt><dd>{% if order.treatment_deadline %}{{ order.treatment_deadline|date:"d/m/Y" }}{% if order.is_overdue %} · {% if order.days_overdue == 0 %}vencida hoje{% elif order.days_overdue == 1 %}vencida há 1 dia{% else %}vencida há {{ order.days_overdue }} dias{% endif %}{% endif %}{% else %}Sem prazo{% endif %}</dd></div><div><dt>Última atividade</dt><dd title="{{ order.last_activity|date:'d/m/Y H:i' }}">{{ order.last_activity|timesince }} atrás</dd></div><div><dt>Monitoramento</dt><dd>{% if order.has_active_rreip %}RREIP ativo{% else %}Sem ciclo ativo{% endif %}</dd></div></dl>
     {% if can_manage_orders %}<footer><button type="button" data-quality-order-action="owner" data-quality-order-code="{{ order.code }}" data-quality-owner="{{ order.owner_id|default:'' }}">Atribuir</button><button type="button" data-quality-order-action="priority" data-quality-order-code="{{ order.code }}" data-quality-priority="{{ order.priority }}">Prioridade</button></footer>{% endif %}
   </article>{% endfor %}</div>
