@@ -1,0 +1,251 @@
+{% load humanize %}
+<dialog class="plant-modal" id="plant-history-modal" data-plant-history data-endpoint="{% url 'analytics-plant-history' %}" data-start="{{ plant_modal_start }}" data-end="{{ plant_modal_end }}" data-context="{{ plant_modal_context|default:'dashboard' }}" aria-labelledby="plant-history-title">
+  <div class="plant-modal__shell">
+    <header class="plant-modal__header">
+      <div class="plant-modal__title-wrap">
+        <span class="panel-kicker">INTELIGÊNCIA HISTÓRICA · CMDB × OTRS</span>
+        <h2 id="plant-history-title">Planta CMDB × Chamados</h2>
+        <p class="plant-history-subtitle">Evolução da planta × Volume de chamados — compara a base CMDB ativa com os chamados canônicos da fila NOC.</p>
+      </div>
+      <div class="plant-modal__header-right">
+        <span class="plant-modal__sync-pill" title="Última sincronização registrada do espelho CMDB">
+          <i aria-hidden="true"></i>
+          <span>CMDB: <strong data-plant-sync-label>{% if plant_history %}{{ plant_history.overview.cmdb_last_sync_label }}{% else %}Sincronizado{% endif %}</strong></span>
+        </span>
+        <button type="button" class="plant-modal__close" data-plant-modal-close aria-label="Fechar análise da planta">&times;</button>
+      </div>
+    </header>
+
+    <form class="plant-modal__filters" data-plant-filters aria-label="Filtros da análise Planta CMDB × Chamados">
+      <label>Operadora contratante
+        <select name="operator" data-plant-filter="operator">
+          <option value="">Todas</option>
+          {% if plant_history %}{% for op in plant_history.filter_options.operators %}<option value="{{ op }}">{{ op }}</option>{% endfor %}{% endif %}
+        </select>
+      </label>
+      <label>Projeto / cliente
+        <select name="project" data-plant-filter="project">
+          <option value="">Todos</option>
+          {% if plant_history %}{% for proj in plant_history.filter_options.projects %}<option value="{{ proj }}">{{ proj }}</option>{% endfor %}{% endif %}
+        </select>
+      </label>
+      <label>Região
+        <select name="region" data-plant-filter="region">
+          <option value="">Todas</option>
+          {% if plant_history %}{% for reg in plant_history.filter_options.regions %}<option value="{{ reg.code }}">{{ reg.name }}</option>{% endfor %}{% endif %}
+        </select>
+      </label>
+      <label>UF
+        <select name="uf" data-plant-filter="uf">
+          <option value="">Todas</option>
+          {% if plant_history %}{% for uf in plant_history.filter_options.ufs %}<option value="{{ uf }}">{{ uf }}</option>{% endfor %}{% endif %}
+        </select>
+      </label>
+      <label>De
+        <input type="date" name="start" data-plant-filter="start" value="{{ plant_modal_start }}">
+      </label>
+      <label>Até
+        <input type="date" name="end" data-plant-filter="end" value="{{ plant_modal_end }}">
+      </label>
+      <div class="plant-modal__filter-actions">
+        <button type="submit" class="plant-btn plant-btn--primary">Aplicar</button>
+        <button type="button" class="plant-btn" data-plant-reset>Limpar</button>
+      </div>
+    </form>
+
+    <div class="plant-modal__context-bar" data-plant-context-bar hidden></div>
+
+    <nav class="plant-modal__tabs" role="tablist" aria-label="Seções da análise da planta">
+      <button type="button" role="tab" id="plant-tab-overview" aria-controls="plant-panel-overview" aria-selected="true" data-plant-tab="overview">Visão geral</button>
+      <button type="button" role="tab" id="plant-tab-evolution" aria-controls="plant-panel-evolution" aria-selected="false" data-plant-tab="evolution">Evolução histórica</button>
+      <button type="button" role="tab" id="plant-tab-compare" aria-controls="plant-panel-compare" aria-selected="false" data-plant-tab="compare">Comparação por período</button>
+    </nav>
+
+    <div class="plant-modal__body">
+      <section class="plant-tab-panel" id="plant-panel-overview" role="tabpanel" aria-labelledby="plant-tab-overview" data-plant-panel="overview">
+        <div class="plant-ov-section-head">
+          <h3>Base CMDB atual no recorte</h3>
+          <small>Separação explícita entre links cadastrados no CMDB, links ativos e cancelados.</small>
+        </div>
+        <div class="plant-history-kpis plant-ov-kpis" aria-live="polite">
+          <article data-tone="blue">
+            <span>Total cadastrado (CMDB)</span>
+            <strong data-ov-registered>{% if plant_history %}{{ plant_history.overview.total_registered|intcomma }}{% else %}—{% endif %}</strong>
+            <small>Todos os circuitos presentes no espelho</small>
+          </article>
+          <article data-tone="green">
+            <span>Links ativos</span>
+            <strong data-ov-active>{% if plant_history %}{{ plant_history.overview.active_links|intcomma }}{% else %}—{% endif %}</strong>
+            <small data-ov-active-detail>{% if plant_history %}{{ plant_history.overview.active_share_label }} da base · Operacionais e em manutenção{% else %}Operacionais e em manutenção{% endif %}</small>
+          </article>
+          <article data-tone="neutral">
+            <span>Inativos / cancelados</span>
+            <strong data-ov-canceled>{% if plant_history %}{{ plant_history.overview.canceled_links|intcomma }}{% else %}—{% endif %}</strong>
+            <small data-ov-canceled-detail>{% if plant_history %}{{ plant_history.overview.canceled_share_label }} da base cadastrada{% else %}Cancelados no CMDB{% endif %}</small>
+          </article>
+          <article data-tone="orange">
+            <span>Sem identificação confiável</span>
+            <strong data-ov-unidentified>{% if plant_history %}{{ plant_history.overview.unidentified_links|intcomma }}{% else %}—{% endif %}</strong>
+            <small data-ov-unidentified-detail>{% if plant_history %}{{ plant_history.overview.unidentified_operator_links|intcomma }} sem operadora · {{ plant_history.overview.unidentified_project_links|intcomma }} sem projeto{% else %}Operadora ou projeto ausentes{% endif %}</small>
+          </article>
+        </div>
+
+        <div class="plant-ov-section-head">
+          <h3>Demanda operacional no período (<span data-ov-period-label>{{ plant_modal_start }} a {{ plant_modal_end }}</span>)</h3>
+          <small>Tickets canônicos NOC e impacto sobre a planta ativa do recorte.</small>
+        </div>
+        <div class="plant-history-kpis plant-ov-period-kpis">
+          <article>
+            <span>Chamados criados no período</span>
+            <strong data-ov-period-tickets>{% if plant_history %}{{ plant_history.overview.period_totals.tickets|intcomma }}{% else %}—{% endif %}</strong>
+            <small>Fila NOC - ATACADO</small>
+          </article>
+          <article>
+            <span>Links distintos afetados</span>
+            <strong data-ov-period-affected>{% if plant_history %}{{ plant_history.overview.period_totals.affected_links|intcomma }}{% else %}—{% endif %}</strong>
+            <small data-ov-period-affected-pct>{% if plant_history %}{{ plant_history.overview.period_totals.affected_pct_active_label }} da planta ativa atual{% else %}Circuitos com 1+ chamado{% endif %}</small>
+          </article>
+          <article>
+            <span>Links reincidentes</span>
+            <strong data-ov-period-recurrent>{% if plant_history %}{{ plant_history.overview.period_totals.recurrent_links|intcomma }}{% else %}—{% endif %}</strong>
+            <small>2+ chamados distintos no período</small>
+          </article>
+          <article>
+            <span>Proporção (chamados / 100 links ativos)</span>
+            <strong data-ov-period-rate>{% if plant_history %}{{ plant_history.overview.period_totals.tickets_per_100_active_label }}{% else %}—{% endif %}</strong>
+            <small>Referência acumulada sobre a planta ativa</small>
+          </article>
+        </div>
+
+        <div class="plant-ov-distributions">
+          <div class="plant-dist-card">
+            <header>
+              <h4>Distribuição por operadora contratante</h4>
+              <small>Ativos / Cadastrados</small>
+            </header>
+            <ol class="plant-dist-list" data-ov-operators>
+              {% if plant_history %}
+                {% for op in plant_history.overview.operator_distribution %}
+                <li class="plant-dist-row {% if op.key == 'unidentified' %}is-unidentified{% endif %}">
+                  <span class="plant-dist-name"><i class="plant-op-dot plant-op-dot--{{ op.key }}" aria-hidden="true"></i>{{ op.label }}</span>
+                  <span class="plant-dist-bar" aria-hidden="true"><b style="width:{{ op.share_pct|floatformat:1 }}%"></b></span>
+                  <strong class="plant-dist-counts">{{ op.active|intcomma }} <small>/ {{ op.total|intcomma }}</small></strong>
+                  <span class="plant-dist-share">{{ op.share_label }}</span>
+                </li>
+                {% endfor %}
+              {% endif %}
+            </ol>
+          </div>
+          <div class="plant-dist-card">
+            <header>
+              <h4>Distribuição por projeto / cliente</h4>
+              <small>Top carteiras · Ativos / Cadastrados</small>
+            </header>
+            <ol class="plant-dist-list" data-ov-projects>
+              {% if plant_history %}
+                {% for proj in plant_history.overview.project_distribution %}
+                <li class="plant-dist-row {% if proj.is_unidentified %}is-unidentified{% endif %}">
+                  <span class="plant-dist-name" title="{{ proj.label }}">{{ proj.label }}</span>
+                  <span class="plant-dist-bar" aria-hidden="true"><b style="width:{{ proj.share_pct|floatformat:1 }}%"></b></span>
+                  <strong class="plant-dist-counts">{{ proj.active|intcomma }} <small>/ {{ proj.total|intcomma }}</small></strong>
+                  <span class="plant-dist-share">{{ proj.share_label }}</span>
+                </li>
+                {% empty %}
+                <li class="plant-muted">Nenhum projeto no recorte selecionado.</li>
+                {% endfor %}
+              {% endif %}
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="plant-tab-panel" id="plant-panel-evolution" role="tabpanel" aria-labelledby="plant-tab-evolution" data-plant-panel="evolution" hidden>
+        <div class="plant-evo-toolbar">
+          <div class="plant-history-kpis plant-evo-kpis" data-plant-kpis aria-live="polite">
+            <article><span>Planta ativa (<span data-kpi-month-label>{% if plant_history %}{{ plant_history.summary.latest_month_label }}{% else %}—{% endif %}</span>)</span><strong data-kpi-plant>{% if plant_history and plant_history.summary.latest_active_links != None %}{{ plant_history.summary.latest_active_links|intcomma }}{% else %}—{% endif %}</strong><small data-kpi-coverage>{% if plant_history %}{{ plant_history.summary.latest_coverage_label }}{% else %}—{% endif %}</small></article>
+            <article><span>Chamados / 100 links ativos</span><strong data-kpi-rate>{% if plant_history %}{{ plant_history.summary.latest_tickets_per_100_label }}{% else %}—{% endif %}</strong><small data-kpi-rate-note>{% if plant_history and plant_history.summary.latest_is_partial %}Mês parcial em andamento{% else %}Taxa proporcional no mês{% endif %}</small></article>
+            <article><span>% de links afetados</span><strong data-kpi-affected>{% if plant_history %}{{ plant_history.summary.latest_affected_pct_label }}{% else %}—{% endif %}</strong><small>Circuitos distintos afetados / planta ativa</small></article>
+            <article><span>Cobertura histórica CMDB</span><strong data-kpi-months>{% if plant_history %}{{ plant_history.summary.months_with_plant }} / {{ plant_history.summary.months_total }} meses{% else %}—{% endif %}</strong><small>Sem snapshot = base indisponível</small></article>
+          </div>
+          <div class="plant-history-mode" role="group" aria-label="Modo de visualização do gráfico">
+            <button type="button" data-plant-mode="rates" aria-pressed="true">Taxas proporcionais</button>
+            <button type="button" data-plant-mode="absolute" aria-pressed="false">Valores absolutos</button>
+          </div>
+        </div>
+
+        <div class="plant-history-legend" data-plant-legend aria-label="Legenda do gráfico"></div>
+        <div class="plant-history-chart" data-plant-chart role="img" aria-label="Gráfico comparando evolução da planta ativa CMDB e volume ou taxas proporcionais de chamados por mês"></div>
+
+        <div class="plant-history-table-wrap">
+          <table class="plant-history-table">
+            <thead>
+              <tr>
+                <th scope="col">Mês</th>
+                <th scope="col">Planta ativa</th>
+                <th scope="col">Chamados</th>
+                <th scope="col">Links afetados</th>
+                <th scope="col">Reincidentes</th>
+                <th scope="col" title="(Chamados no mês / Links ativos no mês) × 100">Chamados / 100 links</th>
+                <th scope="col" title="(Links distintos afetados / Links ativos no mês) × 100">% Links afetados</th>
+                <th scope="col">Var. M/M (chamados)</th>
+                <th scope="col">Cobertura / Fonte</th>
+              </tr>
+            </thead>
+            <tbody data-plant-table-body>
+              {% if plant_history %}
+                {% for row in plant_history.series %}
+                <tr class="{% if row.coverage_status == 'UNAVAILABLE' %}is-unavailable{% elif row.is_partial_month %}is-partial{% endif %}">
+                  <td><strong>{{ row.label }}</strong>{% if row.is_partial_month %} <span class="plant-badge plant-badge--partial">Parcial</span>{% endif %}</td>
+                  <td>{% if row.active_links != None %}{{ row.active_links|intcomma }}{% else %}<span class="plant-muted">Indisponível</span>{% endif %}</td>
+                  <td>{{ row.tickets|intcomma }}</td>
+                  <td>{{ row.affected_links|intcomma }}</td>
+                  <td>{{ row.recurrent_links|intcomma }}</td>
+                  <td><strong>{{ row.tickets_per_100_label }}</strong></td>
+                  <td>{{ row.affected_links_pct_label }}</td>
+                  <td>{% if row.mom_tickets_pct != None %}{% if row.mom_tickets_pct > 0 %}+{% endif %}{{ row.mom_tickets_pct|floatformat:1 }}%{% else %}—{% endif %}</td>
+                  <td><span class="plant-badge plant-badge--{{ row.coverage_status|lower }}">{{ row.coverage_label }}</span></td>
+                </tr>
+                {% endfor %}
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="plant-tab-panel" id="plant-panel-compare" role="tabpanel" aria-labelledby="plant-tab-compare" data-plant-panel="compare" hidden>
+        <div class="plant-compare-controls">
+          <label>1º mês (base)
+            <select data-compare-select="a" aria-label="Primeiro mês para comparação"></select>
+          </label>
+          <span class="plant-compare-vs" aria-hidden="true">vs</span>
+          <label>2º mês (comparado)
+            <select data-compare-select="b" aria-label="Segundo mês para comparação"></select>
+          </label>
+        </div>
+        <div class="plant-compare-notice" data-compare-notice hidden></div>
+        <div class="plant-compare-grid" data-compare-cards></div>
+        <div class="plant-history-table-wrap">
+          <table class="plant-history-table plant-compare-table">
+            <thead>
+              <tr>
+                <th scope="col">Indicador</th>
+                <th scope="col" data-compare-head-a>1º mês</th>
+                <th scope="col" data-compare-head-b>2º mês</th>
+                <th scope="col">Variação absoluta</th>
+                <th scope="col">Variação percentual</th>
+              </tr>
+            </thead>
+            <tbody data-compare-table-body></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <footer class="plant-modal__footer">
+      <p class="dashboard-data-note" data-plant-note>{% if plant_history %}{{ plant_history.methodology_note }}{% else %}Volume canônico NOC × snapshots mensais verificados da planta CMDB.{% endif %}</p>
+      <button type="button" class="plant-btn" data-plant-modal-close>Fechar</button>
+    </footer>
+  </div>
+  <div class="chart-tooltip" data-plant-tooltip role="tooltip" hidden></div>
+  {% if plant_history %}{{ plant_history|json_script:"plant-history-initial-data" }}{% endif %}
+</dialog>

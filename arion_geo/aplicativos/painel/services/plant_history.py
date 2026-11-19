@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timezone as datetime_timezone
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
-from django.db.models import Count, Exists, OuterRef, Q, Sum
+from django.db.models import Count, Exists, Max, OuterRef, Q, Sum
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
@@ -14,10 +14,12 @@ from aplicativos.configuracoes.data_scope import DataScopeService
 from aplicativos.integracoes.models import (
     CMDBPlantMonthlySlice,
     CMDBPlantMonthlySnapshot,
+    IntegrationSyncState,
     OTRSTicketConfigItem,
 )
-from aplicativos.integracoes.services.analytics import LinkQueryService, PeriodService, TicketQueryService
-from aplicativos.integracoes.services.geography import STATES
+from aplicativos.integracoes.services.analytics import LinkQueryService, TicketQueryService
+from aplicativos.integracoes.services.cmdb_plant_snapshot import _is_canceled_state, _is_maintenance_state
+from aplicativos.integracoes.services.geography import REGIONS, STATES, region_states, state_query
 from aplicativos.integracoes.services.incidents import IncidentRules
 from aplicativos.integracoes.services.project_names import (
     canonical_project_name,
@@ -34,6 +36,13 @@ _STATE_BY_KEY = {
     for row in STATES
     for key in (row["sigla"], project_comparison_key(row["nome"]))
 }
+_REGION_BY_KEY = {
+    key: row["sigla"]
+    for row in REGIONS
+    for key in (row["sigla"], str(row["id"]), project_comparison_key(row["nome"]))
+}
+_PRIMARY_OPERATORS = ("Claro", "Vivo", "Algar")
+_UNIDENTIFIED_MARKERS = {"", "nao identificado", "não identificado", "sem identificacao", "sem identificação", "desconhecido"}
 
 
 def _month_label(month_key):
@@ -46,6 +55,18 @@ def _norm_uf(raw):
     return _STATE_BY_KEY.get(key, "")
 
 
+def _norm_region(raw):
+    key = project_comparison_key(raw)
+    if key in _REGION_BY_KEY:
+        return _REGION_BY_KEY[key]
+    raw_up = str(raw or "").strip().upper()
+    return _REGION_BY_KEY.get(raw_up, "")
+
+
+def _is_unidentified(value):
+    return str(value or "").strip().casefold() in _UNIDENTIFIED_MARKERS
+
+
 def _pct_delta(current, previous):
     if current is None or previous is None or previous <= 0:
         return None
@@ -56,6 +77,12 @@ def _format_pt_number(value, decimals=1):
     if value is None:
         return "—"
     return f"{value:.{decimals}f}".replace(".", ",")
+
+
+def _share_pct(part, whole):
+    if not whole or whole <= 0:
+        return 0.0
+    return round((part / whole) * 100, 1)
 
 
 def _scoped_plant_slices(user, snapshots):
@@ -104,6 +131,187 @@ def _resolve_range(params, now):
     return start, end
 
 
+def _build_live_overview(filtered_links, *, period_tickets, period_affected, period_recurrent, snapshots):
+    """Build current CMDB plant breakdown separating registered, active, canceled & unidentified."""
+    total_registered = 0
+    active_links = 0
+    operational_links = 0
+    maintenance_links = 0
+    canceled_links = 0
+    unidentified_operator_links = 0
+    unidentified_project_links = 0
+    unidentified_links = 0
+
+    # Operator buckets: Claro, Vivo, Algar, Outras, Sem identificação -> [total, active, canceled]
+    op_buckets = {
+        "claro": ["Claro", 0, 0, 0],
+        "vivo": ["Vivo", 0, 0, 0],
+        "algar": ["Algar", 0, 0, 0],
+        "outras": ["Outras", 0, 0, 0],
+        "unidentified": ["Sem identificação", 0, 0, 0],
+    }
+    project_buckets = defaultdict(lambda: [0, 0])  # label -> [total, active]
+
+    rows = filtered_links.values_list(
+        "contracting_client",
+        "business_project",
+        "legacy_project",
+        "deployment_state",
+    )
+    for raw_client, biz_proj, leg_proj, deployment_state in rows.iterator(chunk_size=1000):
+        total_registered += 1
+        is_canc = _is_canceled_state(deployment_state)
+        is_maint = _is_maintenance_state(deployment_state)
+        if is_canc:
+            canceled_links += 1
+        else:
+            active_links += 1
+            if is_maint:
+                maintenance_links += 1
+            else:
+                operational_links += 1
+
+        canonical_op = IncidentRules.canonical_operator(raw_client or "")
+        op_missing = _is_unidentified(canonical_op)
+        if op_missing:
+            unidentified_operator_links += 1
+            op_key = "unidentified"
+        elif canonical_op == "Claro":
+            op_key = "claro"
+        elif canonical_op == "Vivo":
+            op_key = "vivo"
+        elif canonical_op == "Algar":
+            op_key = "algar"
+        else:
+            op_key = "outras"
+
+        op_buckets[op_key][1] += 1
+        if is_canc:
+            op_buckets[op_key][3] += 1
+        else:
+            op_buckets[op_key][2] += 1
+
+        raw_proj = (biz_proj or leg_proj or "").strip()
+        canonical_proj = canonical_project_name(raw_proj) if raw_proj else ""
+        proj_missing = _is_unidentified(canonical_proj)
+        if proj_missing:
+            unidentified_project_links += 1
+            proj_label = "Sem identificação"
+        else:
+            proj_label = display_project_name(canonical_proj)
+        project_buckets[proj_label][0] += 1
+        if not is_canc:
+            project_buckets[proj_label][1] += 1
+
+        if op_missing or proj_missing:
+            unidentified_links += 1
+
+    operator_distribution = []
+    for key, (label, tot, act, canc) in op_buckets.items():
+        pct = _share_pct(tot, total_registered)
+        act_pct = _share_pct(act, active_links)
+        operator_distribution.append({
+            "key": key,
+            "label": label,
+            "total": tot,
+            "active": act,
+            "canceled": canc,
+            "share_pct": pct,
+            "share_label": f"{_format_pt_number(pct, 1)}%",
+            "active_share_pct": act_pct,
+            "active_share_label": f"{_format_pt_number(act_pct, 1)}%",
+        })
+
+    # Top projects (keep "Sem identificação" explicitly separate at the end if present)
+    unid_proj_counts = project_buckets.pop("Sem identificação", None)
+    sorted_projects = sorted(
+        project_buckets.items(),
+        key=lambda item: (-item[1][1], -item[1][0], item[0].casefold()),
+    )
+    top_limit = 10
+    project_distribution = []
+    for label, (tot, act) in sorted_projects[:top_limit]:
+        pct = _share_pct(tot, total_registered)
+        project_distribution.append({
+            "label": label,
+            "total": tot,
+            "active": act,
+            "share_pct": pct,
+            "share_label": f"{_format_pt_number(pct, 1)}%",
+            "is_unidentified": False,
+        })
+    if len(sorted_projects) > top_limit:
+        rest_tot = sum(item[1][0] for item in sorted_projects[top_limit:])
+        rest_act = sum(item[1][1] for item in sorted_projects[top_limit:])
+        pct = _share_pct(rest_tot, total_registered)
+        project_distribution.append({
+            "label": f"Outros projetos ({len(sorted_projects) - top_limit})",
+            "total": rest_tot,
+            "active": rest_act,
+            "share_pct": pct,
+            "share_label": f"{_format_pt_number(pct, 1)}%",
+            "is_unidentified": False,
+        })
+    if unid_proj_counts and unid_proj_counts[0] > 0:
+        pct = _share_pct(unid_proj_counts[0], total_registered)
+        project_distribution.append({
+            "label": "Sem identificação",
+            "total": unid_proj_counts[0],
+            "active": unid_proj_counts[1],
+            "share_pct": pct,
+            "share_label": f"{_format_pt_number(pct, 1)}%",
+            "is_unidentified": True,
+        })
+
+    # Last CMDB sync reference timestamp
+    sync_state = IntegrationSyncState.objects.filter(key="cmdb").first()
+    ref_dt = sync_state.last_success_at if (sync_state and sync_state.last_success_at) else None
+    if ref_dt is None:
+        ref_dt = filtered_links.aggregate(latest=Max("source_synced_at")).get("latest")
+    if ref_dt is None and snapshots:
+        ref_dt = snapshots[-1].captured_at
+    if ref_dt is not None:
+        local_ref = timezone.localtime(ref_dt)
+        cmdb_last_sync_iso = local_ref.isoformat()
+        cmdb_last_sync_label = local_ref.strftime("%d/%m/%Y %H:%M")
+        reference_date_label = local_ref.strftime("%d/%m/%Y")
+    else:
+        cmdb_last_sync_iso = ""
+        cmdb_last_sync_label = "Sem sincronização registrada"
+        reference_date_label = "—"
+
+    period_rate = round((period_tickets / active_links) * 100, 1) if active_links > 0 else None
+    period_affected_pct = round((period_affected / active_links) * 100, 1) if active_links > 0 else None
+
+    return {
+        "total_registered": total_registered,
+        "active_links": active_links,
+        "operational_links": operational_links,
+        "maintenance_links": maintenance_links,
+        "canceled_links": canceled_links,
+        "unidentified_links": unidentified_links,
+        "unidentified_operator_links": unidentified_operator_links,
+        "unidentified_project_links": unidentified_project_links,
+        "active_share_label": f"{_format_pt_number(_share_pct(active_links, total_registered), 1)}%",
+        "canceled_share_label": f"{_format_pt_number(_share_pct(canceled_links, total_registered), 1)}%",
+        "unidentified_share_label": f"{_format_pt_number(_share_pct(unidentified_links, total_registered), 1)}%",
+        "operator_distribution": operator_distribution,
+        "project_distribution": project_distribution,
+        "cmdb_last_sync_at": cmdb_last_sync_iso,
+        "cmdb_last_sync_label": cmdb_last_sync_label,
+        "reference_date_label": reference_date_label,
+        "period_totals": {
+            "tickets": period_tickets,
+            "affected_links": period_affected,
+            "recurrent_links": period_recurrent,
+            "tickets_per_100_active": period_rate,
+            "tickets_per_100_active_label": _format_pt_number(period_rate, 1),
+            "affected_pct_active": period_affected_pct,
+            "affected_pct_active_label": f"{_format_pt_number(period_affected_pct, 1)}%" if period_affected_pct is not None else "—",
+        },
+    }
+
+
 class PlantHistoryService:
     """Compare monthly canonical ticket demand against verified monthly CMDB plant size."""
 
@@ -122,6 +330,7 @@ class PlantHistoryService:
         if selected_project_raw.lower() in {"all", "todos", "todas"}:
             selected_project_raw = ""
         selected_project = canonical_project_name(selected_project_raw) if selected_project_raw else ""
+        selected_region = _norm_region(params.get("region") or "")
         selected_uf = _norm_uf(params.get("uf") or "")
 
         include_cancelled = str(params.get("include_cancelled", "true")).lower() not in {"false", "0", "no"}
@@ -159,6 +368,11 @@ class PlantHistoryService:
             key=lambda item: ({"Claro": 0, "Vivo": 1, "Algar": 2}.get(item, 3), item.casefold()),
         )
         uf_options = sorted(uf_set)
+        region_options = [
+            {"code": r["sigla"], "name": r["nome"]}
+            for r in REGIONS
+            if any(uf in uf_set for uf in region_states(r["sigla"]))
+        ]
 
         if selected_operator and selected_operator not in operator_set:
             selected_operator = ""
@@ -166,8 +380,12 @@ class PlantHistoryService:
             selected_project = ""
         if selected_uf and selected_uf not in uf_set:
             selected_uf = ""
+        region_ufs = region_states(selected_region) if selected_region else []
+        if selected_region and not any(uf in uf_set for uf in region_ufs):
+            selected_region = ""
+            region_ufs = []
 
-        # Apply user filters to scoped links for ticket filtering.
+        # Apply user filters to scoped links for overview and ticket filtering.
         filtered_links = allowed_links
         if selected_operator:
             filtered_links = filtered_links.filter(contracting_client__iexact=selected_operator)
@@ -176,10 +394,12 @@ class PlantHistoryService:
             filtered_links = filtered_links.filter(
                 Q(business_project__in=aliases) | Q(business_project="", legacy_project__in=aliases)
             )
+        if selected_region and region_ufs:
+            filtered_links = filtered_links.filter(state_query(region_ufs, field="state"))
         if selected_uf:
-            filtered_links = filtered_links.filter(state__iexact=selected_uf)
+            filtered_links = filtered_links.filter(state_query([selected_uf], field="state"))
 
-        has_dimension_filter = bool(selected_operator or selected_project or selected_uf)
+        has_dimension_filter = bool(selected_operator or selected_project or selected_region or selected_uf)
 
         # Month buckets for the requested range.
         buckets = _month_buckets(start, end, zone)
@@ -220,7 +440,7 @@ class PlantHistoryService:
             .annotate(total=Count("pk", distinct=True))
         }
 
-        # Distinct affected links & recurrent links (2+ distinct canonical tickets) per month.
+        # Distinct affected links & recurrent links (2+ distinct canonical tickets) per month & across period.
         rel_month_expr = _month_case("ticket__source_created_at", buckets)
         rel_qs = OTRSTicketConfigItem.objects.filter(
             is_present_in_source=True,
@@ -238,6 +458,16 @@ class PlantHistoryService:
             if row["ticket_cnt"] >= 2:
                 recurrent_by_month[mkey] += 1
 
+        period_affected = 0
+        period_recurrent = 0
+        for row in rel_qs.values("config_item_id").annotate(
+            ticket_cnt=Count("ticket_id", distinct=True),
+        ):
+            period_affected += 1
+            if row["ticket_cnt"] >= 2:
+                period_recurrent += 1
+        period_tickets = sum(ticket_counts_by_month.values())
+
         # Load verified monthly CMDB plant snapshots (never fabricates missing months).
         month_dates = [date(int(k.split("-")[0]), int(k.split("-")[1]), 1) for k, _s, _e in buckets]
         snapshots = list(CMDBPlantMonthlySnapshot.objects.filter(month__in=month_dates).order_by("month"))
@@ -248,6 +478,8 @@ class PlantHistoryService:
             scoped_slices = scoped_slices.filter(contracting_client__iexact=selected_operator)
         if selected_project:
             scoped_slices = scoped_slices.filter(canonical_project__iexact=selected_project)
+        if selected_region and region_ufs:
+            scoped_slices = scoped_slices.filter(uf__in=region_ufs)
         if selected_uf:
             scoped_slices = scoped_slices.filter(uf__iexact=selected_uf)
 
@@ -343,12 +575,21 @@ class PlantHistoryService:
         latest_covered = covered_rows[-1] if covered_rows else None
         latest_full_covered = next((r for r in reversed(covered_rows) if not r["is_partial_month"]), None)
 
+        overview = _build_live_overview(
+            filtered_links,
+            period_tickets=period_tickets,
+            period_affected=period_affected,
+            period_recurrent=period_recurrent,
+            snapshots=snapshots,
+        )
+
         return {
             "start": start.isoformat(),
             "end": end.isoformat(),
             "selected": {
                 "operator": selected_operator,
                 "project": display_project_name(selected_project) if selected_project else "",
+                "region": selected_region,
                 "uf": selected_uf,
                 "include_cancelled": include_cancelled,
                 "include_improcedente": include_improcedente,
@@ -356,8 +597,10 @@ class PlantHistoryService:
             "filter_options": {
                 "operators": operator_options,
                 "projects": project_options,
+                "regions": region_options,
                 "ufs": uf_options,
             },
+            "overview": overview,
             "series": series,
             "summary": {
                 "months_total": len(series),

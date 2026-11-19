@@ -125,6 +125,40 @@ class PlantHistoryTests(TestCase):
         self.assertEqual(nov_claro["tickets_per_100_links"], 100.0)
         self.assertEqual(nov_claro["affected_links_pct"], 100.0)
 
+        # Overview strictly separates registered vs active vs canceled vs unidentified
+        self._create_link("P5", client="", project="", uf="MG")
+        full = PlantHistoryService.build(
+            self.admin,
+            {"start": "2026-11-01", "end": "2026-11-19"},
+            now=now,
+        )
+        ov = full["overview"]
+        self.assertEqual(ov["total_registered"], 5)
+        self.assertEqual(ov["active_links"], 4)
+        self.assertEqual(ov["canceled_links"], 1)
+        self.assertEqual(ov["unidentified_links"], 1)
+        self.assertEqual(ov["unidentified_operator_links"], 1)
+        self.assertEqual(ov["unidentified_project_links"], 1)
+        by_op = {row["key"]: row for row in ov["operator_distribution"]}
+        self.assertEqual(by_op["vivo"]["total"], 3)
+        self.assertEqual(by_op["vivo"]["active"], 2)
+        self.assertEqual(by_op["claro"]["total"], 1)
+        self.assertEqual(by_op["algar"]["total"], 0)
+        self.assertEqual(by_op["unidentified"]["total"], 1)
+        self.assertEqual(ov["period_totals"]["tickets"], 3)
+        self.assertEqual(ov["period_totals"]["affected_links"], 2)
+        self.assertEqual(ov["period_totals"]["recurrent_links"], 1)
+
+        # Region filter (SE = SP, RJ, MG, ES) matches all 5 links; NE returns 0
+        se_res = PlantHistoryService.build(
+            self.admin,
+            {"start": "2026-11-01", "end": "2026-11-19", "region": "SE"},
+            now=now,
+        )
+        self.assertEqual(se_res["selected"]["region"], "SE")
+        self.assertEqual(se_res["overview"]["total_registered"], 5)
+        self.assertEqual(se_res["series"][0]["active_links"], 3)
+
     def test_plant_history_enforces_data_scope_and_zero_denominator_safety(self):
         op_claro = Operadora.objects.create(name="Claro", normalized_name="claro")
         op_vivo = Operadora.objects.create(name="Vivo", normalized_name="vivo")
@@ -164,6 +198,8 @@ class PlantHistoryTests(TestCase):
         )
         self.assertEqual(tampered["series"][0]["active_links"], 1)
         self.assertEqual(tampered["series"][0]["tickets"], 1)
+        self.assertEqual(tampered["overview"]["total_registered"], 1)
+        self.assertEqual(tampered["overview"]["active_links"], 1)
 
         # Zero denominator snapshot (all links canceled) never divides by zero
         zero_snap = CMDBPlantMonthlySnapshot.objects.create(
@@ -206,8 +242,18 @@ class PlantHistoryTests(TestCase):
         payload = api_resp.json()
         self.assertIn("series", payload)
         self.assertIn("summary", payload)
+        self.assertIn("overview", payload)
 
         dash_resp = self.client.get(reverse("dashboard"))
         self.assertEqual(dash_resp.status_code, 200)
+        self.assertContains(dash_resp, "Base CMDB")
+        self.assertContains(dash_resp, "Analisar planta")
         self.assertContains(dash_resp, "Evolução da planta × Volume de chamados")
         self.assertContains(dash_resp, "plant-history-initial-data")
+        self.assertContains(dash_resp, 'id="plant-history-modal"')
+
+        cockpit_resp = self.client.get(reverse("cockpit"))
+        self.assertEqual(cockpit_resp.status_code, 200)
+        self.assertContains(cockpit_resp, "data-plant-sync-cockpit")
+        self.assertContains(cockpit_resp, 'id="plant-history-modal"')
+        self.assertContains(cockpit_resp, "Comparação por período")

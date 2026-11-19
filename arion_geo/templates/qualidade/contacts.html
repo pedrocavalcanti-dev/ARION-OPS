@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}ARION OPS · Contatos e escalonamentos{% endblock %}
 {% block quality_title %}Contatos{% endblock %}
-{% block extra_js %}{{ block.super }}<script defer src="{% static 'js/qualidade/contacts.js' %}"></script>{% endblock %}
+{% block extra_js %}{{ block.super }}<script defer src="{% arion_js 'js/qualidade/contacts.js' %}"></script>{% endblock %}
 {% block quality_content %}
 <main class="quality-contacts-page">
   <header class="quality-page-header">

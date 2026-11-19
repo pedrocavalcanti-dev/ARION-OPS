@@ -33,6 +33,7 @@
         <button type="button" data-quick="resolved" title="Tickets com data efetiva de resolu&ccedil;&atilde;o no per&iacute;odo.">Resolvidos no per&iacute;odo</button>
       </div>
       <div class="cockpit-actions">
+        <button type="button" class="cockpit-action cockpit-action-plant" data-plant-modal-open data-plant-sync-cockpit="true" title="Comparar o volume de chamados com a planta CMDB no recorte atual">Planta &times; Chamados</button>
         {% if can_save_views %}<button type="button" class="cockpit-action" data-saved-toggle>Minhas consultas</button><button type="button" class="cockpit-action cockpit-action-primary" data-save-open>Salvar consulta</button>{% endif %}
         <div class="cockpit-export-menu"><button type="button" class="cockpit-action" data-export-toggle aria-expanded="false">Exportar <span aria-hidden="true">&#8964;</span></button><div data-export-options hidden>
           <button type="button" data-export="pdf"><span class="cockpit-export-icon" aria-hidden="true">&#9643;</span><span><strong>PDF anal&iacute;tico</strong><small>Relat&oacute;rio completo com gr&aacute;ficos e tickets</small></span></button>
@@ -133,6 +134,7 @@
   <dialog class="cockpit-dialog" data-save-dialog><form data-save-form><h2>Salvar consulta</h2><label>Nome da consulta<input name="name" maxlength="80" required autocomplete="off" placeholder="Ex.: Provedor SP - Reincidencias"></label><footer><button type="button" data-dialog-close>Cancelar</button><button type="submit" class="cockpit-action-primary">Salvar consulta</button></footer></form></dialog>
   <dialog class="cockpit-dialog" data-rename-dialog><form data-rename-form><h2>Renomear consulta</h2><label>Novo nome<input name="name" maxlength="80" required autocomplete="off"></label><input type="hidden" name="id"><footer><button type="button" data-rename-close>Cancelar</button><button type="submit" class="cockpit-action-primary">Salvar nome</button></footer></form></dialog>
   {% endif %}
+  {% include "painel/_plant_history_modal.html" with plant_modal_start=default_start plant_modal_end=default_end plant_modal_context="cockpit" %}
 </section>
 {% endblock %}
-{% block extra_js %}<script src="{% arion_js 'js/painel/cockpit.js' %}" defer></script>{% endblock %}
+{% block extra_js %}<script src="{% arion_js 'js/painel/cockpit.js' %}" defer></script><script src="{% arion_js 'js/painel/plant-history.js' %}" defer></script>{% endblock %}
