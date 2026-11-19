@@ -6,7 +6,9 @@ O OTRS/CMDB permanece como fonte oficial. O Cockpit não consulta o OTRS remoto 
 
 ## Acesso e proteção dos dados
 
-A página está disponível em `/cockpit/`; a consulta JSON usa `/api/analytics/query/`, as exportações usam `/api/analytics/export/` e as consultas salvas usam `/api/analytics/saved-views/`.
+A página está disponível em `/cockpit/`; a consulta JSON usa `/api/analytics/query/`, as exportações usam `/api/analytics/export/`, a análise histórica da planta usa `/api/analytics/plant-history/` e as consultas salvas usam `/api/analytics/saved-views/`.
+
+Na barra de ações do Cockpit, o botão **Planta × Chamados** abre o mesmo modal de análise da planta disponível no Dashboard (`Visão geral`, `Evolução histórica` e `Comparação por período`), sincronizando automaticamente o período, projeto/cliente, UF e opções de cancelados/improcedentes atualmente aplicados no Cockpit — garantindo paridade absoluta entre os dois módulos sem alterar os gráficos existentes do Cockpit.
 
 A permissão de acesso ao Cockpit é verificada no backend. O Data Scope é aplicado antes de filtros, agregações, rankings, paginação e exportação. A interface não concede acesso a operadoras, projetos, tickets ou vínculos fora do escopo autorizado.
 

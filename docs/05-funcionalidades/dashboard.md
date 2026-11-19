@@ -51,3 +51,13 @@ A captura de SQL de `DashboardAnalyticsService.build` encontrou 29 consultas na 
 Os indicadores atuais usam a fila `NOC - ATACADO`, tickets presentes no snapshot e Data Scope aplicado primeiro. `Chamados abertos agora` conta tickets distintos em `OPEN`, `PENDING` ou `SCHEDULED`, independentemente de ConfigItem. `Links afetados` conta Links CMDB locais distintos, presentes e autorizados, associados a pelo menos um desses tickets por uma relação Ticket–ConfigItem presente. Um ticket sem ConfigItem ou com ConfigItem sem Link local continua no total de tickets, mas não cria Link afetado. Um ticket relacionado a mais de um Link pode afetar cada Link; vários tickets no mesmo Link afetam apenas um.
 
 O período do Dashboard altera métricas históricas por criação, não esses snapshots atuais. Sem filtros de fila, os indicadores atuais de tickets ativos e Links afetados correspondem aos cartões da Fila operacional no mesmo escopo.
+
+## Base CMDB e Modal Planta CMDB × Chamados
+
+O primeiro indicador do Dashboard (**Base CMDB**) apresenta de forma compacta o total de links cadastrados no espelho atual, a separação explícita entre **links ativos** e **cancelados**, a data da última sincronização CMDB e o botão **Analisar planta**.
+
+Ao clicar em **Analisar planta**, abre-se o modal compartilhado **Planta CMDB × Chamados** (o mesmo acessível pelo Cockpit via `/api/analytics/plant-history/`), estruturado em três abas e respeitando RBAC e Data Scope no backend:
+
+- **Visão geral:** separa cadastrados, ativos (operacionais + em manutenção), inativos/cancelados e sem identificação confiável; exibe o resumo da demanda do período selecionado e as distribuições por operadora contratante (`Claro`, `Vivo`, `Algar`, `Outras`, `Sem identificação`) e por projeto/cliente.
+- **Evolução histórica:** compara mensalmente o volume canônico de chamados com a planta ativa verificada em `CMDBPlantMonthlySnapshot`, permitindo alternar entre **Taxas proporcionais** (`/100 links ativos`, `% de links afetados`) e **Valores absolutos**, exibindo explicitamente `Base histórica indisponível` para meses sem snapshot (sem retroprojetar a planta atual) e `Parcial` para meses em andamento.
+- **Comparação por período:** permite comparar quaisquer dois meses do recorte quanto ao tamanho da planta, volume de chamados, links afetados/reincidentes e taxas proporcionais, omitindo com segurança variações quando algum denominador estiver indisponível ou zerado.
