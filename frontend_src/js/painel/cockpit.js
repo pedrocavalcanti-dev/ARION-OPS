@@ -443,10 +443,13 @@
         return `<span class="cockpit-ops-bar-item${groupStart}" style="--bar-height:${height}%;--value-lift:${valueLift}px" aria-hidden="true">${value > 0 && showFlowBarLabels ? `<span class="cockpit-ops-bar-value">${number.format(value)}</span>` : ""}<i class="cockpit-ops-bar ${cls}"></i></span>`;
       }).join("");
       const rowBacklog = row.backlog !== null && row.backlog !== undefined ? number.format(row.backlog) : "";
+      const peakLabel = row.backlog_peak !== null && row.backlog_peak !== undefined && row.backlog_peak > (row.backlog ?? 0)
+        ? `<small>Pico no período: ${number.format(row.backlog_peak)}${row.backlog_peak_at ? ` (${new Date(row.backlog_peak_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })})` : ""}</small>`
+        : "";
       const entryOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_entries)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_entries)}</small>` : "";
       const closedOriginDetail = general ? `<small class="cockpit-tooltip-detail">Suporte: ${number.format(row.support_closed)}</small><small class="cockpit-tooltip-detail">Cancelamentos: ${number.format(row.cancellation_closed)}</small>` : "";
       const backlogTooltip = row.backlog !== null && row.backlog !== undefined
-        ? `<small>Backlog: ${rowBacklog}</small><small>Até: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small>`
+        ? `<small>Backlog: ${rowBacklog}</small><small>Observado em: ${escapeHTML(row.backlog_observed_label || "data indisponível")}</small>${peakLabel}`
         : `<small>Backlog indisponível neste período.</small>`;
       const tooltipLines = mode === "all"
         ? `<small class="entries">Novos no período: ${number.format(row.entries)}</small>${entryOriginDetail}<small class="closed">Resolvidos no período: ${number.format(row.closed)}</small>${closedOriginDetail}`

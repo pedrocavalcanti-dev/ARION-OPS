@@ -1,14 +1,20 @@
 """Immutable, coverage-scoped observations of the synchronized OTRS mirror."""
 
+from datetime import timedelta
+
 from django.db import transaction
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from aplicativos.integracoes.models import (
+    OTRSBacklogCheckpoint,
     OTRSOperationalConfigItemSnapshot, OTRSOperationalSnapshot,
     OTRSOperationalTicketSnapshot, OTRSTicket, OTRSTicketConfigItem,
     IntegrationRun,
 )
-from aplicativos.integracoes.otrs_queues import queue_signature
+from aplicativos.integracoes.otrs_queues import (
+    CANCELLATION_QUEUE_NAMES, COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME, queue_signature,
+)
 from aplicativos.integracoes.services.otrs_status import BACKLOG_STATUSES
 
 
@@ -119,4 +125,61 @@ def capture_daily_operational_snapshot(run, queue_names):
         "created": True, "reason": "captured", "tickets": ticket_count,
         "backlog": backlog_count, "config_items": len(ci_rows),
         "snapshot_id": snapshot.pk,
+    }
+
+
+def capture_hourly_backlog_checkpoint(*, captured_at=None, source_run=None, queue_names=COCKPIT_QUEUE_NAMES):
+    """Idempotently record a lightweight hourly backlog checkpoint from the local mirror.
+
+    Never executes remote OTRS queries and never overwrites past hourly slots.
+    """
+    now = captured_at or timezone.now()
+    slot_at = now.replace(minute=0, second=0, microsecond=0)
+    names = tuple(dict.fromkeys(queue_names))
+    signature = queue_signature(names)
+    if not names:
+        return {"created": False, "reason": "no_queues"}
+
+    cutoff_24h = now - timedelta(hours=24)
+    cutoff_72h = now - timedelta(hours=72)
+    noc_active = OTRSTicket.objects.filter(
+        is_present_in_queue=True,
+        queue_name=NOC_QUEUE_NAME,
+    ).exclude(responsibility_normalized="IMPROCEDENTE")
+    noc_counts = noc_active.aggregate(
+        open_count=Count("pk", filter=Q(business_status="OPEN")),
+        pending_count=Count("pk", filter=Q(business_status="PENDING")),
+        scheduled_count=Count("pk", filter=Q(business_status="SCHEDULED")),
+        over_24h=Count("pk", filter=Q(business_status__in=BACKLOG_STATUSES, source_created_at__lte=cutoff_24h)),
+        over_72h=Count("pk", filter=Q(business_status__in=BACKLOG_STATUSES, source_created_at__lte=cutoff_72h)),
+    )
+    cancel_active = OTRSTicket.objects.filter(
+        is_present_in_queue=True,
+        queue_name__in=CANCELLATION_QUEUE_NAMES,
+        business_status__in=BACKLOG_STATUSES,
+    ).exclude(responsibility_normalized="IMPROCEDENTE").count()
+    support_backlog = (noc_counts["open_count"] or 0) + (noc_counts["pending_count"] or 0)
+    total_backlog = support_backlog + cancel_active
+
+    checkpoint, created = OTRSBacklogCheckpoint.objects.get_or_create(
+        scope_signature=signature,
+        slot_at=slot_at,
+        defaults={
+            "captured_at": now,
+            "support_open": noc_counts["open_count"] or 0,
+            "support_pending": noc_counts["pending_count"] or 0,
+            "support_scheduled": noc_counts["scheduled_count"] or 0,
+            "support_over_24h": noc_counts["over_24h"] or 0,
+            "support_over_72h": noc_counts["over_72h"] or 0,
+            "cancellation_active": cancel_active,
+            "total_backlog": total_backlog,
+            "source_run": source_run,
+        },
+    )
+    return {
+        "created": created,
+        "checkpoint_id": checkpoint.pk,
+        "slot_at": checkpoint.slot_at.isoformat(),
+        "support_backlog": checkpoint.support_open + checkpoint.support_pending,
+        "total_backlog": checkpoint.total_backlog,
     }

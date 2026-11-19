@@ -569,9 +569,10 @@ class MirrorAnalyticsTests(TestCase):
                 user=self.user, start=date(2026, 10, 1), end=date(2026, 10, 31),
             )
         self.assertLessEqual(len(queries), 20)
-        self.assertEqual(october["calls"], 4)  # Tickets NOC sem relação também entram no volume.
-        self.assertEqual(october["repeat"], 1)  # Somente o Link com dois Tickets distintos.
-        self.assertEqual(october["monthly"][0]["calls"], 4)
+        # Canonical created-ticket count matches Cockpit default (includes CANCELED, excludes UNKNOWN).
+        self.assertEqual(october["calls"], 5)  # Tickets NOC sem relação também entram no volume.
+        self.assertEqual(october["repeat"], 1)  # Somente o Link com dois Tickets válidos distintos.
+        self.assertEqual(october["monthly"][0]["calls"], 5)
         self.assertEqual(october["monthly"][0]["repeat"], 1)
         self.assertEqual(october["business_open"], 3)
         self.assertEqual(october["aging"]["open_count"], 3)

@@ -676,6 +676,8 @@ class OTRSSyncService:
                 )
                 if affected_link_ids:
                     OperationalIdentityService.reconcile_all(apply=True, link_ids=affected_link_ids)
+                from .otrs_snapshots import capture_hourly_backlog_checkpoint
+                capture_hourly_backlog_checkpoint(captured_at=now)
 
         status_counts = {key: status_counts.get(key, 0) for key in OTRSStateMapping.BusinessStatus.values}
         result = {

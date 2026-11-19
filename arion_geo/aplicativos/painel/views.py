@@ -139,6 +139,58 @@ def analytics_query(request):
         return api_error(request, "VALIDATION_ERROR", status=400)
 
 
+@login_required
+@access_required("view_cockpit")
+def analytics_backlog_at(request):
+    """Return exact reconstructed NOC backlog for a specific local date/time (America/Sao_Paulo)."""
+    from datetime import timezone as dt_timezone
+    from zoneinfo import ZoneInfo
+    from django.conf import settings
+    from django.utils import timezone
+    from .services.backlog_history import reconstructed_backlog_at
+
+    if request.method == "POST":
+        try:
+            payload = json.loads(request.body or b"{}")
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return api_error(request, "VALIDATION_ERROR", status=400)
+        if not isinstance(payload, dict):
+            return api_error(request, "BAD_REQUEST")
+        raw_at = str(payload.get("at") or "").strip()
+        raw_filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    else:
+        raw_at = str(request.GET.get("at") or "").strip()
+        raw_filters = {}
+
+    if not raw_at:
+        return api_error(request, "VALIDATION_ERROR", status=400)
+    try:
+        parsed = datetime.fromisoformat(raw_at)
+    except ValueError:
+        return api_error(request, "VALIDATION_ERROR", status=400)
+    zone = ZoneInfo(settings.TIME_ZONE)
+    if timezone.is_naive(parsed):
+        target_dt = parsed.replace(tzinfo=zone).astimezone(dt_timezone.utc)
+    else:
+        target_dt = parsed.astimezone(dt_timezone.utc)
+
+    links = LinkQueryService.base(request.user)
+    local_day = timezone.localtime(target_dt).date().isoformat()
+    normalized = AnalyticsQueryService.normalize_query({
+        "scope": "support", "metric": "backlog",
+        "start": local_day, "end": local_day,
+        "filters": raw_filters,
+    })
+    result = reconstructed_backlog_at(
+        user=request.user,
+        links=links,
+        filters=normalized["filters"],
+        target_dt=target_dt,
+        apply_filters=AnalyticsQueryService._apply_filters,
+    )
+    return JsonResponse(result)
+
+
 def _pdf_report(generated, generated_by, result, filter_rows):
     from pathlib import Path
     from html import escape

@@ -303,6 +303,15 @@ class AnalyticsQueryService:
     LINK_FILTERS = LINK_FILTERS | {"project": "config_items__cmdb_link__business_project"}
     LINK_GROUPS = LINK_GROUPS | {"project": "config_items__cmdb_link__business_project"}
 
+    @classmethod
+    def canonical_created_tickets(cls, tickets, *, include_cancelled=True, include_improcedente=True):
+        """Canonical NOC created-ticket population shared by Dashboard and Cockpit."""
+        included_states = cls.OPERATIONAL_VALID_STATES + (("CANCELED",) if include_cancelled else ())
+        queryset = tickets.filter(business_statuses_query("business_status", included_states))
+        if not include_improcedente:
+            queryset = queryset.exclude(responsibility_normalized="IMPROCEDENTE")
+        return queryset
+
     def query(self, payload, user=None, *, include_all_rows=False):
         from django.db.models import Count, Q
 
@@ -371,12 +380,55 @@ class AnalyticsQueryService:
             )
             points = reconstruction.pop("points")
             operational["backlog_history"] = reconstruction
+            reconstructed_points = []
             for point in operational["series"]:
                 evidence = points.get(point["key"], {})
                 point["backlog_reconstructed"] = evidence.get("value")
                 point["backlog_reconstructed_at"] = evidence.get("at")
                 point["backlog_reconstructed_position"] = evidence.get("position")
                 point["backlog_unknown_tickets"] = evidence.get("unknown_tickets")
+                point["backlog_peak"] = evidence.get("peak_value")
+                point["backlog_peak_at"] = evidence.get("peak_at")
+                if evidence.get("value") is not None and evidence.get("at"):
+                    reconstructed_points.append(evidence)
+            if reconstructed_points:
+                def _fmt_iso(iso_val):
+                    return timezone.localtime(datetime.fromisoformat(iso_val)).strftime("%d/%m/%Y %H:%M")
+
+                # Align primary backlog KPI cards with the same reconstructed series shown in the chart,
+                # instead of mixing an older FULL snapshot card with a reconstructed line.
+                non_backlog_primary = [
+                    item for item in operational["primary_kpis"]
+                    if not (item.get("label") or "").startswith("Backlog")
+                ]
+                if len(reconstructed_points) == 1:
+                    pt = reconstructed_points[0]
+                    rec_kpis = [{
+                        "label": "Backlog observado",
+                        "value": pt["value"],
+                        "unit": f"Observado em {_fmt_iso(pt['at'])}",
+                        "title": "Backlog histórico reconstruído por eventos OTRS no horário indicado.",
+                    }]
+                else:
+                    first_pt, last_pt = reconstructed_points[0], reconstructed_points[-1]
+                    rec_kpis = [
+                        {
+                            "label": "Backlog inicial",
+                            "value": first_pt["value"],
+                            "unit": f"Observado em {_fmt_iso(first_pt['at'])}",
+                            "title": "Backlog histórico reconstruído no primeiro ponto coberto do período.",
+                        },
+                        {
+                            "label": "Backlog final",
+                            "value": last_pt["value"],
+                            "unit": f"Observado em {_fmt_iso(last_pt['at'])}",
+                            "title": "Backlog histórico reconstruído no último ponto coberto do período.",
+                        },
+                    ]
+                operational["primary_kpis"] = [rec_kpis[0], *non_backlog_primary, *rec_kpis[1:]]
+                operational["period"]["backlog_initial"] = reconstructed_points[0]["value"]
+                operational["period"]["backlog_final"] = reconstructed_points[-1]["value"]
+                operational["period"]["backlog_history_available"] = True
         date_field = self._metric_date_field(metric)
         if metric in self.SNAPSHOT_METRICS:
             temporal_rows = filtered
@@ -727,6 +779,10 @@ class AnalyticsQueryService:
         open_count = sum(item.get("OPEN", 0) for item in by_origin_status.values())
         pending_count = sum(item.get("PENDING", 0) for item in by_origin_status.values())
         older_than_day = sum(item["total"] for item in aging[3:])
+        older_than_72h = aging[5]["total"]
+        otrs_sync = IntegrationSyncState.objects.filter(key="otrs").only("last_success_at").first()
+        last_sync_at = otrs_sync.last_success_at if otrs_sync else None
+        last_sync_label = timezone.localtime(last_sync_at).strftime("%d/%m/%Y %H:%M") if last_sync_at else ""
         balance = entries_total - closed_total - canceled_total
         observed_points = [
             backlog_observations[key] for key, _label, _start, _end in buckets
@@ -803,11 +859,14 @@ class AnalyticsQueryService:
             secondary = [
                 kpi("Tempo médio de resolução", average_hours, "horas"),
                 kpi("Tickets acima de 24h", older_than_day),
+                kpi("Tickets acima de 72h", older_than_72h),
             ]
             if scope == "support":
                 secondary.insert(0, kpi(
-                    "Backlog atual", total_active, "tickets em atendimento ou pendentes",
-                    title="Estoque atual do recorte selecionado.",
+                    "Backlog atual",
+                    total_active,
+                    f"Atualizado em {last_sync_label}" if last_sync_label else "tickets em atendimento ou pendentes",
+                    title="Estoque atual (OPEN e PENDING, excluindo improcedentes) na última sincronização OTRS.",
                 ))
             if scope == "general":
                 secondary.extend((
@@ -836,9 +895,19 @@ class AnalyticsQueryService:
             "stage_total": sum(stage_counts.values()),
             "unknown_active": unknown_active,
             "stage_reconciliation": sum(stage_counts.values()) + unknown_active == current_cancellation,
-            "current": {"total": total_active, "support": current_support,
-                        "cancellation": current_cancellation, "open": open_count,
-                        "pending": pending_count},
+            "current": {
+                "total": total_active,
+                "support": current_support,
+                "cancellation": current_cancellation,
+                "open": open_count,
+                "pending": pending_count,
+            },
+            "current_meta": {
+                "over_24h": older_than_day,
+                "over_72h": older_than_72h,
+                "as_of": timezone.localtime(last_sync_at).isoformat() if last_sync_at else None,
+                "as_of_label": last_sync_label,
+            },
             "period": period,
             "backlog": {
                 "available": history_available,
@@ -1961,9 +2030,13 @@ class DashboardAnalyticsService:
                 counts[2] += 1
             else:
                 counts[3] += 1
+        over_24 = counts[1] + counts[2] + counts[3]
         over_72 = counts[3]
         return {
             "open_count": open_count,
+            "over_24": over_24,
+            "over_24_percent": over_24 * 100 / open_count if open_count else 0,
+            "over_24_percent_label": cls._percent_label(over_24, open_count),
             "over_72": over_72,
             "over_72_percent": over_72 * 100 / open_count if open_count else 0,
             "over_72_percent_label": cls._percent_label(over_72, open_count),
@@ -2113,9 +2186,22 @@ class DashboardAnalyticsService:
         tickets = TicketQueryService.base(user, links=links)
         start_at, end_at = _date_boundaries(start, end)
         buckets = _month_buckets(start, end)
-        period_tickets = IncidentRules.valid(tickets).filter(source_created_at__gte=start_at, source_created_at__lt=end_at)
+        # Share the exact same canonical created-ticket population with Cockpit (support scope)
+        # so monthly created counts and summary totals always reconcile by TicketID.
+        period_tickets = AnalyticsQueryService.canonical_created_tickets(
+            tickets, include_cancelled=True, include_improcedente=True,
+        ).filter(source_created_at__gte=start_at, source_created_at__lt=end_at)
+        valid_period_tickets = AnalyticsQueryService.canonical_created_tickets(
+            tickets, include_cancelled=False, include_improcedente=False,
+        ).filter(source_created_at__gte=start_at, source_created_at__lt=end_at)
         current_tickets = tickets.filter(is_present_in_queue=True)
         business_open = TicketQueryService.business_open(queryset=current_tickets)
+        otrs_sync = IntegrationSyncState.objects.filter(key="otrs").only("last_success_at").first()
+        otrs_last_sync_at = otrs_sync.last_success_at if otrs_sync else None
+        otrs_last_sync_label = (
+            timezone.localtime(otrs_last_sync_at).strftime("%d/%m/%Y %H:%M")
+            if otrs_last_sync_at else ""
+        )
         # Match Chamados' active queue, including scheduled tickets. This aging
         # is independent from the stricter OPEN/PENDING historical backlog.
         aging = DashboardAnalyticsService._aging_snapshot(business_open, now)
@@ -2150,9 +2236,15 @@ class DashboardAnalyticsService:
                 "logo_initials": logo["initials"],
             })
 
-        snapshot_status = normalized_status_counts(current_tickets.values(
-            "business_status"
+        status_resp_rows = list(current_tickets.values(
+            "business_status", "responsibility_normalized",
         ).annotate(total=Count("pk")))
+        snapshot_status = normalized_status_counts(status_resp_rows)
+        backlog_current = sum(
+            row["total"] for row in status_resp_rows
+            if row["business_status"] in BACKLOG_STATUSES
+            and row["responsibility_normalized"] != "IMPROCEDENTE"
+        )
         status_counts = {status: snapshot_status.get(status, 0) for status in STATUS_ORDER}
         open_count = status_counts[OTRSStateMapping.BusinessStatus.OPEN]
         pending_count = status_counts[OTRSStateMapping.BusinessStatus.PENDING]
@@ -2160,27 +2252,22 @@ class DashboardAnalyticsService:
 
         links_affected = count_affected_links(business_open, links)
 
-        calls = period_tickets.count()
+        calls_by_month = {
+            row["month"]: row["total"]
+            for row in period_tickets.annotate(month=_month_case("source_created_at", buckets))
+            .exclude(month__isnull=True).values("month").annotate(total=Count("pk", distinct=True))
+        }
+        calls = sum(calls_by_month.values())
         top_projects = DashboardAnalyticsService._project_rows(period_tickets, links, calls)
         top_reasons = DashboardAnalyticsService._reason_rows(period_tickets, calls, start, end)
         recurrence_base = OTRSTicketConfigItem.objects.filter(
             is_present_in_source=True,
-            ticket__queue_name=TicketQueryService.QUEUE_NAME,
-            ticket__is_present_in_queue=True,
-            ticket__source_created_at__gte=start_at,
-            ticket__source_created_at__lt=end_at,
+            ticket_id__in=valid_period_tickets.values("pk"),
             cmdb_link__in=links,
         )
-        recurrence_base = IncidentRules.valid(recurrence_base,"ticket__")
         recurrence_total = recurrence_base.values("cmdb_link_id").annotate(
             ticket_count=Count("ticket_id", distinct=True),
         ).filter(ticket_count__gte=2).count()
-
-        calls_by_month = {
-            row["month"]: row["total"]
-            for row in period_tickets.annotate(month=_month_case("source_created_at", buckets))
-            .exclude(month__isnull=True).values("month").annotate(total=Count("pk"))
-        }
         recurring_by_month = {}
         recurring_month_links = (
             recurrence_base.annotate(month=_month_case("ticket__source_created_at", buckets))
@@ -2221,6 +2308,9 @@ class DashboardAnalyticsService:
             "calls": calls,
             "repeat": recurrence_total,
             "business_open": open_count + pending_count + scheduled_count,
+            "backlog_current": backlog_current,
+            "otrs_last_sync_at": otrs_last_sync_at,
+            "otrs_last_sync_label": otrs_last_sync_label,
             "open_count": open_count,
             "pending_count": pending_count,
             "scheduled_count": scheduled_count,

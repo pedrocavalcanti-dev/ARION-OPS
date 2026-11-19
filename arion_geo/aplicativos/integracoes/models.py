@@ -809,3 +809,42 @@ class OperationalIdentityRevision(models.Model):
 
     def __str__(self):
         return f"{self.link_id} · {self.get_action_display()}"
+
+
+class OTRSBacklogCheckpoint(models.Model):
+    """Low-cost, idempotent hourly backlog checkpoint captured from the local OTRS mirror."""
+
+    scope_signature = models.CharField(max_length=512)
+    slot_at = models.DateTimeField(db_index=True)
+    captured_at = models.DateTimeField(db_index=True)
+    support_open = models.PositiveIntegerField(default=0)
+    support_pending = models.PositiveIntegerField(default=0)
+    support_scheduled = models.PositiveIntegerField(default=0)
+    support_over_24h = models.PositiveIntegerField(default=0)
+    support_over_72h = models.PositiveIntegerField(default=0)
+    cancellation_active = models.PositiveIntegerField(default=0)
+    total_backlog = models.PositiveIntegerField(default=0)
+    source_run = models.ForeignKey(
+        IntegrationRun,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="backlog_checkpoints",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("scope_signature", "slot_at"),
+                name="uniq_otrs_backlog_checkpoint_slot",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("scope_signature", "captured_at"), name="otrs_backlog_cp_scope_at_idx"),
+        ]
+        ordering = ("slot_at", "pk")
+        verbose_name = "checkpoint horário de backlog OTRS"
+        verbose_name_plural = "checkpoints horários de backlog OTRS"
+
+    def __str__(self):
+        return f"{self.slot_at:%Y-%m-%d %H:%M} · backlog={self.total_backlog}"

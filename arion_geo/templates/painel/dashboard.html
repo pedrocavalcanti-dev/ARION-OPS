@@ -6,7 +6,7 @@
 {% block extra_css %}<link rel="stylesheet" href="{% static 'css/painel/dashboard.css' %}">{% endblock %}
 {% block content %}
 <section class="dashboard-page" aria-labelledby="dashboard-title">
-  <header class="dashboard-heading brand-decoration brand-decoration--header"><div><p class="section-kicker">NOC ATACADO <span>/</span> DASHBOARD</p><h1 id="dashboard-title">Visão da operação</h1><p>Uma leitura executiva da base e dos chamados.</p></div><span class="source-badge"><i></i>CMDB e OTRS · espelhos locais</span></header>
+  <header class="dashboard-heading brand-decoration brand-decoration--header"><div><p class="section-kicker">NOC ATACADO <span>/</span> DASHBOARD</p><h1 id="dashboard-title">Visão da operação</h1><p>Uma leitura executiva da base e dos chamados.</p></div><span class="source-badge"><i></i>CMDB e OTRS · {% if otrs_last_sync_label %}Atualizado em {{ otrs_last_sync_label }}{% else %}espelhos locais{% endif %}</span></header>
   <form class="dashboard-period-filter" method="get" action="{% url 'dashboard' %}">
     <label>De <input type="date" name="date_from" value="{{ date_from }}"></label>
     <label>Até <input type="date" name="date_to" value="{{ date_to }}"></label>
