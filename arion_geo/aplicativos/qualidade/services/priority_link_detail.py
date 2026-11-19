@@ -6,9 +6,10 @@ from aplicativos.integracoes.models import OTRSStateMapping, OTRSTicket, OTRSTic
 from aplicativos.integracoes.services.project_names import display_project_name
 from aplicativos.integracoes.services.semantics import link_designation, provider_values_for_links
 
-from ..models import QualityOccurrence, QualityOrder
+from ..models import QualityMonitoringCycle, QualityOccurrence, QualityOrder
 from .constants import QUALITY_PRIORITY_PERIOD_OPTIONS
 from .priority_links import build_priority_link_analysis
+from .recurrence_levels import level_code_from_recurrence_count
 
 
 PAGE_SIZE = 25
@@ -178,8 +179,35 @@ def get_priority_link_detail(user, identifier, params):
         pk__in=linked_ticket_ids,
     ).exclude(pk__in=valid_tickets.values("pk")).count()
 
+    # Load associated OQ (active or latest) and RREIP cycles for complete drill-down.
+    associated_orders = list(
+        analysis["scoped_orders"].filter(
+            Q(link_id=link.source_config_item_id) | Q(ci_snapshot=link.source_config_item_id)
+        ).order_by("-updated_at", "-pk")
+    )
+    associated_order = associated_orders[0] if associated_orders else None
+    monitoring_cycles = list(
+        QualityMonitoringCycle.objects.filter(
+            quality_order__in=associated_orders,
+        ).select_related("quality_order").order_by("-started_at", "-cycle_number")
+    ) if associated_orders else []
+    active_rreip_cycle = next((c for c in monitoring_cycles if c.result == QualityMonitoringCycle.Result.IN_PROGRESS), None)
+    homologated_rreip_cycle = next((c for c in monitoring_cycles if c.result == QualityMonitoringCycle.Result.SUCCESS), None)
+    if active_rreip_cycle:
+        rreip_status_label = f"RREIP em andamento · Ciclo {active_rreip_cycle.cycle_number:02d}"
+    elif homologated_rreip_cycle and homologated_rreip_cycle.stability_validated:
+        rreip_status_label = f"Homologado no RREIP · Ciclo {homologated_rreip_cycle.cycle_number:02d}"
+    elif homologated_rreip_cycle:
+        rreip_status_label = f"RREIP concluído · Ciclo {homologated_rreip_cycle.cycle_number:02d}"
+    else:
+        rreip_status_label = "Sem ciclo RREIP · apenas acompanhamento estatístico"
+    episodes = recurrence_summary.get("episodes") or ()
+    calculated_level = level_code_from_recurrence_count(recurrence_summary.get("recurrence_count", 0))
+    from_view = str(params.get("from", "")).strip()
+
     return {
         "link": link,
+        "from_view": from_view,
         "period": analysis["period"], "period_label":analysis["period_label"],
         "date_from":analysis["date_from"], "date_to":analysis["date_to"], "filter_notices":analysis["notices"],
         "operational_state_filter": state_filter,
@@ -189,6 +217,7 @@ def get_priority_link_detail(user, identifier, params):
         "valid_occurrence_count": valid_tickets.count(),
         "recurrence_count": len(period_recurrence_ids),
         "current_episode_recurrence_count": recurrence_summary.get("recurrence_count", 0),
+        "calculated_level": calculated_level,
         "is_active_recurrence": bool(recurrence_summary.get("is_active_recurrence")),
         "is_stabilized": bool(recurrence_summary.get("is_stabilized")),
         "operational_state": recurrence_summary.get("operational_state", "SINGLE_OCCURRENCE"),
@@ -200,6 +229,12 @@ def get_priority_link_detail(user, identifier, params):
         "operational_recurrence_level": current_episode.operational_recurrence_level if current_episode else "Inicial",
         "current_episode_stabilized_at": current_episode.stabilized_at if current_episode else None,
         "reopened_after_stability": bool(recurrence_summary.get("reopened_after_stability")),
+        "reopened_count": recurrence_summary.get("reopened_count", 0),
+        "episodes": episodes,
+        "associated_order": associated_order,
+        "monitoring_cycles": monitoring_cycles,
+        "rreip_status_label": rreip_status_label,
+        "circuit_status": link.deployment_state or link.incident_state or "Não informado",
         "same_cause_recurrences": same_cause_recurrences,
         "page_obj": page,
         "tickets": tickets,

@@ -1,0 +1,154 @@
+{% extends "qualidade/base_qualidade.html" %}
+{% load static %}
+{% block title %}ARION OPS · Links estabilizados · Qualidade Operacional{% endblock %}
+{% block quality_title %}Links estabilizados{% endblock %}
+{% block extra_js %}{{ block.super }}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script>{% endblock %}
+{% block quality_content %}
+<header class="quality-page-header quality-list-header">
+  <div>
+    <p class="quality-eyebrow">ARION OPS <span>/</span> QUALIDADE <span>/</span> ESTABILIZAÇÃO OPERACIONAL</p>
+    <h1>Links estabilizados</h1>
+    <p class="quality-page-subtitle">Circuitos com histórico de reincidência que completaram {{ summary.window_days }} dias corridos sem nova ocorrência válida e sem incidente ativo.</p>
+    {% include "qualidade/partials/guide_trigger.html" %}
+  </div>
+  <span class="quality-list-period" title="Data e hora de referência desta avaliação">Referência · {{ analysis_reference_at|date:"d/m/Y H:i" }}</span>
+</header>
+
+<section class="quality-stabilized-kpis" aria-label="Resumo dos links estabilizados">
+  <article class="quality-stabilized-kpi"><span>Total estabilizados</span><strong>{{ summary.total }}</strong><small>Circuitos únicos no recorte</small></article>
+  <article class="quality-stabilized-kpi"><span>Homologados no RREIP</span><strong>{{ summary.rreip_homologated }}</strong><small>Validação formal da Qualidade</small></article>
+  <article class="quality-stabilized-kpi"><span>Em monitoramento RREIP</span><strong>{{ summary.rreip_active }}</strong><small>Ciclo RREIP ainda aberto</small></article>
+  <article class="quality-stabilized-kpi"><span>Estabilização estatística</span><strong>{{ summary.stat_only }}</strong><small>30+ dias sem ocorrência, sem RREIP</small></article>
+  <article class="quality-stabilized-kpi"><span>Com OQ associada</span><strong>{{ summary.with_oq }}</strong><small>{{ summary.active_oq }} OQ ativa{{ summary.active_oq|pluralize }} · média {{ summary.avg_days }}d estáveis</small></article>
+</section>
+
+<form class="quality-list-toolbar quality-stabilized-toolbar" method="get" action="{% url 'qualidade:links_estabilizados' %}" aria-label="Busca e filtros de links estabilizados">
+  <label class="quality-search-field"><span class="quality-sr-only">Buscar link, CI, cliente ou ISP</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{ selected.q }}" placeholder="Buscar link, CI, cliente, projeto ou ISP…"></label>
+  {% include "qualidade/_primary_filters.html" with period=period period_options=period_options date_from=date_from date_to=date_to %}
+  <label class="quality-toolbar-control quality-sort-control"><span>Ordenar</span><select name="sort">{% for value,label in sort_options %}<option value="{{ value }}"{% if sort == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <details class="quality-list-filter-details"{% if selected.isp or selected.quality_status %} open{% endif %}>
+    <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10m-7 6h4"/></svg>Opções avançadas{% if filter_chips %}<span>{{ filter_chips|length }}</span>{% endif %}</summary>
+    <div class="quality-list-filter-panel">
+      <label>ISP<select name="isp"><option value="">Todos</option>{% for option in filter_options.isps %}<option value="{{ option }}"{% if selected.isp == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+      <label>Situação da Qualidade<select name="quality_status">{% for value,label in quality_status_options %}<option value="{{ value }}"{% if selected.quality_status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <div class="quality-list-filter-actions"><a href="{% url 'qualidade:links_estabilizados' %}">Limpar filtros</a><button type="submit">Aplicar filtros</button></div>
+    </div>
+  </details>
+  <label class="quality-toolbar-control quality-page-size"><span>Por página</span><select name="per_page">{% for size in page_sizes %}<option value="{{ size }}"{% if page_size == size %} selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
+  <button class="quality-list-submit" type="submit">Aplicar</button>
+</form>
+
+{% include "qualidade/_filter_feedback.html" %}
+{% if filter_chips %}<div class="quality-active-filters" aria-label="Filtros ativos">{% for chip in filter_chips %}<a href="{{ chip.remove_url }}" class="quality-filter-chip"><span>{{ chip.label }}: {{ chip.value }}</span><span aria-hidden="true">×</span></a>{% endfor %}<a class="quality-clear-filters" href="{% url 'qualidade:links_estabilizados' %}">Limpar filtros</a></div>{% endif %}
+
+<section class="quality-list-panel" aria-label="Lista completa de links estabilizados">
+  <header class="quality-list-panel__header">
+    <div><strong>{{ summary.total }}</strong><span>link{{ summary.total|pluralize }} estabilizado{{ summary.total|pluralize }}</span></div>
+    <small>Regra: {{ summary.window_days }} dias completos sem nova ocorrência operacional válida e sem chamado em aberto. Estabilização estatística não encerra OQ nem substitui homologação RREIP.{% if otrs_last_sync_at %} · Espelho OTRS atualizado em {{ otrs_last_sync_at|date:"d/m/Y H:i" }}.{% endif %}</small>
+  </header>
+
+  {% if rows %}
+  <div class="quality-table-wrap quality-desktop-list">
+    <table class="quality-data-table quality-stabilized-table">
+      <thead>
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">Circuito / CI</th>
+          <th scope="col">Operadora / Projeto</th>
+          <th scope="col">ISP / UF</th>
+          <th scope="col" title="Reincidências válidas registradas no episódio estabilizado">Reincidências ant.</th>
+          <th scope="col">Última ocorrência válida</th>
+          <th scope="col">Dias sem ocorrência</th>
+          <th scope="col">Situação CMDB</th>
+          <th scope="col">OQ / Monitoramento RREIP</th>
+          <th scope="col">Referência</th>
+          <th scope="col">Ação</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td><span class="quality-rank">#{{ row.rank|stringformat:"02d" }}</span></td>
+          <td>
+            <a class="quality-cell-primary quality-priority-link" href="{{ row.url }}">{{ row.designation_display }}</a>
+            <small>CI {{ row.source_config_item_id }}</small>
+          </td>
+          <td>
+            <strong class="quality-cell-primary">{{ row.client }}</strong>
+            <small>{{ row.project_display }}</small>
+          </td>
+          <td>
+            <strong class="quality-cell-primary">{{ row.provider_name }}</strong>
+            <small>{{ row.uf|default:"UF não informada" }}</small>
+          </td>
+          <td>
+            <strong class="quality-metric">{{ row.previous_recurrences }}</strong>
+            <small>{{ row.operational_recurrence_level }}{% if row.episode_count > 1 %} · {{ row.episode_count }} episódios{% endif %}</small>
+          </td>
+          <td>
+            {% if row.last_occurrence %}
+              <strong class="quality-cell-primary">{{ row.last_occurrence|date:"d/m/Y" }}</strong>
+              <small>Estabilizou em {{ row.stabilized_at|date:"d/m/Y" }}</small>
+            {% else %}<span class="quality-muted-value">—</span>{% endif %}
+          </td>
+          <td>
+            <span class="quality-operational-state quality-operational-state--stabilized">{{ row.days_without_occurrence }} dias</span>
+          </td>
+          <td>
+            <strong class="quality-cell-primary">{{ row.circuit_status }}</strong>
+          </td>
+          <td>
+            {% if row.associated_order_code %}
+              <a class="quality-order-ref" href="{{ row.associated_order_url }}"><strong>{{ row.associated_order_code }}</strong><small>{{ row.associated_order_status_label }}</small></a>
+            {% else %}
+              <span class="quality-muted-value">Sem OQ</span>
+            {% endif %}
+            <small class="quality-rreip-note quality-rreip-note--{{ row.rreip_status_key }}">{{ row.rreip_status_label }}</small>
+          </td>
+          <td>
+            <strong class="quality-cell-primary">{{ row.analysis_reference_at|date:"d/m/Y" }}</strong>
+            <small>{{ row.stabilization_kind_label }}</small>
+          </td>
+          <td>
+            <a class="quality-row-open" href="{{ row.url }}">Histórico</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="quality-priority-cards">
+    {% for row in rows %}
+    <article class="quality-priority-card">
+      <header>
+        <span class="quality-rank">#{{ row.rank|stringformat:"02d" }}</span>
+        <a class="quality-priority-card__title" href="{{ row.url }}">{{ row.designation_display }}</a>
+        <span class="quality-operational-state quality-operational-state--stabilized">{{ row.days_without_occurrence }}d estável</span>
+      </header>
+      <p class="quality-priority-card__context">{{ row.client }} · {{ row.project_display }} · {{ row.provider_name }}{% if row.uf %} · {{ row.uf }}{% endif %}</p>
+      <small>CI {{ row.source_config_item_id }} · {{ row.circuit_status }} · Ref. {{ row.analysis_reference_at|date:"d/m/Y" }}</small>
+      <div class="quality-priority-card__metrics">
+        <span><strong>{{ row.previous_recurrences }}</strong> reincidência{{ row.previous_recurrences|pluralize }} ant. ({{ row.operational_recurrence_level }})</span>
+        <span>Última em <strong>{{ row.last_occurrence|date:"d/m/Y" }}</strong></span>
+        <span>{{ row.rreip_status_label }}</span>
+      </div>
+      <footer>
+        {% if row.associated_order_code %}<a href="{{ row.associated_order_url }}">{{ row.associated_order_code }} · {{ row.associated_order_status_label }}</a>{% else %}<span>Sem OQ · {{ row.stabilization_kind_label }}</span>{% endif %}
+        <a href="{{ row.url }}">Ver histórico →</a>
+      </footer>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="quality-list-empty">
+    <span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></svg></span>
+    <strong>Nenhum link estabilizado encontrado neste recorte.</strong>
+    <p>Um circuito entra nesta lista após {{ summary.window_days }} dias completos sem nova ocorrência operacional válida e sem chamado ativo, respeitando as regras de exclusão de cada operadora.</p>
+    {% if filter_chips %}<a href="{% url 'qualidade:links_estabilizados' %}">Limpar filtros</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% include "qualidade/_pagination.html" %}
+<p class="quality-dashboard-note">A estabilização operacional ({{ summary.window_days }} dias completos sem ocorrência válida e sem incidente ativo) é um indicador estatístico e não encerra automaticamente OQs ou ciclos RREIP.{% if coverage_earliest_at %} Cobertura histórica do espelho OTRS a partir de {{ coverage_earliest_at|date:"d/m/Y" }}.{% endif %}</p>
+{% endblock %}

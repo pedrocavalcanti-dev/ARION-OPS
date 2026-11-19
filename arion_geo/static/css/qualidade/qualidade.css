@@ -1256,3 +1256,34 @@
 .quality-filter-feedback p { margin:4px 0; }
 @media(min-width:761px) { .quality-list-toolbar:has(.quality-primary-filters) .quality-list-filter-panel,.quality-filters:has(.quality-primary-filters) .quality-filter-panel { left:0; right:auto; } }
 @media(max-width:760px) { .quality-primary-filters { grid-column:1/-1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }.quality-primary-filters > label { min-width:0; }.quality-custom-period { grid-column:1/-1; }.quality-filters { flex-wrap:wrap; } }
+
+/* Stabilized links view, R1..R5+ auditable levels & contact quick-copy */
+.quality-stabilized-kpis { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:9px; margin:0 0 14px; }
+.quality-stabilized-kpi { display:grid; gap:3px; padding:12px 14px; border:1px solid var(--border-primary); border-radius:8px; background:var(--surface-primary); }
+.quality-stabilized-kpi span { color:var(--text-muted); font-size:9px; font-weight:500; }
+.quality-stabilized-kpi strong { color:var(--text-primary); font-size:21px; font-weight:550; font-variant-numeric:tabular-nums; letter-spacing:-.035em; line-height:1.15; }
+.quality-stabilized-kpi small { color:var(--text-muted); font-size:8px; }
+.quality-rreip-note { display:block; margin-top:3px; color:var(--text-muted); font-size:8px; }
+.quality-rreip-note--homologated { color:var(--accent-green); }
+.quality-rreip-note--active { color:var(--accent-teal); }
+.quality-rreip-note--recurred { color:var(--warning); }
+.quality-pill--level-auto { border-color:color-mix(in srgb,var(--accent-teal) 35%,var(--border-primary)); background:color-mix(in srgb,var(--accent-teal) 10%,var(--surface-primary)); color:var(--accent-teal); }
+.quality-pill--level-manual { border-color:color-mix(in srgb,var(--accent-green) 35%,var(--border-primary)); background:color-mix(in srgb,var(--accent-green) 10%,var(--surface-primary)); color:var(--accent-green); }
+.quality-pill--level-unconfirmed { border-color:var(--border-primary); background:var(--surface-secondary); color:var(--text-muted); }
+.quality-pill--level-initial { border-color:var(--border-primary); background:var(--surface-secondary); color:var(--text-secondary); }
+.quality-level-source { display:block; color:var(--text-muted); font-size:8px; font-weight:400; margin-top:2px; }
+.quality-level-note { margin:10px 0 0; padding:8px 10px; border-left:2px solid var(--accent-teal); border-radius:4px; background:var(--surface-secondary); color:var(--text-secondary); font-size:10px; line-height:1.45; }
+.quality-level-progression { margin-top:14px; padding-top:12px; border-top:1px solid var(--border-primary); }
+.quality-level-progression__list { display:grid; gap:6px; margin:6px 0 0; padding:0; list-style:none; }
+.quality-level-progression__list li { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 9px; border:1px solid var(--border-primary); border-radius:6px; background:var(--surface-secondary); font-size:10px; }
+.quality-level-progression__list a { color:var(--text-primary); font-weight:550; text-decoration:none; }
+.quality-level-progression__list a:hover { color:var(--accent-teal); text-decoration:underline; }
+.quality-level-progression__list time { color:var(--text-muted); font-size:9px; font-variant-numeric:tabular-nums; }
+.quality-level-progression__list small { color:var(--text-secondary); font-size:9px; margin-left:auto; }
+.quality-contact-direct { display:grid; gap:4px; }
+.quality-contact-direct__item { display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.quality-copy-btn { padding:2px 6px; border:1px solid var(--border-primary); border-radius:4px; background:var(--surface-secondary); color:var(--text-secondary); font:inherit; font-size:8px; cursor:pointer; transition:border-color .14s ease,color .14s ease,background-color .14s ease; }
+.quality-copy-btn:hover { border-color:var(--accent-teal); color:var(--text-primary); }
+.quality-copy-btn.is-copied { border-color:var(--accent-green); color:var(--accent-green); }
+@media(max-width:1080px) { .quality-stabilized-kpis { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:680px) { .quality-stabilized-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }

@@ -64,6 +64,7 @@ from .services.history import get_global_quality_history, get_order_history
 from .services.monitoring import finish_monitoring_cycle, get_monitoring_queue, is_financial_reason, start_monitoring_cycle
 from .services.priority_link_detail import get_priority_link_detail
 from .services.priority_links import get_priority_links
+from .services.stabilized_links import get_stabilized_links
 from .services.treatments import (
     add_quality_action,
     get_monitoring_tickets,
@@ -151,7 +152,7 @@ def priority_link_detail(request, identificador):
     if context is None:
         raise Http404
     context.update({
-        "active_section": "links",
+        "active_section": "stabilized" if context.get("from_view") == "stabilized" else "links",
         "page_title": "Histórico do link",
         "page_query": _page_query(request),
         "can_manage_orders": request.user.has_perm(MANAGE_QUALITY_PERMISSION),
@@ -165,6 +166,25 @@ def priority_link_detail(request, identificador):
         )
         context["create_form"] = QualityOrderCreateForm(link_queryset=scoped_links)
     return render(request, "qualidade/priority_link_detail.html", context)
+
+
+@login_required
+@permission_required(QUALITY_PERMISSION, raise_exception=True)
+def stabilized_links(request):
+    context = get_stabilized_links(request.user, request.GET)
+    context.update({
+        "active_section": "stabilized",
+        "page_title": "Links estabilizados",
+        "page_subtitle": "Circuitos com 30 dias completos sem nova ocorrência operacional válida e sem chamado ativo.",
+        "page_query": _quality_filter_query(request, context),
+        "filter_chips": _filter_chips(
+            request,
+            context["selected"],
+            context["period"] if context["period"] != "all" else None,
+        ),
+        "can_manage_orders": request.user.has_perm(MANAGE_QUALITY_PERMISSION),
+    })
+    return render(request, "qualidade/stabilized_links.html", context)
 
 
 @login_required
@@ -279,13 +299,20 @@ def _filter_chips(request, selected, period=None, owner_labels=None):
         "level": "Nível", "priority": "Prioridade", "oq": "OQ", "status": "Status", "reason": "Motivo",
         "owner": "Responsável", "due": "Prazo", "rreip": "RREIP", "portfolio": "Carteira",
         "state": "Estado operacional", "region":"Macrorregião", "cliente":"Operadora", "projeto":"Projeto",
+        "quality_status": "Situação da Qualidade",
     }
     chips = []
     values = dict(selected)
     if period:
         values["period"] = period
     for key, value in values.items():
-        if key in {"date_from","date_to","concentration_by","group_by","tab"} or (key=="period" and value==QUALITY_PRIORITY_DEFAULT_PERIOD):
+        if key in {"date_from","date_to","concentration_by","group_by","tab"} or (
+            key == "period"
+            and (
+                (request.resolver_match.url_name == "links_estabilizados" and value == "all")
+                or (request.resolver_match.url_name != "links_estabilizados" and value == QUALITY_PRIORITY_DEFAULT_PERIOD)
+            )
+        ):
             continue
         if not value:
             continue
@@ -303,8 +330,17 @@ def _filter_chips(request, selected, period=None, owner_labels=None):
             display_value = dict(QualityOrder.Priority.choices).get(value, value)
         elif key == "oq":
             display_value = {"WITH": "Com OQ ativa", "WITHOUT": "Sem OQ ativa"}.get(value, value)
-        elif key == "level" and value == "UNCLASSIFIED":
-            display_value = "A classificar"
+        elif key == "level" and value in {"UNCLASSIFIED", "UNCONFIRMED"}:
+            display_value = "A confirmar"
+        elif key == "quality_status":
+            display_value = {
+                "with_oq": "Com OQ associada",
+                "active_oq": "Com OQ ativa",
+                "without_oq": "Sem OQ associada",
+                "rreip_active": "Em monitoramento RREIP",
+                "rreip_homologated": "Homologado no RREIP",
+                "stat_only": "Somente estabilização estatística",
+            }.get(value, value)
         elif key == "owner" and value == "unassigned":
             display_value = "Não atribuído"
         elif key == "owner" and owner_labels:

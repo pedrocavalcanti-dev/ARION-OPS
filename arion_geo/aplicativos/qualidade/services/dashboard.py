@@ -33,6 +33,7 @@ from .filters import quality_period, dimension_catalog, resolve_dimensions, filt
 from .data_scope import QualityDataScopeService
 from .priority_links import ACTIVE_ORDER_STATUSES, business_priority, build_priority_link_analysis
 from .recurrence import build_quality_recurrence_analysis
+from .stabilized_links import build_stabilized_link_rows, stabilized_links_url
 
 PERIOD_OPTIONS = QUALITY_PRIORITY_PERIOD_OPTIONS
 
@@ -463,33 +464,14 @@ def get_dashboard_data(user, requested_filters=None):
     ))
     recurring_links = recurring_links[:5]
 
-    stabilized_rows = list(
-        selected_links.filter(source_config_item_id__in=stabilized_by_link).select_related("operator")
+    all_stabilized_links = build_stabilized_link_rows(
+        links_queryset=selected_links,
+        recurrence_by_link=priority_analysis["recurrence"]["links"],
+        scoped_orders=selected_orders,
+        now=now,
     )
-    stabilized_semantics = provider_values_for_links(stabilized_rows)
-    stabilized_links = []
-    for link in stabilized_rows:
-        summary = stabilized_by_link[link.source_config_item_id]
-        provider = stabilized_semantics[link.pk]
-        project = display_project_name(link.business_project or link.legacy_project)
-        stabilized_links.append({
-            "designation": link_designation(link),
-            "code": link.source_config_item_id,
-            "url": reverse("qualidade:priority_link_detail", kwargs={"identificador": link.source_config_item_id}),
-            "client": link.contracting_client or "Cliente não informado",
-            "project": project or "Projeto não informado",
-            "provider_name": provider.provider_name,
-            "value": summary["current_episode_recurrence_count"],
-            "occurrence_count": summary["current_episode_occurrence_count"],
-            "last_occurrence": summary["last_occurrence"],
-            "stabilized_at": summary["current_episode_stabilized_at"],
-            "days_since_last": summary["current_episode_days_since_last"],
-            "business_priority": business_priority(provider.provider_name, project, link.contracting_client),
-        })
-    stabilized_links.sort(key=lambda item: (
-        -item["stabilized_at"].timestamp(), -item["value"], item["business_priority"], item["code"],
-    ))
-    stabilized_links = stabilized_links[:5]
+    stabilized_total_count = len(all_stabilized_links)
+    stabilized_links = all_stabilized_links[:5]
 
     order_url = reverse("qualidade:ordens")
     monitoring_url = reverse("qualidade:monitoramento")
@@ -499,7 +481,7 @@ def get_dashboard_data(user, requested_filters=None):
         "open": f"{order_url}?tab=active",
         "new_recurrences": _priority_links_url(selected, {"state": "all"}),
         "active_links": _priority_links_url(selected, {"state": "active"}),
-        "stabilized_links": "#quality-stabilized-title",
+        "stabilized_links": stabilized_links_url(selected),
         "opened": order_url,
         "completed": f"{order_url}?status={QualityOrder.Status.CONCLUIDA}",
         "monitoring": f"{monitoring_url}?tab=active",
@@ -565,6 +547,7 @@ def get_dashboard_data(user, requested_filters=None):
         "concentration_by": selected["concentration_by"],
         "recurring_links": recurring_links,
         "stabilized_links": stabilized_links,
+        "stabilized_total_count": stabilized_total_count,
         "attention": attention[:8],
         "attention_count": len(attention),
         "attention_summary": {"critical": kpis["critical"], "overdue": kpis["overdue"]},

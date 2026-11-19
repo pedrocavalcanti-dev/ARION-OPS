@@ -6,7 +6,8 @@ from datetime import timedelta
 from django.utils import timezone
 
 from aplicativos.configuracoes.data_scope import DataScopeService
-from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicketConfigItem
+from aplicativos.integracoes.models import CMDBLinkMirror, OTRSStateMapping, OTRSTicketConfigItem
+from aplicativos.integracoes.services.incidents import IncidentRules
 
 from .constants import QUALITY_RREIP_DAYS
 from .data_scope import QualityDataScopeService
@@ -16,6 +17,12 @@ ACTIVE_RECURRENCE = "ACTIVE_RECURRENCE"
 STABILIZED = "STABILIZED"
 NEW_EPISODE = "NEW_EPISODE"
 SINGLE_OCCURRENCE = "SINGLE_OCCURRENCE"
+
+ACTIVE_INCIDENT_STATUSES = (
+    OTRSStateMapping.BusinessStatus.OPEN,
+    OTRSStateMapping.BusinessStatus.PENDING,
+    OTRSStateMapping.BusinessStatus.SCHEDULED,
+)
 
 
 def _operational_level(recurrence_number):
@@ -39,8 +46,14 @@ class OccurrenceEpisode:
     operational_recurrence_level: str
 
 
-def build_occurrence_episodes(occurrences, *, now=None, window_days=QUALITY_RREIP_DAYS):
-    """Group valid occurrences; a gap greater than 30 days starts a new episode."""
+def build_occurrence_episodes(
+    occurrences, *, now=None, window_days=QUALITY_RREIP_DAYS, has_active_incident=False,
+):
+    """Group valid occurrences; a gap greater than 30 days starts a new episode.
+
+    A circuit with an active (unresolved) valid incident is never considered
+    statistically stabilized even when the ticket was opened more than 30 days ago.
+    """
     now = now or timezone.now()
     ordered = sorted(
         occurrences,
@@ -65,8 +78,10 @@ def build_occurrence_episodes(occurrences, *, now=None, window_days=QUALITY_RREI
         last_at = items[-1]["occurred_at"]
         recurrence_count = max(len(items) - 1, 0)
         is_current = number == len(episodes)
-        active = recurrence_count > 0 and cutoff < last_at <= now
-        is_stabilized = recurrence_count > 0 and last_at <= cutoff
+        episode_has_open = has_active_incident or any(item.get("is_open") for item in items)
+        blocked_by_open = is_current and episode_has_open
+        active = recurrence_count > 0 and ((cutoff < last_at <= now) or blocked_by_open)
+        is_stabilized = recurrence_count > 0 and last_at <= cutoff and not blocked_by_open
         if active:
             state = ACTIVE_RECURRENCE
         elif is_stabilized:
@@ -76,7 +91,11 @@ def build_occurrence_episodes(occurrences, *, now=None, window_days=QUALITY_RREI
         else:
             state = SINGLE_OCCURRENCE
         previous_recurrence = any(len(previous) > 1 for previous in episodes[: number - 1])
-        stabilized_at = last_at + timedelta(days=window_days) if recurrence_count else None
+        stabilized_at = (
+            last_at + timedelta(days=window_days)
+            if recurrence_count and not blocked_by_open
+            else None
+        )
         days_since_last = max((now - last_at).days, 0)
         for index, occurrence in enumerate(items):
             occurrence["episode_number"] = number
@@ -109,6 +128,8 @@ def build_quality_recurrence_analysis(
     The mirror is the source for operational occurrences. QualityOccurrence records
     enrich/review those tickets and can explicitly exclude a ticket through the
     shared validity policy; a review row is never required for a ticket to count.
+    Per-operator exclusion rules (e.g. Vivo excluding 'Sem intervenção' while
+    Claro keeps it) and active-incident guards are enforced here consistently.
     """
     now = now or timezone.now()
     scope_links = scope_links if scope_links is not None else DataScopeService.filter_queryset(
@@ -127,22 +148,53 @@ def build_quality_recurrence_analysis(
         ticket_id__in=valid_tickets.order_by().values("pk"),
     ).order_by().values_list(
         "cmdb_link__source_config_item_id",
+        "cmdb_link__contracting_client",
         "ticket__external_id",
+        "ticket__ticket_number",
         "ticket__source_created_at",
+        "ticket__business_status",
+        "ticket__closing_code_raw",
     ).distinct()
 
     grouped = defaultdict(dict)
-    for config_item_id, external_id, occurred_at in relations.iterator(chunk_size=2000):
-        if config_item_id and occurred_at:
-            grouped[config_item_id][external_id] = {
-                "external_id": external_id,
-                "occurred_at": occurred_at,
-            }
+    open_by_link = defaultdict(bool)
+    earliest_occurrence_at = None
+    for (
+        config_item_id,
+        contracting_client,
+        external_id,
+        ticket_number,
+        occurred_at,
+        business_status,
+        closing_code_raw,
+    ) in relations.iterator(chunk_size=2000):
+        if not config_item_id or not occurred_at:
+            continue
+        if IncidentRules.is_reason_excluded(closing_code_raw, client=contracting_client or ""):
+            continue
+        is_open = business_status in ACTIVE_INCIDENT_STATUSES
+        if is_open:
+            open_by_link[config_item_id] = True
+        if earliest_occurrence_at is None or occurred_at < earliest_occurrence_at:
+            earliest_occurrence_at = occurred_at
+        grouped[config_item_id][external_id] = {
+            "external_id": external_id,
+            "ticket_number": ticket_number or "",
+            "occurred_at": occurred_at,
+            "business_status": business_status or "",
+            "closing_code_raw": closing_code_raw or "",
+            "is_open": is_open,
+        }
 
     links = {}
     ticket_index = {}
     for config_item_id, by_ticket in grouped.items():
-        episodes = build_occurrence_episodes(list(by_ticket.values()), now=now)
+        has_active_incident = bool(open_by_link.get(config_item_id))
+        episodes = build_occurrence_episodes(
+            list(by_ticket.values()),
+            now=now,
+            has_active_incident=has_active_incident,
+        )
         current_episode = episodes[-1] if episodes else None
         active_recurrence = bool(current_episode and current_episode.active)
         all_occurrences = [item for episode in episodes for item in episode.occurrences]
@@ -155,6 +207,7 @@ def build_quality_recurrence_analysis(
         links[config_item_id] = {
             "episodes": episodes,
             "current_episode": current_episode,
+            "has_active_incident": has_active_incident,
             "is_active_recurrence": active_recurrence,
             "is_stabilized": bool(current_episode and current_episode.state == STABILIZED),
             "operational_state": current_episode.state,
@@ -184,10 +237,14 @@ def build_quality_recurrence_analysis(
             "total_recurrence_count": sum(episode.recurrence_count for episode in episodes),
             "last_occurrence": all_occurrences[-1]["occurred_at"] if all_occurrences else None,
             "first_occurrence": all_occurrences[0]["occurred_at"] if all_occurrences else None,
+            "last_ticket_number": all_occurrences[-1].get("ticket_number", "") if all_occurrences else "",
+            "first_ticket_number": all_occurrences[0].get("ticket_number", "") if all_occurrences else "",
+            "last_closing_reason": all_occurrences[-1].get("closing_code_raw", "") if all_occurrences else "",
             "occurrences": all_occurrences,
         }
     return {
         "now": now,
+        "coverage_earliest_at": earliest_occurrence_at,
         "scope_links": scope_links,
         "scoped_orders": scoped_orders,
         "period_tickets": ticket_sets["period_tickets"],

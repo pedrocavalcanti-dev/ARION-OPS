@@ -1394,8 +1394,14 @@ class QualityRecurrenceIntegrationTests(QualityModuleTestCase):
             source_config_item_id="QUALITY-STABLE", designation="BD0002001",
             contracting_client="Vivo", business_project="Arcos Dourados", isp_raw="Vivo", state="SP",
         )
-        self.create_ticket(link=stable_link, external_id=84701, created_at=now - timedelta(days=42))
-        self.create_ticket(link=stable_link, external_id=84702, created_at=now - timedelta(days=35))
+        self.create_ticket(
+            link=stable_link, external_id=84701, created_at=now - timedelta(days=42),
+            status=OTRSStateMapping.BusinessStatus.RESOLVED,
+        )
+        self.create_ticket(
+            link=stable_link, external_id=84702, created_at=now - timedelta(days=35),
+            status=OTRSStateMapping.BusinessStatus.RESOLVED,
+        )
 
         active_link = CMDBLinkMirror.objects.create(
             source_config_item_id="QUALITY-ACTIVE", designation="BD0002002",
@@ -1477,8 +1483,14 @@ class QualityRecurrenceIntegrationTests(QualityModuleTestCase):
             source_config_item_id="QUALITY-PRIORITY-STALE", designation="Antigo",
             contracting_client="Vivo", business_project="Bradesco", isp_raw="Vivo",
         )
-        self.create_ticket(link=stale, external_id=84625, created_at=now - timedelta(days=50))
-        self.create_ticket(link=stale, external_id=84626, created_at=now - timedelta(days=40))
+        self.create_ticket(
+            link=stale, external_id=84625, created_at=now - timedelta(days=50),
+            status=OTRSStateMapping.BusinessStatus.RESOLVED,
+        )
+        self.create_ticket(
+            link=stale, external_id=84626, created_at=now - timedelta(days=40),
+            status=OTRSStateMapping.BusinessStatus.RESOLVED,
+        )
 
         result = get_priority_links(user, {"period": "90"})
         self.assertEqual([row.source_config_item_id for row in result["rows"]], [strategic.source_config_item_id, fust.source_config_item_id])
@@ -1580,8 +1592,14 @@ class QualityQueueTests(QualityModuleTestCase):
             source_config_item_id="Q-PRIORITY-FILTER-2", source_number="BL-FILTER-2",
             contracting_client="Cliente B", isp_raw="ISP B",
         )
-        self.create_ticket(link=older_link, external_id=81303, created_at=now - timedelta(days=80))
-        self.create_ticket(link=older_link, external_id=81304, created_at=now - timedelta(days=70))
+        self.create_ticket(
+            link=older_link, external_id=81303, created_at=now - timedelta(days=80),
+            status=OTRSStateMapping.BusinessStatus.RESOLVED,
+        )
+        self.create_ticket(
+            link=older_link, external_id=81304, created_at=now - timedelta(days=70),
+            status=OTRSStateMapping.BusinessStatus.RESOLVED,
+        )
 
         filtered = get_priority_links(user, {
             "period": "60", "q": "BL-FILTER-1", "client": "Cliente A", "isp": "ISP A",

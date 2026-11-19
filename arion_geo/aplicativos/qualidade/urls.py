@@ -8,6 +8,7 @@ urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("links-prioritarios/", views.priority_links, name="links_prioritarios"),
     path("links-prioritarios/<str:identificador>/", views.priority_link_detail, name="priority_link_detail"),
+    path("estabilizados/", views.stabilized_links, name="links_estabilizados"),
     path("links/opcoes/", views.link_options, name="link_options"),
     path("ordens/", views.orders, name="ordens"),
     path("ordens/nova/", views.order_create, name="ordem_create"),

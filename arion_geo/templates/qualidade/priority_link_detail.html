@@ -4,7 +4,11 @@
 {% block extra_js %}{{ block.super }}{% if can_manage_orders %}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script>{% endif %}{% endblock %}
 {% block quality_content %}
 <div class="quality-link-detail">
+  {% if from_view == "stabilized" %}
+  <a class="quality-link-back" href="{% url 'qualidade:links_estabilizados' %}"><span aria-hidden="true">←</span> Links estabilizados</a>
+  {% else %}
   <a class="quality-link-back" href="{% url 'qualidade:links_prioritarios' %}?{{ page_query }}"><span aria-hidden="true">←</span> Links prioritários</a>
+  {% endif %}
 
   <header class="quality-link-heading">
     <div>
@@ -35,12 +39,16 @@
       <div><dt>Início</dt><dd>{% if current_episode_started_at %}{{ current_episode_started_at|date:"d/m/Y" }}{% else %}—{% endif %}</dd></div>
       <div><dt>Sequência operacional</dt><dd>{{ operational_recurrence_level }}</dd></div>
       <div><dt>Dias sem ocorrência</dt><dd>{% if current_episode_days_since_last != None %}{{ current_episode_days_since_last }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Situação CMDB</dt><dd>{{ circuit_status }}</dd></div>
+      <div><dt>Monitoramento / RREIP</dt><dd>{{ rreip_status_label }}</dd></div>
+      {% if current_episode_stabilized_at and is_stabilized %}<div><dt>Estabilizou em</dt><dd>{{ current_episode_stabilized_at|date:"d/m/Y" }} · estatística (30d)</dd></div>{% endif %}
+      {% if reopened_count %}<div><dt>Reincidências pós-estabilidade</dt><dd>{{ reopened_count }} novo{{ reopened_count|pluralize }} episódio{{ reopened_count|pluralize }}</dd></div>{% endif %}
     </dl>
     <div class="quality-link-metrics">
       <article><span>Ocorrências válidas</span><strong>{{ valid_occurrence_count }}</strong><small>Tickets contabilizados após as regras de exclusão.</small></article>
       <article><span>Reincidências na janela</span><strong>{{ recurrence_count }}</strong><small>{{ period_label }} gerenciais · episódio atual: {{ current_episode_recurrence_count }} reincidência{{ current_episode_recurrence_count|pluralize }}{% if is_active_recurrence %} · ativo{% elif is_stabilized %} · estabilizado{% elif operational_state == "NEW_EPISODE" %} · novo episódio{% else %} · ocorrência isolada{% endif %}</small></article>
       <article><span>Mesma causa confirmada</span><strong>{{ same_cause_recurrences }}</strong><small>A classificação depende da revisão da Qualidade.</small></article>
-      <article><span>Nível da Qualidade</span><strong>{{ link.level_label }}</strong><small>Contagem da janela não define o nível formal da OQ.</small></article>
+      <article><span>Nível da Qualidade</span><strong>{% if link.active_level %}{{ link.active_level }}{% elif calculated_level %}{{ calculated_level }}{% else %}A confirmar{% endif %}</strong><small>{% if link.active_level %}Confirmado na OQ ativa.{% elif calculated_level %}Calculado automaticamente pelo episódio operacional.{% else %}Sem reincidência confirmada para nível R1+.{% endif %}</small></article>
     </div>
     <section class="quality-link-order" aria-label="Ordem de Qualidade relacionada">
       <div>

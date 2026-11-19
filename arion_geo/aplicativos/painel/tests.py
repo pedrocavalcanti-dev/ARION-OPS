@@ -419,10 +419,11 @@ class MirrorAnalyticsTests(TestCase):
         active_ages = (20, 5)
         stabilized_ages = (60, 40)
         for index, age_days in enumerate(active_ages + stabilized_ages):
-            ticket = self._ticket(1460 + index, "OPEN", True, 5)
+            is_active = index < 2
+            ticket = self._ticket(1460 + index, "OPEN" if is_active else "RESOLVED", is_active, 5)
             ticket.source_created_at = fixed_now - timedelta(days=age_days)
             ticket.save(update_fields=("source_created_at",))
-            link = self.link if index < 2 else self.other_link
+            link = self.link if is_active else self.other_link
             OTRSTicketConfigItem.objects.create(
                 ticket=ticket, config_item_id=link.source_config_item_id,
                 cmdb_link=link, relation_type=f"DependsOn-quality-{index}",

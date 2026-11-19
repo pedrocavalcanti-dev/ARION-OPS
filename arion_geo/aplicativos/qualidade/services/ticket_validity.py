@@ -3,6 +3,7 @@ from django.db.models import Q
 
 from aplicativos.integracoes.models import CMDBLinkMirror
 from aplicativos.integracoes.services.analytics import TicketQueryService
+from aplicativos.integracoes.services.incidents import IncidentRules
 from aplicativos.integracoes.services.otrs_status import business_statuses_query
 from aplicativos.painel.services.analytics import AnalyticsQueryService
 
@@ -41,6 +42,8 @@ def quality_ticket_sets(
         responsibility_normalized="IMPROCEDENTE",
     ).exclude(
         external_id__in=excluded_ids,
+    ).exclude(
+        IncidentRules._excluded_reason_query(IncidentRules.BASE_EXCLUDED_KEYS),
     )
     duplicate_reason = Q()
     for reason in DUPLICATE_CLOSING_REASONS:
