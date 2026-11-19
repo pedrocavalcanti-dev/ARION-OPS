@@ -16,7 +16,7 @@ MODULE_PERMISSIONS = (
     "view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "present_geo",
     "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets",
     "view_ari", "import_cmdb", "export_base", "manage_operational_identity",
-    "view_quality", "manage_quality_orders",
+    "view_quality", "manage_quality_orders", "manage_quality_contacts",
 )
 ADMIN_PERMISSIONS = (
     "manage_users", "create_users", "generate_access_invites", "revoke_access_invites",
@@ -38,7 +38,7 @@ CANCELLATION_PERMISSIONS = tuple(code for code, _label in CANCELLATION_PERMISSIO
 ROLE_PERMISSIONS = {
 GROUP_SYSTEM_ADMIN: ALL_ACCESS_PERMISSIONS + REPORTS_PERMISSIONS + ("delete_qualityorder",),
 GROUP_EXECUTIVE: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_reports"),
-GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "manage_operational_identity", "view_ari", "view_quality", "manage_quality_orders", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
+GROUP_MANAGER: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "manage_operational_identity", "view_ari", "view_quality", "manage_quality_orders", "manage_quality_contacts", "view_reports", "edit_treatments", "override_treatments", "finalize_treatments", "export_treatments", "delete_penaltycompetence"),
 GROUP_ANALYST: ("view_dashboard", "view_cockpit", "save_analytics_views", "view_map", "view_rankings", "view_base", "view_operational_tickets", "manage_operational_tickets", "view_ari", "view_quality"),
 GROUP_AUDITOR: ("view_dashboard", "view_cockpit", "view_map", "view_rankings", "view_base", "view_operational_tickets", "view_ari", "view_quality", "view_audit_log"),
 }
@@ -83,6 +83,7 @@ PERMISSION_LABELS = {
     "view_ari": ("ARI I.A", "Acessar a experiência em modo Preview"),
     "view_quality": ("Qualidade", "Visualizar Qualidade Operacional"),
     "manage_quality_orders": ("Qualidade", "Gerenciar Ordens de Qualidade"),
+    "manage_quality_contacts": ("Qualidade", "Gerenciar contatos e escalonamentos"),
     "delete_qualityorder": ("Qualidade", "Excluir Ordens de Qualidade"),
 }
 PERMISSION_LABELS.update({code: ("Cancelamentos", label) for code, label in CANCELLATION_PERMISSION_CATALOG})
@@ -94,12 +95,15 @@ def managed_permissions(using="default"):
     report_content_type = ContentType.objects.db_manager(using).get_for_model(report_model)
     quality_model = GroupDataScope._meta.apps.get_model("qualidade", "QualityOrder")
     quality_content_type = ContentType.objects.db_manager(using).get_for_model(quality_model)
+    quality_contact_model = GroupDataScope._meta.apps.get_model("qualidade", "QualityContact")
+    quality_contact_content_type = ContentType.objects.db_manager(using).get_for_model(quality_contact_model)
     cancellation_model = GroupDataScope._meta.apps.get_model("cancelamentos", "CancellationProcess")
     cancellation_content_type = ContentType.objects.db_manager(using).get_for_model(cancellation_model)
     return Permission.objects.using(using).filter(
         models.Q(content_type=content_type, codename__in=ALL_ACCESS_PERMISSIONS)
         | models.Q(content_type=report_content_type, codename__in=REPORTS_PERMISSIONS)
         | models.Q(content_type=quality_content_type, codename__in=("view_quality", "manage_quality_orders", "delete_qualityorder"))
+        | models.Q(content_type=quality_contact_content_type, codename="manage_quality_contacts")
         | models.Q(content_type=cancellation_content_type, codename__in=CANCELLATION_PERMISSIONS)
     )
 

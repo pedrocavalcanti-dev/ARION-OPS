@@ -236,8 +236,12 @@ class QualityTreatmentCancelForm(forms.Form):
 
 
 class QualityContactForm(forms.ModelForm):
+    contact_category = forms.ChoiceField(
+        label="Categoria", required=False,
+        choices=(("", "Selecione"), *QualityContact.ContactCategory.choices),
+    )
     contact_type = forms.ChoiceField(
-        label="Tipo", required=False,
+        label="Área / tipo", required=False,
         choices=(("", "Selecione"), *((key, label) for key, label in CONTACT_TYPES.items())),
     )
     escalation_level = forms.ChoiceField(
@@ -248,30 +252,34 @@ class QualityContactForm(forms.ModelForm):
     class Meta:
         model = QualityContact
         fields = (
-            "company", "region", "client", "project", "contact_type", "name", "role",
-            "email", "phone", "teams", "notes", "escalation_level", "active",
+            "company", "region", "client", "project", "contact_category", "contact_type", "name", "role",
+            "email", "phone", "whatsapp", "teams", "service_hours", "notes", "escalation_level", "active",
         )
         labels = {
             "company": "Empresa / ISP",
-            "region": "Região",
-            "client": "Cliente / Operadora",
+            "region": "Região / UF",
+            "client": "Operadora / Cliente",
             "project": "Projeto",
             "name": "Nome",
             "role": "Cargo / função",
             "email": "E-mail",
             "phone": "Telefone",
+            "whatsapp": "WhatsApp",
             "teams": "Teams",
+            "service_hours": "Horário de atendimento",
             "notes": "Observações",
             "active": "Contato ativo",
         }
         widgets = {
-            "company": forms.TextInput(attrs={"placeholder": "Claro, ARION..."}),
-            "region": forms.TextInput(attrs={"placeholder": "Norte, SP..."}),
-            "client": forms.TextInput(attrs={"placeholder": "Cliente ou operadora"}),
-            "project": forms.TextInput(attrs={"placeholder": "Projeto, quando aplicável"}),
-            "email": forms.EmailInput(attrs={"autocomplete": "email"}),
-            "phone": forms.TextInput(attrs={"autocomplete": "tel"}),
+            "company": forms.TextInput(attrs={"placeholder": "Claro, Vivo, ISP ou ARION"}),
+            "region": forms.TextInput(attrs={"placeholder": "Nacional, Norte, SP..."}),
+            "client": forms.TextInput(attrs={"placeholder": "Operadora contratante ou cliente"}),
+            "project": forms.TextInput(attrs={"placeholder": "Projeto canônico, quando aplicável"}),
+            "email": forms.EmailInput(attrs={"autocomplete": "email", "placeholder": "nome@empresa.com.br"}),
+            "phone": forms.TextInput(attrs={"autocomplete": "tel", "placeholder": "(11) 99999-9999"}),
+            "whatsapp": forms.TextInput(attrs={"autocomplete": "tel", "placeholder": "(11) 99999-9999"}),
             "teams": forms.TextInput(attrs={"placeholder": "Usuário ou canal Teams"}),
+            "service_hours": forms.TextInput(attrs={"placeholder": "24x7 · Seg–Sex 08h às 18h"}),
             "notes": forms.Textarea(attrs={"rows": 3, "maxlength": 4000, "placeholder": "Contexto operacional para o escalonamento"}),
             "active": forms.CheckboxInput(),
         }

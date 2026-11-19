@@ -6,12 +6,57 @@
   const form = editDialog?.querySelector("[data-quality-contact-form]");
   const title = editDialog?.querySelector("#quality-contact-dialog-title");
   const idField = form?.querySelector("[name='contact_id']");
-  const fieldNames = ["name", "role", "company", "region", "client", "project", "contact_type", "escalation_level", "email", "phone", "teams", "notes"];
+  const fieldNames = [
+    "name", "role", "contact_category", "company", "region", "client", "project",
+    "contact_type", "escalation_level", "email", "phone", "whatsapp", "teams",
+    "service_hours", "notes",
+  ];
   let selectedDetailButton = null;
 
   const setField = (name, value) => {
     const field = form?.querySelector(`[name='${name}']`);
     if (field) field.value = value || "";
+  };
+
+  const copyText = async (value, button) => {
+    if (!value) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const helper = document.createElement("textarea");
+        helper.value = value;
+        helper.setAttribute("readonly", "");
+        helper.style.position = "fixed";
+        helper.style.opacity = "0";
+        document.body.appendChild(helper);
+        helper.select();
+        document.execCommand("copy");
+        helper.remove();
+      }
+      if (button) {
+        const original = button.dataset.originalLabel || button.textContent;
+        button.dataset.originalLabel = original;
+        button.textContent = "Copiado";
+        button.classList.add("is-copied");
+        window.setTimeout(() => {
+          button.textContent = original;
+          button.classList.remove("is-copied");
+        }, 1600);
+      }
+    } catch {
+      // Clipboard blocked by browser policy; keep silent and non-blocking.
+    }
+  };
+
+  const makeCopyButton = (value, label) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "quality-copy-btn";
+    btn.textContent = "Copiar";
+    btn.setAttribute("aria-label", label);
+    btn.addEventListener("click", () => copyText(value, btn));
+    return btn;
   };
 
   const openNew = () => {
@@ -45,9 +90,10 @@
   const fillDetail = button => {
     selectedDetailButton = button;
     const fields = {
-      name: "name", role: "role", company: "company", region: "region", client: "client",
-      project: "project", contactType: "contactType", level: "level", email: "email",
-      phone: "phone", teams: "teams", active: "active", notes: "notes",
+      name: "name", role: "role", category: "category", company: "company", region: "region",
+      client: "client", project: "project", contactType: "contactType", level: "level",
+      serviceHours: "serviceHours", email: "email", phone: "phone", whatsapp: "whatsapp",
+      teams: "teams", active: "active", notes: "notes",
     };
     Object.entries(fields).forEach(([field, dataKey]) => {
       const target = detailDialog?.querySelector(`[data-contact-detail-field='${field}']`);
@@ -57,22 +103,43 @@
     });
     const email = detailDialog?.querySelector("[data-contact-detail-field='email']");
     if (email?.textContent && email.textContent !== "Não informado") {
+      const raw = email.textContent;
+      const wrap = document.createElement("span");
+      wrap.className = "quality-contact-direct__item";
       const link = document.createElement("a");
-      link.href = `mailto:${email.textContent}`;
-      link.textContent = email.textContent;
-      email.replaceChildren(link);
+      link.href = `mailto:${raw}`;
+      link.textContent = raw;
+      wrap.append(link, makeCopyButton(raw, "Copiar e-mail"));
+      email.replaceChildren(wrap);
     }
     const phone = detailDialog?.querySelector("[data-contact-detail-field='phone']");
     if (phone?.textContent && phone.textContent !== "Não informado") {
+      const raw = phone.textContent;
+      const wrap = document.createElement("span");
+      wrap.className = "quality-contact-direct__item";
       const link = document.createElement("a");
-      link.href = `tel:${phone.textContent}`;
-      link.textContent = phone.textContent;
-      phone.replaceChildren(link);
+      link.href = `tel:${raw}`;
+      link.textContent = raw;
+      wrap.append(link, makeCopyButton(raw, "Copiar telefone"));
+      phone.replaceChildren(wrap);
+    }
+    const whatsapp = detailDialog?.querySelector("[data-contact-detail-field='whatsapp']");
+    if (whatsapp?.textContent && whatsapp.textContent !== "Não informado") {
+      const raw = whatsapp.textContent;
+      const wrap = document.createElement("span");
+      wrap.className = "quality-contact-direct__item";
+      const span = document.createElement("span");
+      span.textContent = raw;
+      wrap.append(span, makeCopyButton(raw, "Copiar WhatsApp"));
+      whatsapp.replaceChildren(wrap);
     }
     const editButton = detailDialog?.querySelector("[data-quality-contact-detail-edit]");
     if (editButton) editButton.hidden = !button.closest("tr, article")?.querySelector("[data-quality-contact-edit]");
   };
 
+  document.querySelectorAll("[data-quality-copy]").forEach(button => {
+    button.addEventListener("click", () => copyText(button.dataset.qualityCopy || "", button));
+  });
   document.querySelectorAll("[data-quality-contact-new]").forEach(button => button.addEventListener("click", openNew));
   document.querySelectorAll("[data-quality-contact-edit]").forEach(button => button.addEventListener("click", () => openEdit(button)));
   document.querySelectorAll("[data-quality-contact-detail]").forEach(button => {

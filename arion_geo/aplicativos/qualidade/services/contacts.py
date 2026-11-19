@@ -21,6 +21,7 @@ CONTACT_TYPES = {
     "FINANCEIRO": "Financeiro",
     "OUTRO": "Outro",
 }
+CONTACT_CATEGORIES = dict(QualityContact.ContactCategory.choices)
 ESCALATION_LEVELS = {1: "R1", 2: "R2", 3: "R3", 4: "R4", 5: "R5+"}
 CONTACT_PAGE_SIZES = (25, 50, 100)
 
@@ -51,8 +52,10 @@ def get_quality_contacts(user, params):
     scoped = contacts_for_user(user)
     selected = {
         key: str(params.get(key, "")).strip()[:160]
-        for key in ("q", "company", "region", "client", "project", "contact_type", "level", "status")
+        for key in ("q", "company", "region", "client", "project", "category", "contact_type", "level", "status")
     }
+    if selected["category"] not in CONTACT_CATEGORIES:
+        selected["category"] = ""
     if selected["contact_type"] not in CONTACT_TYPES:
         selected["contact_type"] = ""
     if selected["company"].isdigit():
@@ -82,13 +85,16 @@ def get_quality_contacts(user, params):
         filtered = filtered.filter(
             Q(name__icontains=term) | Q(role__icontains=term) | Q(company__icontains=term)
             | Q(region__icontains=term) | Q(client__icontains=term) | Q(project__icontains=term)
-            | Q(email__icontains=term) | Q(phone__icontains=term) | Q(teams__icontains=term)
+            | Q(email__icontains=term) | Q(phone__icontains=term) | Q(whatsapp__icontains=term)
+            | Q(teams__icontains=term) | Q(service_hours__icontains=term) | Q(notes__icontains=term)
         )
     if selected["company"]:
         raw_companies = scoped.exclude(company="").values_list("company", flat=True).distinct()
         resolved_companies = provider_names_for_values(raw_companies)
         matching_raw_values = [raw for raw, label in resolved_companies.items() if label.casefold() == selected["company"].casefold()]
         filtered = filtered.filter(Q(company__iexact=selected["company"]) | Q(company__in=matching_raw_values))
+    if selected["category"]:
+        filtered = filtered.filter(contact_category=selected["category"])
     for field in ("region", "client", "contact_type"):
         if selected[field]:
             filtered = filtered.filter(**{f"{field}__iexact": selected[field]})
@@ -111,6 +117,10 @@ def get_quality_contacts(user, params):
     page_obj = Paginator(filtered.select_related().order_by("company", "region", "client", "project", "escalation_level", "name"), page_size).get_page(params.get("page", 1))
     company_names = provider_names_for_values([item.company for item in page_obj.object_list if item.company])
     for contact in page_obj.object_list:
+        contact.contact_category_label = CONTACT_CATEGORIES.get(
+            contact.contact_category,
+            "Área interna" if contact.company.casefold() == "arion" else "Externo",
+        )
         contact.contact_type_label = CONTACT_TYPES.get(contact.contact_type, contact.contact_type or "Outro")
         contact.escalation_label = ESCALATION_LEVELS.get(contact.escalation_level, "R1")
         contact.company_display = company_names.get(contact.company, contact.company or "—")
@@ -122,6 +132,7 @@ def get_quality_contacts(user, params):
     company_values = options("company")
     company_names = provider_names_for_values(company_values)
     company_options = sorted({company_names.get(value, value) for value in company_values}, key=str.casefold)
+    internal_query = Q(contact_category=QualityContact.ContactCategory.INTERNO) | Q(company__iexact="ARION")
 
     return {
         "contacts": page_obj.object_list,
@@ -131,13 +142,14 @@ def get_quality_contacts(user, params):
         "total_count": filtered.count(),
         "active_count": scoped.filter(active=True).count(),
         "inactive_count": scoped.filter(active=False).count(),
-        "external_count": scoped.filter(active=True).exclude(company__iexact="ARION").count(),
-        "internal_count": scoped.filter(active=True, company__iexact="ARION").count(),
+        "external_count": scoped.filter(active=True).exclude(internal_query).count(),
+        "internal_count": scoped.filter(active=True).filter(internal_query).count(),
         "filter_options": {
             "company": company_options,
             "region": options("region"),
             "client": options("client"),
             "project": project_options,
+            "category": [(value, label) for value, label in CONTACT_CATEGORIES.items()],
             "contact_type": [(value, label) for value, label in CONTACT_TYPES.items()],
             "level": [(str(value), label) for value, label in ESCALATION_LEVELS.items()],
         },

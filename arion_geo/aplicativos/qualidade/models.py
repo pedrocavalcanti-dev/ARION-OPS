@@ -468,16 +468,27 @@ class QualityMonitoringCycle(models.Model):
 
 
 class QualityContact(models.Model):
+    class ContactCategory(models.TextChoices):
+        OPERADORA = "OPERADORA", "Operadora"
+        ISP = "ISP", "Provedor / ISP"
+        CLIENTE = "CLIENTE", "Cliente"
+        INTERNO = "INTERNO", "Área interna"
+
     company = models.CharField(max_length=200, blank=True)
     region = models.CharField(max_length=160, blank=True)
     client = models.CharField(max_length=300, blank=True, db_index=True)
     project = models.CharField(max_length=300, blank=True, db_index=True)
+    contact_category = models.CharField(
+        "categoria", max_length=24, choices=ContactCategory.choices, blank=True, default="", db_index=True,
+    )
     contact_type = models.CharField(max_length=120, blank=True)
     name = models.CharField(max_length=200)
     role = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=80, blank=True)
+    whatsapp = models.CharField("WhatsApp", max_length=80, blank=True, default="")
     teams = models.CharField(max_length=200, blank=True)
+    service_hours = models.CharField("horário de atendimento", max_length=160, blank=True, default="")
     notes = models.TextField(blank=True)
     escalation_level = models.PositiveSmallIntegerField(default=1)
     active = models.BooleanField(default=True, db_index=True)
