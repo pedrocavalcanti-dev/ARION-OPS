@@ -44,3 +44,15 @@ Documentação técnica das definições canônicas, regras de elegibilidade, de
 - **Coleta periódica horária persistente (`OTRSBacklogCheckpoint`):**
   - Migration aditiva `integracoes.0023_otrsbacklogcheckpoint`.
   - `capture_hourly_backlog_checkpoint()` registra automaticamente um checkpoint horário leve e idempotente (`scope_signature`, `slot_at`) ao final de cada sincronização OTRS aplicada, sem consultas adicionais ao OTRS e sem sobrescrever slots anteriores.
+
+## 5. Comparação Histórica da Planta CMDB × Volume de Chamados
+
+- **Persistência mensal de snapshots da planta (`CMDBPlantMonthlySnapshot` e `CMDBPlantMonthlySlice`):**
+  - Migration aditiva `integracoes.0024_cmdb_plant_monthly_snapshot`.
+  - Cada sincronização CMDB aplicada (`CMDBSyncService.run(apply=True)`) e o comando idempotente `capturar_snapshot_planta_cmdb` registram o tamanho real da planta no mês corrente (`total_links`, `active_links`, `canceled_links`, `maintenance_links`) e recortes dimensionais por `(contracting_client, canonical_project, uf)` compatíveis com Data Scope.
+  - Importações verificadas em `base_links.CMDBImport` podem ser consolidadas explicitamente (`--include-imports`) com cobertura marcada como `PARTIAL` e data de captura visível.
+  - **Proibição de retroprojeção:** meses anteriores ao primeiro snapshot verificado exibem **`Base histórica indisponível`** (`coverage_status="UNAVAILABLE"`), sem projetar a planta atual para o passado nem inventar datas de ativação/cancelamento.
+- **Serviço e endpoint analítico (`painel/services/plant_history.py`, `/api/analytics/plant-history/`):**
+  - Reutiliza `AnalyticsQueryService.canonical_created_tickets` para manter paridade exata de chamados mensais com Dashboard e Cockpit.
+  - Calcula `tickets_per_100_links = (tickets / active_links) * 100`, `affected_links_pct = (affected_links / active_links) * 100` e variações mês a mês apenas quando há denominador confiável (`active_links > 0`), sinalizando explicitamente meses em andamento (`is_partial_month=True`).
+  - Integrado ao Dashboard (`/dashboard/`) na seção **Evolução da planta × Volume de chamados**, com alternância entre **Taxas proporcionais** e **Valores absolutos** e filtros por operadora contratante, projeto/cliente canônico e UF respeitando Data Scope no backend.
