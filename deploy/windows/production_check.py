@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path, PurePosixPath
-import re
+from pathlib import Path
 import sys
 from importlib.util import find_spec
 
@@ -33,7 +31,7 @@ def _effective_env(name: str, file_values: dict[str, str | None]) -> str:
     return os.environ.get(name, file_values.get(name) or "").strip()
 
 
-def main() -> int:
+def main(*, build_only=False) -> int:
     try:
         from dotenv import dotenv_values
         file_values = dotenv_values(PROJECT_ROOT / ".env")
@@ -107,58 +105,11 @@ def main() -> int:
     check(getattr(settings, "ARION_WEB_BIND", None) == "127.0.0.1", "bind Waitress", "127.0.0.1")
     check(find_spec("waitress") is not None, "Waitress", "dependência instalada")
 
-    manifest_path = Path(settings.ARION_FRONTEND_MANIFEST_PATH)
-    try:
-        frontend_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        frontend_manifest = None
-    check(isinstance(frontend_manifest, dict) and bool(frontend_manifest), "build frontend", "manifest presente")
-
-    if isinstance(frontend_manifest, dict):
-        template_root = DJANGO_ROOT / "templates"
-        references = set()
-        pattern = re.compile(r"\{%\s*arion_js\s+['\"](js/[A-Za-z0-9_./-]+\.js)['\"]\s*%\}")
-        for template in template_root.rglob("*.html"):
-            references.update(pattern.findall(template.read_text(encoding="utf-8")))
-        check(references == set(frontend_manifest), "referências JS", "templates cobertos pelo manifest" if references == set(frontend_manifest) else "referências e manifest divergem")
-        output_files_ok = True
-        for value in frontend_manifest.values():
-            pure = PurePosixPath(value) if isinstance(value, str) else PurePosixPath("invalid")
-            candidate = DJANGO_ROOT / "static" / Path(*pure.parts)
-            if (not isinstance(value, str) or not value.startswith("arion_build/")
-                    or ".." in pure.parts or pure.suffix != ".js" or not candidate.is_file()):
-                output_files_ok = False
-                break
-        check(output_files_ok, "bundles de produção", "arquivos presentes, sem source maps")
-
-    source_static_js = []
-    for static_dir in settings.STATICFILES_DIRS:
-        static_dir = Path(static_dir)
-        source_static_js.extend(
-            path for path in static_dir.rglob("*.js")
-            if path.relative_to(static_dir).parts[:1] != ("arion_build",)
-        )
-    check(not source_static_js, "fontes JS em STATICFILES_DIRS", "nenhuma fora de arion_build" if not source_static_js else "há fontes legíveis em diretório coletado")
-
-    static_root = Path(settings.STATIC_ROOT)
-    storage_manifest_path = static_root / "staticfiles.json"
-    try:
-        storage_manifest = json.loads(storage_manifest_path.read_text(encoding="utf-8"))
-        storage_paths = storage_manifest.get("paths", {})
-    except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
-        storage_paths = {}
-    storage_ok = bool(storage_paths)
-    if isinstance(frontend_manifest, dict):
-        for value in frontend_manifest.values():
-            hashed = storage_paths.get(value)
-            if not hashed or not (static_root / Path(*PurePosixPath(hashed).parts)).is_file():
-                storage_ok = False
-                break
-    source_maps = list(static_root.rglob("*.map")) if static_root.exists() else []
-    collected_sources = list((static_root / "js").rglob("*.js")) if (static_root / "js").is_dir() else []
-    check(storage_ok, "collectstatic", "manifest com todos os bundles" if storage_ok else "execute collectstatic após o build")
-    check(not source_maps, "source maps coletados", "nenhum" if not source_maps else "remova-os de STATIC_ROOT")
-    check(not collected_sources, "sources JS coletados", "nenhum" if not collected_sources else "há fontes legíveis sob STATIC_ROOT/js")
+    from config.frontend_checks import check_frontend_assets
+    check_frontend_assets(settings, check, collected=not build_only)
+    if build_only:
+        say(failures == 0, "resultado preflight de build", "coleta e saúde dos serviços ainda não verificadas")
+        return 0 if failures == 0 else 1
 
     log_root = PROJECT_ROOT / "var" / "logs"
     check(log_root.is_dir() and os.access(log_root, os.W_OK), "diretório de logs", "presente e gravável" if log_root.is_dir() and os.access(log_root, os.W_OK) else "crie/proteja var/logs")
@@ -185,4 +136,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--build-only", action="store_true", help="Validar build antes da parada; não verifica collectstatic/saúde.")
+    raise SystemExit(main(build_only=parser.parse_args().build_only))

@@ -74,6 +74,42 @@ try {
     if (-not $failed -or @($script:Calls) -contains 'git:fetch origin main') { throw 'Atualização deve preservar alterações locais e parar antes do fetch.' }
     Write-Output 'OK: atualização preserva alterações locais e recusa fetch'
 
+    function Get-RoleStatus([string]$Role) {
+        $script:Calls.Add("query:$Role")
+        return [pscustomobject]@{ Role = $Role; State = 'stopped'; Code = 1 }
+    }
+    function Invoke-Native([string]$File, [string[]]$Arguments, [string]$Label, [switch]$AllowNonZero) {
+        $script:Calls.Add($Label)
+        if ($script:FailOn -eq $Label) { throw 'falha simulada' }
+        return [pscustomobject]@{ Code = 0; Output = 'No planned migration operations.' }
+    }
+    $script:GitResponses = @{
+        'branch --show-current' = 'main'; 'status --porcelain=v1' = ''
+        'rev-parse HEAD' = 'before'; 'rev-parse origin/main' = 'after'
+        'diff --name-only before..before' = 'frontend_src/js/test.js'
+    }
+    Reset-Calls
+    $script:FailOn = 'Preflight de assets antes da parada'
+    $failed = $false
+    try { Invoke-Update } catch { $failed = $true }
+    if (-not $failed -or @($script:Calls) -contains 'stop-arion:worker') { throw 'Preflight falho não pode parar serviços.' }
+    if (@($script:Calls) -notcontains 'query:web' -or @($script:Calls) -notcontains 'query:worker') { throw 'Falha deve informar estado Web/Worker.' }
+    Write-Output 'OK: falha de assets antes da parada preserva serviços e informa estado'
+
+    Reset-Calls
+    $script:FailOn = 'production-check:'
+    $failed = $false
+    try { Invoke-Update } catch { $failed = $true }
+    if (-not $failed -or @($script:Calls) -contains 'start-arion:web') { throw 'Production-check falho não pode reiniciar serviços.' }
+    if ($script:Calls.IndexOf('Preflight de assets antes da parada') -gt $script:Calls.IndexOf('stop-arion:worker')) { throw 'Preflight deve preceder parada.' }
+    if (@($script:Calls) -notcontains 'Coletar arquivos estáticos') { throw 'Frontend alterado exige collectstatic.' }
+    Write-Output 'OK: falha após coleta informa parada e impede reinício inseguro'
+
+    Reset-Calls
+    Invoke-Update
+    if ($script:Calls.IndexOf('production-check:') -gt $script:Calls.IndexOf('start-arion:web') -or @($script:Calls) -notcontains 'web-health') { throw 'Update exige production-check antes do start e HTTP depois.' }
+    Write-Output 'OK: atualização valida build, coleta, production-check e saúde HTTP na ordem'
+
     $sanitized = Protect-Text 'password=demo-value token:sample-value https://user:pass@example.invalid/path'
     if ($sanitized -match 'demo-value|sample-value|user:pass') { throw 'O sanitizador deixou um valor sensível na mensagem.' }
     Write-Output 'OK: sanitização remove valores sensíveis de logs'

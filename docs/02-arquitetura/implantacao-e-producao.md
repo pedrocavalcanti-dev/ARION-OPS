@@ -92,6 +92,10 @@ O gerenciador `deploy/windows/ARION-OPS.bat` ou `manage-arion.ps1` coordena Star
 
 O build reutiliza Node 24 e o lockfile: `npm ci`, seguido de `npm run build:production`. Gera bundles com fingerprint, minificação/ofuscação e manifest; Service Worker é minificado sem ofuscação. Não publica fontes legíveis de `frontend_src` nem source maps. `collectstatic` coleta CSS e assets com manifest para WhiteNoise. O build deve existir antes de inicializar Django em produção; se o checkout novo ainda não tem manifest, executar o build antes dos comandos Django de pré-validação.
 
+JavaScript próprio tem fonte canônica em `frontend_src/js/`, carregado por `arion_js` ou `arion_bundle_js`; o Service Worker fica em `frontend_src/pwa/service-worker.js` e usa a entrada reservada `__service_worker__`. Ofuscação com seed fixa mantém bundles determinísticos para as mesmas fontes/dependências. A distribuição pública `vendor/echarts/echarts.min.js` é autorizada explicitamente, sem autorizar outros scripts em `vendor`. Django Admin continua vindo do app nativo. O controle de fontes segue o ignore padrão de diretórios ocultos do Django (staging do build não é coletado).
+
+O gerenciador Windows executa build e `production_check.py --build-only` antes da parada; depois da coleta limpa executa o production-check completo antes de iniciar. O preflight não atesta coleta nem saúde. Erros informam o estado Web/Worker e exigem recuperação explícita quando não é seguro iniciar; nunca restauram MySQL automaticamente. Para a candidata `v1.4.2` já migrada, seguir a [recuperação específica](../08-releases/v1.4.2-implantacao-windows.md#recuperação-da-implantação-interrompida-em-e60a4fc).
+
 `docs/08-releases/releases.json` é a fonte única da versão para HTML, `/api/version/`, PWA, Sobre e Atualizações. Git contém **1.4.0**; a tag `v1.4.0` identifica o release de código. Consultar a revisão instalada com `git rev-parse HEAD`, a página Sobre e o endpoint de versão no domínio autorizado. A publicação de um commit posterior de documentação não regrava a tag histórica.
 
 ## Processo completo de atualização

@@ -15,6 +15,7 @@ from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.chamados.models import TicketTracking
 from aplicativos.integracoes.models import CMDBLinkMirror, CMDBOperatorMirror, OTRSTicket, OTRSTicketConfigItem
 from aplicativos.mapa.services.analytics import _bounds
+from config.templatetags.arion_assets import arion_js
 
 
 def _frontend_js(relative_path):
@@ -92,7 +93,7 @@ class MapMirrorTests(TestCase):
         self.assertContains(response, 'data-token=""')
         self.assertNotContains(response, "data/demo/")
         self.assertContains(response, "data-api-url")
-        self.assertContains(response, "js/mapa/mapa-real.js")
+        self.assertContains(response, arion_js("js/mapa/mapa-real.js"))
 
     def test_map_template_matches_required_javascript_dom_selectors(self):
         response = self.client.get(reverse("mapa:index"))

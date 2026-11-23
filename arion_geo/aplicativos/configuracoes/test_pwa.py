@@ -78,7 +78,7 @@ class PwaDeliveryTests(SimpleTestCase):
         entrypoints = set()
         for template in templates_root.rglob("*.html"):
             content = template.read_text(encoding="utf-8")
-            entrypoints.update(re.findall(r"\{%\s*arion_js\s+['\"](js/[A-Za-z0-9_./-]+\.js)['\"]\s*%\}", content))
+            entrypoints.update(re.findall(r"\{%\s*(?:arion_js|arion_bundle_js)\s+['\"](js/[A-Za-z0-9_./-]+\.js)['\"]\s*%\}", content))
 
         build = Path("frontend_src/build.mjs").read_text(encoding="utf-8")
         self.assertGreaterEqual(len(entrypoints), 15)
@@ -96,7 +96,7 @@ class PwaDeliveryTests(SimpleTestCase):
         self.assertIn("sourcemap: false", build)
         self.assertIn('manifest.__service_worker__', build)
         self.assertIn('esbuild.transform(workerSource', build)
-        self.assertIn('path.join(staticRoot, "pwa", "service-worker.js")', build)
+        self.assertIn('path.join(sourceRoot, "pwa", "service-worker.js")', build)
 
     def test_global_update_notice_is_responsive_and_waits_for_user_action(self):
         partial = Path("arion_geo/templates/partials/pwa_update.html").read_text(encoding="utf-8")

@@ -3,7 +3,7 @@
 {% block title %}Brevo · Integrações · ARION OPS{% endblock %}
 {% block integration_title %}Brevo{% endblock %}
 {% block integration_description %}E-mails transacionais · ARION OPS{% endblock %}
-{% block extra_js %}{{ block.super }}<script src="{% static 'js/integracoes/brevo.js' %}" defer></script>{% endblock %}
+{% block extra_js %}{{ block.super }}<script src="{% arion_js 'js/integracoes/brevo.js' %}" defer></script>{% endblock %}
 {% block integration_content %}
 <div class="integration-detail-top"><a class="integration-back" href="{% url 'configuracoes:integrations' %}">← Todas as integrações</a></div>
 <section class="integration-overview-panel brevo-overview">

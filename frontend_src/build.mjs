@@ -69,6 +69,9 @@ const references = new Set();
 const tagPattern = /\{\%\s*(?:arion_js|arion_bundle_js)\s+['"](js\/[A-Za-z0-9_./-]+\.js)['"]\s*%\}/g;
 for (const templateFile of templateFiles) {
   const html = await readFile(templateFile, "utf8");
+  if (/\{%\s*static\s+['"]js\/[^'"]+\.js['"]/.test(html)) {
+    throw new Error(`First-party JavaScript must use an asset tag (${path.relative(templateRoot, templateFile)}).`);
+  }
   for (const match of html.matchAll(tagPattern)) references.add(match[1]);
 }
 if (!references.size) throw new Error("No arion_js template entrypoints were found.");
@@ -127,6 +130,7 @@ try {
     });
     const minified = bundle.outputFiles[0].text;
     const protectedCode = JavaScriptObfuscator.obfuscate(minified, {
+      seed: 142,
       compact: true,
       identifierNamesGenerator: "hexadecimal",
       renameGlobals: false,
@@ -156,7 +160,7 @@ try {
     manifest[reference] = `arion_build/${relativeOutput.split(path.sep).join("/")}`;
   }
 
-  const workerSource = await readFile(path.join(staticRoot, "pwa", "service-worker.js"), "utf8");
+  const workerSource = await readFile(path.join(sourceRoot, "pwa", "service-worker.js"), "utf8");
   const workerBuild = await esbuild.transform(workerSource, {
     loader: "js",
     minify: true,

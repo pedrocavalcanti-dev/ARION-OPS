@@ -294,7 +294,7 @@ class QualityTreatmentCreationTests(QualityModuleTestCase):
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "/static/js/qualidade/checklist.js")
         self.assertContains(page, "/static/css/qualidade/qualidade.css")
-        self.assertTrue(Path("arion_geo/static/js/qualidade/checklist.js").is_file())
+        self.assertTrue(Path("frontend_src/js/qualidade/checklist.js").is_file())
         self.assertTrue(Path("arion_geo/static/css/qualidade/qualidade.css").is_file())
         response = self.client.post(
             reverse("qualidade:checklist_toggle", kwargs={"codigo": self.order.code, "action_id": action.pk}),

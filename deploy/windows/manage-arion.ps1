@@ -203,6 +203,23 @@ function Confirm-Exact([string]$Prompt, [string]$Expected) {
 }
 
 function Invoke-Update {
+    Push-Location -LiteralPath $script:Root
+    try { Invoke-UpdateCore }
+    catch {
+        Write-Log 'Atualização interrompida. Não houve restauração automática do MySQL nem reinício após validação falha.' 'ERRO'
+        try {
+            foreach ($role in @('web', 'worker')) {
+                $state = Get-RoleStatus $role
+                Write-Log ("Estado após falha: {0}={1}" -f $role, $state.State) 'WARN'
+            }
+        } catch { Write-Log 'Não foi possível confirmar o estado dos serviços; confira status-arion.ps1 antes de qualquer recuperação.' 'ERRO' }
+        Write-Log 'Corrija a falha, execute production-check.ps1 e use manage-arion.ps1 -Action Start; valide /health/ e acesso autenticado. Não repita migrations já aplicadas.' 'WARN'
+        throw
+    }
+    finally { Pop-Location }
+}
+
+function Invoke-UpdateCore {
     Assert-Project
     Assert-AuthorizedOperator
     Enter-OperationLock
@@ -262,6 +279,16 @@ function Invoke-Update {
     } finally {
         if ($null -eq $oldEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $oldEnv }
     }
+    # Build and reference checks must fail while the existing services are still running.
+    if ($frontendDependencyChange) { [void](Invoke-Native 'npm.cmd' @('ci') 'Instalar dependências frontend') }
+    if ($frontend.Count -gt 0) { [void](Invoke-Native 'npm.cmd' @('run', 'build:production') 'Compilar frontend antes da parada') }
+    $preflightEnv = $env:ARION_ENV
+    try {
+        $env:ARION_ENV = 'production'
+        [void](Invoke-Native $python @((Join-Path $script:Root 'deploy\windows\production_check.py'), '--build-only') 'Preflight de assets antes da parada')
+    } finally {
+        if ($null -eq $preflightEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $preflightEnv }
+    }
     Invoke-ArionScript 'stop-arion' @('-Role', 'worker')
     Invoke-ArionScript 'stop-arion' @('-Role', 'web')
     Assert-RoleState 'stopped'
@@ -269,7 +296,6 @@ function Invoke-Update {
         $requirements = Join-Path $script:Root 'requirements-prod.txt'
         [void](Invoke-Native $python @('-m', 'pip', 'install', '-r', $requirements) 'Instalar dependências Python')
     }
-    if ($frontendDependencyChange) { [void](Invoke-Native 'npm.cmd' @('ci') 'Instalar dependências frontend') }
     if ($applyMigrations) {
         $oldMigrationEnv = $env:ARION_ENV
         try {
@@ -280,11 +306,10 @@ function Invoke-Update {
         }
     }
     if ($frontend.Count -gt 0) {
-        if ($changed | Where-Object { $_ -match '^(frontend_src/|package\.json$|package-lock\.json$)' }) { [void](Invoke-Native 'npm.cmd' @('run', 'build:production') 'Compilar frontend') }
         $oldStaticEnv = $env:ARION_ENV
         try {
             $env:ARION_ENV = 'production'
-            [void](Invoke-Native $python @($manage, 'collectstatic', '--noinput') 'Coletar arquivos estáticos')
+            [void](Invoke-Native $python @($manage, 'collectstatic', '--noinput', '--clear') 'Coletar arquivos estáticos')
         } finally {
             if ($null -eq $oldStaticEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $oldStaticEnv }
         }
@@ -297,6 +322,7 @@ function Invoke-Update {
     } finally {
         if ($null -eq $oldCheckEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $oldCheckEnv }
     }
+    Invoke-ArionScript 'production-check'
     try {
         Invoke-ArionScript 'start-arion' @('-Role', 'web')
         Invoke-ArionScript 'start-arion' @('-Role', 'worker')

@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}ARION OPS · {{ order.code }} · Qualidade{% endblock %}
 {% block quality_title %}{{ order.code }}{% endblock %}
-{% block extra_js %}{{ block.super }}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script><script defer src="{% static 'js/qualidade/archive.js' %}"></script>{% if active_tab == "monitoramento" %}<script defer src="{% static 'js/qualidade/monitoring.js' %}"></script>{% endif %}{% endblock %}
+{% block extra_js %}{{ block.super }}<script defer src="{% arion_bundle_js 'js/qualidade/lists.js' %}"></script><script defer src="{% arion_js 'js/qualidade/archive.js' %}"></script>{% if active_tab == "monitoramento" %}<script defer src="{% arion_js 'js/qualidade/monitoring.js' %}"></script>{% endif %}{% endblock %}
 {% block quality_content %}
 <main class="quality-order-detail"{% if open_edit_dialog %} data-quality-open-edit-dialog="true"{% endif %}>
   <a class="quality-back-link quality-order-back" href="{% url 'qualidade:ordens' %}">← Ordens de Qualidade</a>

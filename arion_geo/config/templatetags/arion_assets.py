@@ -33,7 +33,9 @@ def _production_manifest():
 @register.simple_tag
 def arion_js(source_path):
     path = PurePosixPath(str(source_path))
-    if path.as_posix() != str(source_path) or path.suffix != ".js" or not path.parts or path.parts[0] != "js":
+    if (".." in path.parts or "\\" in str(source_path)
+            or path.as_posix() != str(source_path) or path.suffix != ".js"
+            or not path.parts or path.parts[0] != "js"):
         raise ImproperlyConfigured("O asset JavaScript solicitado não pertence ao diretório de fontes permitido.")
     if settings.ARION_PRODUCTION:
         try:
@@ -48,7 +50,9 @@ def arion_js(source_path):
 def arion_bundle_js(source_path):
     """Serve a built bundle when available, including during local visual review."""
     path = PurePosixPath(str(source_path))
-    if path.as_posix() != str(source_path) or path.suffix != ".js" or not path.parts or path.parts[0] != "js":
+    if (".." in path.parts or "\\" in str(source_path)
+            or path.as_posix() != str(source_path) or path.suffix != ".js"
+            or not path.parts or path.parts[0] != "js"):
         raise ImproperlyConfigured("O asset JavaScript solicitado não pertence ao diretório de fontes permitido.")
     if settings.ARION_PRODUCTION:
         try:

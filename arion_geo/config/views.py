@@ -58,9 +58,6 @@ def pwa_manifest(request):
 @require_GET
 def pwa_service_worker(request):
     """Serve the worker from / so its scope can include the full application."""
-    path = finders.find("pwa/service-worker.js")
-    if not path:
-        return HttpResponse(status=404)
     if settings.ARION_PRODUCTION:
         try:
             manifest = json.loads(Path(settings.ARION_FRONTEND_MANIFEST_PATH).read_text(encoding="utf-8"))
@@ -70,6 +67,10 @@ def pwa_service_worker(request):
             path = None
         if not path:
             return HttpResponse("Service Worker build unavailable.", status=503, content_type="text/plain; charset=utf-8")
+    else:
+        path = finders.find("pwa/service-worker.js")
+        if not path:
+            return HttpResponse(status=404)
     app_version = release_catalog()["version"]
     response = HttpResponse(
         _pwa_service_worker_source(path, app_version, settings.ARION_FRONTEND_MANIFEST_PATH),
