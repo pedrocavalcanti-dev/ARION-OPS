@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from ..models import OTRSBacklogHistory, OTRSBacklogInterval
-from ..otrs_queues import NOC_QUEUE_NAME
+from ..otrs_queues import NOC_QUEUE_NAMES, NOC_HISTORY_SCOPE
 from .otrs_status import BACKLOG_STATUSES, status_for_external_state
 from .otrs_sync import normalize_responsibility
 from .sync_common import source_datetime
@@ -38,6 +38,7 @@ def reconstruct_ticket(ticket, events, *, queue_id, through):
     dynamic-field change establishes its baseline, never its present-day value.
     """
     created = ticket["created_at"]
+    queue_ids = {queue_id} if isinstance(queue_id, int) else set(queue_id)
     unique = {}
     for event in events:
         if event["id"] in unique and unique[event["id"]] != event:
@@ -55,13 +56,14 @@ def reconstruct_ticket(ticket, events, *, queue_id, through):
         if end <= start:
             return
         state = event["status"] if event else ""
-        if known and (event["queue_id"] != queue_id or state not in BACKLOG_STATUSES
+        if known and (event["queue_id"] not in queue_ids or state not in BACKLOG_STATUSES
                       or responsibility == "IMPROCEDENTE"):
             return
         result.append({"ticket_external_id": ticket["id"], "source_event_id": event["id"] if event else 0,
                        "source_created_at": created, "started_at": start, "ended_at": end,
                        "known": known, "business_status": state,
                        "external_state_name": event.get("state_name", "") if event else "",
+                       "queue_name": event.get("queue_name", "") if event else "",
                        "responsibility": responsibility if known else ""})
 
     append(created, events[0]["at"] if events else through)
@@ -97,10 +99,11 @@ def read_history(client):
         if len(engines) != len(tables) or any(str(r["engine"]).casefold() != "innodb" for r in engines):
             raise ValueError("Origem sem tabelas transacionais verificáveis; cobertura anterior preservada.")
         through = coverage_datetime(client.execute_select("SELECT UTC_TIMESTAMP() AS observed_at")[0]["observed_at"])
-        queues = client.execute_select("SELECT id, name FROM queue WHERE name=%s", (NOC_QUEUE_NAME,))
-        if len(queues) != 1:
-            raise ValueError("Fila NOC exata não encontrada de forma única.")
-        queue_id = int(queues[0]["id"])
+        queues = client.execute_select("SELECT id, name FROM queue WHERE name IN (%s,%s)", NOC_QUEUE_NAMES)
+        if len(queues) != len(NOC_QUEUE_NAMES) or {r["name"] for r in queues} != set(NOC_QUEUE_NAMES):
+            raise ValueError("Filas NOC exatas não encontradas de forma única.")
+        queue_ids = tuple(int(row["id"]) for row in queues)
+        queue_names = {int(row["id"]): row["name"] for row in queues}
         states = {int(r["id"]): r["name"] for r in client.execute_select("SELECT id, name FROM ticket_state")}
         types = {r["name"]: int(r["id"]) for r in client.execute_select("SELECT id, name FROM ticket_history_type")}
         if not {"NewTicket", "Move", "StateUpdate", "TicketDynamicFieldUpdate", "Merged"}.issubset(types):
@@ -109,8 +112,8 @@ def read_history(client):
         if len(fields) != 1:
             raise ValueError("Campo de procedência OTRS ausente ou ambíguo.")
         candidates = client.execute_select(
-            "SELECT DISTINCT ticket_id AS id FROM ticket_history WHERE queue_id=%s "
-            "UNION SELECT id FROM ticket WHERE queue_id=%s", (queue_id, queue_id))
+            "SELECT DISTINCT ticket_id AS id FROM ticket_history WHERE queue_id IN (%s,%s) "
+            "UNION SELECT id FROM ticket WHERE queue_id IN (%s,%s)", (*queue_ids, *queue_ids))
         ids = sorted({int(r["id"]) for r in candidates})
         if not ids:
             raise ValueError("População histórica NOC vazia; cobertura anterior preservada.")
@@ -146,6 +149,7 @@ def read_history(client):
                     raise ValueError("Evento sem timestamp/estado verificável.")
                 state_name = states[int(row["state_id"])]
                 event = {"id": int(row["id"]), "at": at, "queue_id": int(row["queue_id"]),
+                         "queue_name": queue_names.get(int(row["queue_id"]), ""),
                          "state_id": int(row["state_id"]), "state_name": state_name,
                          "status": status_for_external_state(state_name)}
                 if row["classification_change"] is not None:
@@ -160,7 +164,7 @@ def read_history(client):
                           "state_id": int(row["ticket_state_id"]),
                           "responsibility": normalize_responsibility(row["responsibility"])}
                 events = events_by_ticket[ticket["id"]]
-                ticket_intervals = reconstruct_ticket(ticket, events, queue_id=queue_id, through=through)
+                ticket_intervals = reconstruct_ticket(ticket, events, queue_id=queue_ids, through=through)
                 intervals.extend(ticket_intervals)
                 diagnostics["tickets"] += 1
                 diagnostics["events"] += len(events)
@@ -171,14 +175,15 @@ def read_history(client):
         # an apparently complete population by silently dropping it.
         if diagnostics["missing_source_tickets"]:
             raise ValueError("Histórico com tickets ausentes na origem; cobertura anterior preservada.")
-    return {"through": through, "earliest_at": earliest, "intervals": intervals, "diagnostics": dict(diagnostics)}
+    return {"through": through, "earliest_at": earliest, "intervals": intervals,
+            "diagnostics": {**dict(diagnostics), "queues": list(NOC_QUEUE_NAMES)}}
 
 
 def sync_history(client):
     data = read_history(client)
     with transaction.atomic():
         coverage, _ = OTRSBacklogHistory.objects.select_for_update().get_or_create(
-            queue_name=NOC_QUEUE_NAME, defaults={"earliest_at": data["earliest_at"], "through": data["through"]})
+            queue_name=NOC_HISTORY_SCOPE, defaults={"earliest_at": data["earliest_at"], "through": data["through"]})
         coverage.intervals.all().delete()
         OTRSBacklogInterval.objects.bulk_create([
             OTRSBacklogInterval(coverage=coverage, **interval) for interval in data["intervals"]

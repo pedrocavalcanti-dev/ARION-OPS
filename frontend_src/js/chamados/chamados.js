@@ -163,12 +163,25 @@
     const meta = document.createElement("div");
     meta.className = "drawer-meta";
     appendMeta(meta, "Status oficial OTRS", data.ticket.status_label || data.ticket.external_state);
+    appendMeta(meta, "Fila atual", data.ticket.queue);
     appendMeta(meta, "Prioridade OTRS", data.ticket.priority);
     appendMeta(meta, "Criado em", data.ticket.created_at ? new Date(data.ticket.created_at).toLocaleString("pt-BR") : "Sem data");
     appendMeta(meta, "Aging", `${data.ticket.age_label || "Sem data de criação"}${data.ticket.over_24h ? " · ARION >24h" : ""}`);
     if (data.ticket.closing_reason_label) appendMeta(meta, "Motivo de encerramento", data.ticket.closing_reason_label);
     summary.appendChild(meta);
     host.appendChild(summary);
+    const events = data.ticket.source_events || [];
+    if (events.length) {
+      const history = document.createElement("details");
+      history.className = "drawer-original-title";
+      appendText(history, "summary", "Histórico oficial de atendimento OTRS · até 80 eventos recentes");
+      const eventLabels = { NewTicket: "Criação", Move: "Transferência", StateUpdate: "Alteração de estado", Merged: "Mesclagem" };
+      events.forEach((event) => {
+        const date = new Date(event.at).toLocaleString("pt-BR");
+        appendText(history, "p", `${date} · ${eventLabels[event.type] || event.type} · ${event.queue} · ${event.state}`);
+      });
+      host.appendChild(history);
+    }
 
     const headerLink = drawer.querySelector("[data-drawer-ticket-link]");
     const headerNumber = drawer.querySelector("[data-drawer-ticket-number]");

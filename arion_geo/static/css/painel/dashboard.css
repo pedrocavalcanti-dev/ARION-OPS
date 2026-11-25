@@ -325,6 +325,9 @@ html[data-theme="light"] .kpi-operators .op-dot { box-shadow: 0 0 0 2px #fff; }
 .dashboard-status-history-item[data-tone="green"]::before { background:var(--accent-green); }
 .dashboard-status-history-item[data-tone="rose"]::before { background:var(--accent-rose); }
 .dashboard-status-history-item strong { color:var(--text-secondary); font-size:10px; font-weight:600; font-variant-numeric:tabular-nums; }
+.dashboard-attendance { margin:0 0 16px; padding:10px 13px; border:1px solid var(--border-primary); border-radius:10px; color:var(--text-secondary); font-size:11px; }
+.dashboard-attendance summary { cursor:pointer; }
+.dashboard-attendance summary:focus-visible { outline:2px solid var(--accent-green); outline-offset:4px; }
 .dashboard-queue-link { display:inline-flex; align-items:center; gap:6px; margin-top:5px; color:var(--text-secondary); font-size:10px; text-decoration:none; }
 .dashboard-queue-link:hover { color:var(--text-primary); text-decoration:underline; text-underline-offset:3px; }
 .dashboard-ticket-dimensions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }.dashboard-ticket-dimensions h3 { margin:8px 0; color:var(--text-secondary); font-size:11px; }.dashboard-ticket-dimensions>section>small { color:var(--text-muted); font-size:9px; }

@@ -1,6 +1,11 @@
 """OTRS queues that back the operational ticket scopes in the Cockpit."""
 
 NOC_QUEUE_NAME = "NOC - ATACADO"
+TRIAGE_QUEUE_NAME = "NOC - TRIAGEM"
+NOC_QUEUE_NAMES = (NOC_QUEUE_NAME, TRIAGE_QUEUE_NAME)
+# Separate coverage key: an older N2-only history must never imply N1 coverage.
+NOC_HISTORY_SCOPE = "|".join(NOC_QUEUE_NAMES)
+ATTENDANCE_LEVELS = {TRIAGE_QUEUE_NAME: "N1", NOC_QUEUE_NAME: "N2"}
 CANCELLATION_REQUEST_QUEUE_NAME = "NOC - CANCELAMENTOS NGO"
 EQUIPMENT_REMOVAL_QUEUE_NAME = "NOC - RETIRA EQUIPAMENTO"
 # The source KPI profile stores the real queue name with an en dash.
@@ -12,7 +17,7 @@ CANCELLATION_QUEUE_NAMES = (
     PAYMENT_PENDING_QUEUE_NAME,
 )
 
-COCKPIT_QUEUE_NAMES = (NOC_QUEUE_NAME, *CANCELLATION_QUEUE_NAMES)
+COCKPIT_QUEUE_NAMES = (*NOC_QUEUE_NAMES, *CANCELLATION_QUEUE_NAMES)
 
 # These criteria were read from the OTRS KPI definitions (kpi.search), not
 # inferred from ticket titles. Treatment shares the request queue and is

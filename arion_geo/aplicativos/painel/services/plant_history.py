@@ -619,7 +619,7 @@ class PlantHistoryService:
                 "latest_full_active_links": latest_full_covered["active_links"] if latest_full_covered else None,
             },
             "methodology_note": (
-                "Volume de chamados segue a regra canônica do Dashboard/Cockpit (fila NOC - ATACADO). "
+                "Volume de chamados segue a regra canônica do Dashboard/Cockpit (NOC - ATACADO + NOC - TRIAGEM). "
                 "A planta mensal usa apenas snapshots verificados do CMDB (sincronizações e importações registradas). "
                 "Meses anteriores ao primeiro snapshot exibem 'Base histórica indisponível' sem retroprojetar a planta atual."
             ),

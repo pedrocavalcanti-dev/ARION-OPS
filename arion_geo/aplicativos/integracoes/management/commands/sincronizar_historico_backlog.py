@@ -28,7 +28,7 @@ class Command(BaseCommand):
             if options["apply"]:
                 state, _ = IntegrationSyncState.objects.get_or_create(key="otrs_backlog_history")
                 run = IntegrationRun.objects.create(integration=integration, operation=IntegrationRun.Operation.READ,
-                    status=IntegrationRun.Status.RUNNING, message="Backlog history: NOC - ATACADO")
+                    status=IntegrationRun.Status.RUNNING, message="Backlog history: NOC - ATACADO + NOC - TRIAGEM")
                 state.last_started_at = run.started_at
                 state.save(update_fields=("last_started_at", "updated_at"))
             client = configured_otrs_client(integration)

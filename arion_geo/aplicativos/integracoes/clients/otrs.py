@@ -306,12 +306,19 @@ class OTRSReadOnlyClient:
         if self._active_connection is not None:
             yield self
             return
+        application_error = None
         with self._connection() as connection:
             self._active_connection = connection
             try:
                 yield self
+            except Exception as exc:
+                # SQL failures are already sanitized by execute_select. Keep
+                # local mirror/validation failures out of the driver category.
+                application_error = exc
             finally:
                 self._active_connection = None
+        if application_error is not None:
+            raise application_error
 
     @contextmanager
     def read_only_snapshot(self):

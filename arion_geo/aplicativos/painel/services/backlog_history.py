@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from aplicativos.configuracoes.data_scope import DataScopeService
 from aplicativos.integracoes.models import OTRSBacklogHistory, OTRSTicket
-from aplicativos.integracoes.otrs_queues import NOC_QUEUE_NAME
+from aplicativos.integracoes.otrs_queues import NOC_QUEUE_NAMES, NOC_HISTORY_SCOPE
 from aplicativos.integracoes.services.otrs_status import BACKLOG_STATUSES, business_status_query
 
 
@@ -30,6 +30,9 @@ def _scoped_intervals(coverage, *, user, links, filters, apply_filters):
         tickets = apply_filters(tickets, links, dimension_filters)
         intervals = intervals.filter(ticket_external_id__in=tickets.values("external_id"))
     active = Q(known=True, business_status__in=BACKLOG_STATUSES) & ~Q(responsibility="IMPROCEDENTE")
+    if (filters or {}).get("queue"):
+        # Queue membership belongs to the historical interval, never today's mirror.
+        intervals = intervals.filter(Q(known=False) | Q(queue_name=filters["queue"]))
     if (filters or {}).get("status"):
         active &= business_status_query("business_status", filters["status"])
     if (filters or {}).get("source_state"):
@@ -113,7 +116,7 @@ def _bucket_peaks(intervals, active_filter, buckets, instants, *, age_over_24h=F
 
 @transaction.atomic
 def reconstructed_backlog(*, user, links, filters, buckets, period_end, apply_filters):
-    coverage = OTRSBacklogHistory.objects.select_for_update().filter(queue_name=NOC_QUEUE_NAME).first()
+    coverage = OTRSBacklogHistory.objects.select_for_update().filter(queue_name=NOC_HISTORY_SCOPE).first()
     if coverage is None:
         return {
             "loaded": False, "available": False, "points": {}, "kind": "reconstructed",
@@ -121,7 +124,7 @@ def reconstructed_backlog(*, user, links, filters, buckets, period_end, apply_fi
         }
     intervals, active = _scoped_intervals(coverage, user=user, links=links, filters=filters, apply_filters=apply_filters)
     impossible = (
-        filters.get("queue") not in (None, "", NOC_QUEUE_NAME)
+        filters.get("queue") not in (None, "", *NOC_QUEUE_NAMES)
         or filters.get("origin") not in (None, "", "SUPPORT")
         or bool(filters.get("stage"))
     )
@@ -196,7 +199,7 @@ def reconstructed_backlog(*, user, links, filters, buckets, period_end, apply_fi
 
 def reconstructed_backlog_at(*, user, links, filters, target_dt, apply_filters):
     """Return exact reconstructed NOC backlog at a specific past timestamp, or explicit coverage gap."""
-    coverage = OTRSBacklogHistory.objects.filter(queue_name=NOC_QUEUE_NAME).first()
+    coverage = OTRSBacklogHistory.objects.filter(queue_name=NOC_HISTORY_SCOPE).first()
     if coverage is None:
         return {
             "available": False,

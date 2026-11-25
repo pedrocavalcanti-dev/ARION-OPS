@@ -467,6 +467,7 @@ class OTRSBacklogInterval(models.Model):
     known = models.BooleanField(default=True)
     business_status = models.CharField(max_length=16, blank=True)
     external_state_name = models.CharField(max_length=250, blank=True)
+    queue_name = models.CharField(max_length=250, blank=True)
     responsibility = models.CharField(max_length=20, blank=True)
 
     class Meta:
@@ -483,6 +484,7 @@ class OTRSTicket(models.Model):
     title = models.CharField(max_length=500, blank=True)
     queue_external_id = models.PositiveIntegerField(db_index=True)
     queue_name = models.CharField(max_length=250)
+    has_support_history = models.BooleanField(default=False, db_index=True)
     external_state_id = models.PositiveIntegerField(db_index=True)
     external_state_name = models.CharField(max_length=250)
     external_state_type = models.CharField(max_length=120, blank=True)
@@ -533,6 +535,34 @@ class OTRSTicket(models.Model):
         from aplicativos.integracoes.services.otrs_status import business_status_label
 
         return business_status_label(self.business_status)
+
+
+class OTRSTicketEvent(models.Model):
+    """Official lifecycle evidence; never stores article text or history payloads."""
+
+    external_id = models.PositiveBigIntegerField(unique=True)
+    ticket = models.ForeignKey(OTRSTicket, on_delete=models.CASCADE, related_name="queue_events")
+    event_type = models.CharField(max_length=32)
+    occurred_at = models.DateTimeField(db_index=True)
+    queue_external_id = models.PositiveIntegerField()
+    queue_name = models.CharField(max_length=250)
+    external_state_id = models.PositiveIntegerField()
+    external_state_name = models.CharField(max_length=250)
+    business_status = models.CharField(max_length=16)
+
+    class Meta:
+        indexes = [models.Index(fields=("ticket", "occurred_at"), name="otrs_event_ticket_at_idx")]
+        ordering = ("occurred_at", "external_id")
+
+
+class OTRSQueueBackfill(models.Model):
+    """Resumable keyset cursor; advanced atomically with each imported batch."""
+
+    queue_external_id = models.PositiveIntegerField(unique=True)
+    queue_name = models.CharField(max_length=250)
+    last_ticket_id = models.PositiveBigIntegerField(default=0)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
 
 class OTRSTicketConfigItem(models.Model):

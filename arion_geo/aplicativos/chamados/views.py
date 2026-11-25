@@ -38,6 +38,7 @@ def _scoped_active_ticket(user, external_id):
         TicketQueryService.base(user, links=links).filter(
             business_status__in=ACTIVE_STATES,
             is_present_in_queue=True,
+            queue_name__in=TicketQueryService.QUEUE_NAMES,
         ),
         external_id=external_id,
     )
@@ -213,6 +214,11 @@ def detail(request, external_id):
             "compact_title": compact_title,
             "title": ticket.title,
             "queue": ticket.queue_name,
+            "source_events": [
+                {"type": event.event_type, "queue": event.queue_name,
+                 "state": event.external_state_name, "at": event.occurred_at.isoformat()}
+                for event in reversed(list(ticket.queue_events.order_by("-occurred_at", "-external_id")[:80]))
+            ],
             "external_state": ticket.external_state_name,
             "business_status": business_status,
             "operational": business_status in ACTIVE_STATES,

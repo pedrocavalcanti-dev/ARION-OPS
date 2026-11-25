@@ -10,7 +10,7 @@ from .models import (
 )
 from .otrs_queues import (
     CANCELLATION_PROFILE_ACTIVE_STATES, CANCELLATION_REQUEST_QUEUE_NAME,
-    COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME, queue_signature,
+    COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME, TRIAGE_QUEUE_NAME, queue_signature,
 )
 from .services.cmdb_sync import CMDBSyncService
 from .services.otrs_sync import OTRSSyncService, _otrs_naive_local_datetime
@@ -128,6 +128,7 @@ class FakeOTRSReadOnlyClient:
         self.ticket_rows = [self.ticket]
         self.queues = queues or [
             {"id": queue_id, "name": NOC_QUEUE_NAME},
+            {"id": 181, "name": TRIAGE_QUEUE_NAME},
             {"id": 108, "name": CANCELLATION_REQUEST_QUEUE_NAME},
             {"id": 109, "name": "NOC - RETIRA EQUIPAMENTO"},
             {"id": 110, "name": "NOC \u2013 PENDENTE PAGAMENTO"},
@@ -170,7 +171,7 @@ class FakeOTRSReadOnlyClient:
             return [row for row in self.dynamic_values if row["object_id"] in ids and row["field_id"] in fields]
         if "from `ticket_history_type`" in normalized:
             return [{"id": 27, "name": "StateUpdate"}]
-        if "from `ticket_history`" in normalized:
+        if "from `ticket_history`" in normalized and "from `ticket`" not in normalized:
             terminal_state_ids = {state["id"] for state in self.states if state["name"].casefold() in {"resolvido", "closed successful", "encerrado com viabilidade", "cancelado"}}
             ticket_ids = set(params[1 + len(terminal_state_ids):])
             return [row for row in self.history_rows if row["ticket_id"] in ticket_ids and row["state_id"] in terminal_state_ids]

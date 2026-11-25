@@ -1176,7 +1176,10 @@ class MirrorAnalyticsTests(TestCase):
         self.assertContains(response, 'CSV de tickets')
         self.assertNotContains(response, '<details class="cockpit-more-filters" data-more-filters open')
         self.assertNotContains(response, "Operadora contratada")
-        self.assertNotContains(response, "name=\"operator\"")
+        # The approved Planta × Chamados dialog has its own operator filter;
+        # this assertion concerns the Cockpit's primary ticket filters only.
+        ticket_filters = response.content.decode().split('<form class="cockpit-filters"', 1)[1].split('</form>', 1)[0]
+        self.assertNotIn('name="operator"', ticket_filters)
 
     def test_cockpit_top_ten_and_detail_are_database_paged(self):
         for index in range(27):

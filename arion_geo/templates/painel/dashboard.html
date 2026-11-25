@@ -50,6 +50,16 @@
       {% if unknown_count %}<span class="dashboard-status-history-item" data-tone="neutral">Não classificados <strong>{{ unknown_count|intcomma }}</strong></span>{% endif %}
     </div>
   </section>
+  <details class="dashboard-attendance">
+    <summary>Atendimento N1 / N2 · {{ attendance.current_n1 }} na Triagem · {{ attendance.current_n2 }} no Atacado</summary>
+    <div class="dashboard-status-history" aria-label="Atendimento por nível no período">
+      <span class="dashboard-status-history-item" title="Tickets distintos com evento oficial de resolução na Triagem, na data efetiva de resolução do período.">Resolvidos N1 <strong>{{ attendance.resolved_n1 }}</strong></span>
+      <span class="dashboard-status-history-item" title="Tickets distintos com movimentação oficial da Triagem para o Atacado no período; retornos não duplicam o TicketID.">Encaminhados N1 → N2 <strong>{{ attendance.forwarded_n1_n2 }}</strong></span>
+      <span class="dashboard-status-history-item" title="Tickets distintos com evento oficial de resolução no Atacado, na data efetiva de resolução do período.">Resolvidos N2 <strong>{{ attendance.resolved_n2 }}</strong></span>
+      {% if attendance.resolution_unclassified %}<span class="dashboard-status-history-item">Resolução sem nível comprovado <strong>{{ attendance.resolution_unclassified }}</strong></span>{% endif %}
+    </div>
+    <p class="dashboard-data-note">Fila atual: ativos, incluindo agendados. Resoluções e encaminhamentos: eventos comprovados no período selecionado; não representam parcelas dos criados.</p>
+  </details>
   <div class="dashboard-grid">
     <article class="dash-panel dash-card trend-panel"><header><div><span class="panel-kicker">EVOLUÇÃO MENSAL · NOC - ATACADO</span><h2>Chamados no período</h2></div></header><div class="chart-legend" aria-label="Legenda do gráfico"><span class="legend-calls"><i></i>Tickets criados</span><span class="legend-repeat"><i></i>Links com 2+ tickets no mês</span></div><div class="trend-chart" data-monthly-chart role="img" aria-label="Tickets criados por mês e quantidade de Links com dois ou mais tickets distintos no mês"></div>{{ monthly|json_script:"monthly-chart-data" }}</article>
     <article class="dash-panel dash-card aging-panel">

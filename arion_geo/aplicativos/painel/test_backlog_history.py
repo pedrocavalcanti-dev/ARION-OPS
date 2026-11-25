@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from aplicativos.configuracoes.models import GroupDataScope
 from aplicativos.integracoes.models import OTRSBacklogHistory, OTRSBacklogInterval, OTRSTicket
+from aplicativos.integracoes.otrs_queues import NOC_HISTORY_SCOPE
 from aplicativos.integracoes.services.analytics import LinkQueryService
 from aplicativos.integracoes.services.otrs_backlog_history import reconstruct_ticket
 from .services.analytics import AnalyticsQueryService, _operational_buckets
@@ -94,7 +95,7 @@ class LifecycleTests(SimpleTestCase):
 class HistoricalQueryTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_superuser("backlog-test", password="synthetic-test-password")
-        self.coverage = OTRSBacklogHistory.objects.create(queue_name="NOC - ATACADO",
+        self.coverage = OTRSBacklogHistory.objects.create(queue_name=NOC_HISTORY_SCOPE,
             earliest_at=instant(1), through=instant(3, 2), ticket_count=2)
         self.persist(ticket(), [event(1, instant(1)), event(2, instant(2), "RESOLVED", 2)])
         self.persist(ticket(pk=2, state=1), [event(3, instant(1, 15))])

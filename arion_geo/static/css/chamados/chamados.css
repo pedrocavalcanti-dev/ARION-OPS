@@ -40,6 +40,9 @@
 .ticket-more-filters[open] summary::after { content:"⌃"; }
 .ticket-filter-secondary { position:absolute; z-index:20; top:calc(100% + 8px); right:0; display:none; width:min(520px,calc(100vw - 32px)); grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:16px; border:1px solid var(--border-primary); border-radius:12px; background:var(--bg-elevated); box-shadow:var(--shadow-soft); }
 .ticket-more-filters[open] .ticket-filter-secondary { display:grid; }
+@media (min-width:701px) and (max-width:1100px) {
+  .ticket-filter-primary .ticket-more-filters { grid-column:1/-1; justify-self:end; }
+}
 .ticket-check { flex-direction:row!important; align-items:center; padding-top:18px; color:var(--text-secondary)!important; }
 .ticket-check input { accent-color:var(--accent-blue); }
 .ticket-filter-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-top:12px; }

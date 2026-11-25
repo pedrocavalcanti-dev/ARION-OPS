@@ -333,7 +333,10 @@ class AnalyticsQueryService:
         operational_rows = self._apply_filters(scoped_tickets, allowed_links, filters)
         # The service splits manager-visible flow from the current operational
         # stock while keeping both on this same scoped and filtered queryset.
-        stock_rows = operational_rows.exclude(responsibility_normalized="IMPROCEDENTE")
+        stock_rows = operational_rows.filter(
+            is_present_in_queue=True,
+            queue_name__in=TicketQueryService.QUEUE_NAMES if scope == "support" else COCKPIT_QUEUE_NAMES,
+        ).exclude(responsibility_normalized="IMPROCEDENTE")
 
         metric_universe = self._metric_universe(scoped_tickets, metric)
         if metric == "tickets" or (include_cancelled and metric in {"links_affected", "recurrences"}):
@@ -342,9 +345,10 @@ class AnalyticsQueryService:
             if scope != "support":
                 valid_scope |= Q(_operational_stage="UNKNOWN")
             metric_universe = scoped_tickets.filter(valid_scope)
-        elif scope != "support" and metric == "backlog":
+        elif metric == "backlog":
             metric_universe = scoped_tickets.filter(
                 is_present_in_queue=True,
+                queue_name__in=TicketQueryService.QUEUE_NAMES if scope == "support" else COCKPIT_QUEUE_NAMES,
                 business_status__in=BACKLOG_STATUSES,
             )
         if not include_improcedente or metric == "backlog":
@@ -371,6 +375,9 @@ class AnalyticsQueryService:
             include_improcedente=include_improcedente,
             backlog_observations=backlog_observations,
         )
+        if scope == "support":
+            from aplicativos.integracoes.services.otrs_attendance import attendance_summary
+            operational["attendance"] = attendance_summary(operational_rows, start_at=start_at, end_at=end_exclusive)
         if scope == "support":
             from .backlog_history import reconstructed_backlog
 
@@ -576,10 +583,10 @@ class AnalyticsQueryService:
             ),
         )
         if scope == "support":
-            return tickets.filter(queue_name=TicketQueryService.QUEUE_NAME)
+            return tickets.filter(TicketQueryService.support_query())
         if scope == "cancellation":
             return tickets.filter(cancellation)
-        return tickets.filter(Q(queue_name=TicketQueryService.QUEUE_NAME) | cancellation).distinct()
+        return tickets.filter(TicketQueryService.support_query() | cancellation).distinct()
 
     @staticmethod
     def _backlog_history_meta(tickets):
@@ -1747,7 +1754,7 @@ class AnalyticsQueryService:
             return rows.filter(business_status="SCHEDULED") if metric == "scheduled_tickets" else rows
         if metric == "backlog":
             active = Q(business_status__in=BACKLOG_STATUSES)
-            return filtered.filter(is_present_in_queue=True).filter(active)
+            return filtered.filter(is_present_in_queue=True, queue_name__in=COCKPIT_QUEUE_NAMES).filter(active)
         rows = historical
         if metric in cls.METRIC_STATUS:
             rows = rows.filter(business_status_query("business_status", cls.METRIC_STATUS[metric]))
@@ -1919,7 +1926,7 @@ class AnalyticsQueryService:
             known_queues = {queue for _key, _label, queue in cls.CANCELLATION_STAGES}
             return cls.STAGE_LABELS.get(value, value if value in known_queues else "N\u00e3o classificado")
         if group == "operational_origin":
-            return cls.ORIGIN_LABELS.get(value, value if value == TicketQueryService.QUEUE_NAME else "N\u00e3o classificado")
+            return cls.ORIGIN_LABELS.get(value, value if value in TicketQueryService.QUEUE_NAMES else "N\u00e3o classificado")
         if group == "source_state":
             return cls._source_state_label(value)
         if group == "month":
@@ -2194,7 +2201,7 @@ class DashboardAnalyticsService:
         valid_period_tickets = AnalyticsQueryService.canonical_created_tickets(
             tickets, include_cancelled=False, include_improcedente=False,
         ).filter(source_created_at__gte=start_at, source_created_at__lt=end_at)
-        current_tickets = tickets.filter(is_present_in_queue=True)
+        current_tickets = tickets.filter(is_present_in_queue=True, queue_name__in=TicketQueryService.QUEUE_NAMES)
         business_open = TicketQueryService.business_open(queryset=current_tickets)
         otrs_sync = IntegrationSyncState.objects.filter(key="otrs").only("last_success_at").first()
         otrs_last_sync_at = otrs_sync.last_success_at if otrs_sync else None
@@ -2236,15 +2243,11 @@ class DashboardAnalyticsService:
                 "logo_initials": logo["initials"],
             })
 
-        status_resp_rows = list(current_tickets.values(
-            "business_status", "responsibility_normalized",
-        ).annotate(total=Count("pk")))
-        snapshot_status = normalized_status_counts(status_resp_rows)
-        backlog_current = sum(
-            row["total"] for row in status_resp_rows
-            if row["business_status"] in BACKLOG_STATUSES
-            and row["responsibility_normalized"] != "IMPROCEDENTE"
-        )
+        from aplicativos.integracoes.services.otrs_attendance import attendance_summary
+        attendance = attendance_summary(tickets, start_at=start_at, end_at=end_at, include_stock=True)
+        snapshot_status = {status: attendance.pop(f"stock_{status}")
+                           for status in ("OPEN", "PENDING", "SCHEDULED", "RESOLVED", "CANCELED", "UNKNOWN")}
+        backlog_current = attendance.pop("stock_backlog")
         status_counts = {status: snapshot_status.get(status, 0) for status in STATUS_ORDER}
         open_count = status_counts[OTRSStateMapping.BusinessStatus.OPEN]
         pending_count = status_counts[OTRSStateMapping.BusinessStatus.PENDING]
@@ -2309,6 +2312,7 @@ class DashboardAnalyticsService:
             "repeat": recurrence_total,
             "business_open": open_count + pending_count + scheduled_count,
             "backlog_current": backlog_current,
+            "attendance": attendance,
             "otrs_last_sync_at": otrs_last_sync_at,
             "otrs_last_sync_label": otrs_last_sync_label,
             "open_count": open_count,

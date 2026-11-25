@@ -11,7 +11,7 @@ from aplicativos.integracoes.models import (
     OTRSOperationalConfigItemSnapshot, OTRSOperationalSnapshot,
 )
 from aplicativos.integracoes.otrs_queues import (
-    CANCELLATION_QUEUE_NAMES, COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME,
+    CANCELLATION_QUEUE_NAMES, COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAMES,
     queue_signature,
 )
 from aplicativos.integracoes.services.otrs_status import (
@@ -66,7 +66,7 @@ def backlog_snapshot_observations(*, user, allowed_links, scope, filters, bucket
         ).exclude(responsibility_normalized="IMPROCEDENTE")
 
         if scope == "support":
-            tickets = tickets.filter(queue_name=NOC_QUEUE_NAME)
+            tickets = tickets.filter(queue_name__in=NOC_QUEUE_NAMES)
         elif scope == "cancellation":
             tickets = tickets.filter(queue_name__in=CANCELLATION_QUEUE_NAMES)
         else:
@@ -81,7 +81,7 @@ def backlog_snapshot_observations(*, user, allowed_links, scope, filters, bucket
                 tickets = tickets.filter(**{field_name: filters[filter_name]})
 
         if filters.get("origin") == "SUPPORT":
-            tickets = tickets.filter(queue_name=NOC_QUEUE_NAME)
+            tickets = tickets.filter(queue_name__in=NOC_QUEUE_NAMES)
         elif filters.get("origin") == "CANCELLATION":
             tickets = tickets.filter(queue_name__in=CANCELLATION_QUEUE_NAMES)
 

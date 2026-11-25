@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from aplicativos.auditoria.services import AuditService
 from aplicativos.integracoes.models import OTRSTicketConfigItem
+from aplicativos.integracoes.otrs_queues import ATTENDANCE_LEVELS, NOC_QUEUE_NAMES
 from aplicativos.integracoes.services.analytics import (
     BUSINESS_OPEN_STATUSES, LinkQueryService, TicketQueryService,
     count_affected_links, ticket_link_relations,
@@ -39,7 +40,7 @@ TAB_ALIASES = {
 }
 QUEUE_FILTER_KEYS = (
     "tab", "q", "otrs_status", "arion_status", "client", "project", "provider", "uf",
-    "priority", "assignee", "reason", "aging", "recurrent", "sort", "per_page",
+    "priority", "assignee", "reason", "aging", "recurrent", "sort", "per_page", "queue",
 )
 QUEUE_REQUEST_ALIASES = ("over_24h", "page_size")
 QUEUE_SORTS = {"aging", "oldest", "newest", "provider", "project", "uf"}
@@ -66,6 +67,9 @@ def sanitize_queue_filters(payload):
         elif key == "otrs_status":
             value = value.upper()
             if value in ACTIVE_STATES:
+                clean[key] = value
+        elif key == "queue":
+            if value in NOC_QUEUE_NAMES:
                 clean[key] = value
         elif key == "arion_status":
             if value in INTERNAL_STATUS_LABELS:
@@ -285,7 +289,7 @@ class TicketQueueService:
         aging_cutoff = now - timedelta(hours=24)
         filters = sanitize_queue_filters(params)
         filters = {
-            "q": "", "client": "", "project": "", "provider": "", "uf": "",
+            "q": "", "client": "", "project": "", "provider": "", "uf": "", "queue": "",
             "otrs_status": "", "arion_status": "", "assignee": "", "priority": "", "reason": "",
             "recurrent": False, "over_24h": False, "tab": "all", "sort": "aging", **filters,
         }
@@ -374,6 +378,8 @@ class TicketQueueService:
             ticket_query = ticket_query.filter(pk__in=recurrent_tickets)
 
         # Counters share the active backend queryset and are not derived from the current page.
+        if filters["queue"]:
+            ticket_query = ticket_query.filter(queue_name=filters["queue"])
         counts_qs = ticket_query
         count_rows = counts_qs.values(
             "business_status", "_tracking_assignee_id",
@@ -434,6 +440,8 @@ class TicketQueueService:
                 "id": ticket.pk,
                 "external_id": ticket.external_id,
                 "ticket_number": ticket.ticket_number,
+                "queue_name": ticket.queue_name,
+                "attendance_level": ATTENDANCE_LEVELS.get(ticket.queue_name, ""),
                 "otrs_url": otrs_ticket_url(ticket.external_id),
                 "title": ticket.title,
                 "source_created_at": created,

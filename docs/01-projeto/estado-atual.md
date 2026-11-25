@@ -39,6 +39,8 @@ O ranking inclui Score Operacional comparativo com amostra mínima e métricas n
 
 O Cockpit Suporte reconstrói a evolução de backlog pelos eventos reais de estado, fila e procedência OTRS, incluindo reaberturas e tickets que saíram da fila. A migration aditiva `integracoes.0016` cria o cache de intervalos; `sincronizar_historico_backlog` e o worker existente atualizam somente essa base local. A série reconstruída é distinta das capturas FULL, preserva lacunas como indisponíveis e aplica Data Scope antes das contagens. Detalhes e limitações estão na [documentação do Cockpit](../05-funcionalidades/cockpit.md).
 
+O suporte consolida NOC - TRIAGEM (N1) e NOC - ATACADO (N2) pela identidade única TicketID. Worker FULL/FAST, Dashboard, Cockpit, Chamados, GEO, Qualidade, Rankings e Planta × Chamados reutilizam esse universo; a fila atual permanece distinta da passagem histórica. A migration `integracoes.0025` acrescenta eventos oficiais e backfill retomável. Resoluções por nível exigem evidência oficial; coberturas antigas de N2 não representam N1 + N2. Consulte [Operação N1/N2](../06-integracoes-e-dados/operacao-n1-n2.md) para definições, homologação e comandos da próxima atualização.
+
 ## Banco e fontes
 
 **Autoria:** Concepção e desenvolvimento por **Pedro Cavalcanti** para apoio às operações do **NOC ATACADO** da ARION Serviços de Telecomunicações.
@@ -47,7 +49,7 @@ A configuração exige MySQL local em produção; o checkout DEV atual utiliza S
 
 A preparação de produção V1 inclui modo Django explícito (`ARION_ENV=production`), Waitress em loopback (`127.0.0.1`), supervisor Windows para Web/Worker, build de assets de produção, `collectstatic`, `production-check`, preparação do serviço Cloudflare Tunnel e backup MySQL. Consulte [Implantação e Produção](..\02-arquitetura\implantacao-e-producao.md).
 
-OTRS e CMDB são as fontes oficiais externas. `CMDBLinkMirror`, `CMDBOperatorMirror`, `OTRSTicket` e `OTRSTicketConfigItem` são espelhos locais. `OperationalLinkIdentity`, `OperationalIdentityRevision`, `TicketTracking`, `QualityOrder`, `PenaltyCompetence`, `AuditEvent`, `GroupDataScope` e `UserPreference` são registros próprios do ARION OPS. Consulte [Identidade Operacional](../06-integracoes-e-dados/identidade-operacional.md).
+OTRS e CMDB são as fontes oficiais externas. `CMDBLinkMirror`, `CMDBOperatorMirror`, `OTRSTicket`, `OTRSTicketConfigItem` e `OTRSTicketEvent` são espelhos locais. `OperationalLinkIdentity`, `OperationalIdentityRevision`, `TicketTracking`, `QualityOrder`, `PenaltyCompetence`, `AuditEvent`, `GroupDataScope` e `UserPreference` são registros próprios do ARION OPS. Consulte [Identidade Operacional](../06-integracoes-e-dados/identidade-operacional.md).
 
 ## Frontend responsivo e PWA
 
@@ -62,7 +64,7 @@ Antes de ampliar acessos ou fazer novo rollout, tratar as pendências verificada
 - Integração LLM externa ativa no módulo ARI I.A.
 - Indicadores contratuais formais de SLA sem regra/fonte homologada.
 - Geocodificação de endereços ou coordenadas exatas por instalação no Mapa.
-- Persistência histórica completa da sequência de eventos `Move`/`StateUpdate` do OTRS por etapa.
+- Garantia de cobertura integral de eventos OTRS anteriores ao histórico disponível na origem; lacunas continuam explicitamente indisponíveis.
 - Infraestrutura distribuída (Redis, Celery, Kubernetes, load balancer ou microsserviços).
 
 Estudos em `docs/07-estudos/` são snapshots históricos datados. Para a evolução prevista, consulte o [Roadmap](roadmap.md).

@@ -13,7 +13,7 @@ from aplicativos.integracoes.models import (
     IntegrationRun,
 )
 from aplicativos.integracoes.otrs_queues import (
-    CANCELLATION_QUEUE_NAMES, COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME, queue_signature,
+    CANCELLATION_QUEUE_NAMES, COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAMES, queue_signature,
 )
 from aplicativos.integracoes.services.otrs_status import BACKLOG_STATUSES
 
@@ -144,7 +144,7 @@ def capture_hourly_backlog_checkpoint(*, captured_at=None, source_run=None, queu
     cutoff_72h = now - timedelta(hours=72)
     noc_active = OTRSTicket.objects.filter(
         is_present_in_queue=True,
-        queue_name=NOC_QUEUE_NAME,
+        queue_name__in=NOC_QUEUE_NAMES,
     ).exclude(responsibility_normalized="IMPROCEDENTE")
     noc_counts = noc_active.aggregate(
         open_count=Count("pk", filter=Q(business_status="OPEN")),

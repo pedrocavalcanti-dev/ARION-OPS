@@ -6,11 +6,13 @@ import time
 import unicodedata
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from aplicativos.integracoes.models import (
-    CMDBLinkMirror, OTRSStateMapping, OTRSTicket, OTRSTicketConfigItem,
+    CMDBLinkMirror, OTRSStateMapping, OTRSTicket, OTRSTicketConfigItem, OTRSTicketEvent,
 )
+from aplicativos.integracoes.otrs_queues import COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAMES, TRIAGE_QUEUE_NAME
 
 from .sync_common import clean, integer_or_none, normalized_name, source_datetime
 from .otrs_status import BUSINESS_OPEN_STATUSES, status_for_external_state
@@ -120,7 +122,7 @@ class OTRSSyncService:
             raise ValueError(f"A fila exata '{queue_name}' não foi encontrada de forma única.")
         return _number(_val(exact[0], "id")), clean(_val(exact[0], "name"))
 
-    def _tickets(self, queue_ids, *, changed_since=None, known_ids=()):
+    def _tickets(self, queue_ids, *, changed_since=None, known_ids=(), ticket_ids=None, history_queue_id=None):
         queue_ids = tuple(dict.fromkeys(_number(value) for value in queue_ids if _number(value) is not None))
         if not queue_ids:
             return []
@@ -143,15 +145,33 @@ class OTRSSyncService:
         queue_column = self._column("ticket", "queue_id", required=True)
         queue_marks = ",".join(["%s"] * len(queue_ids))
         queue_filter = f"{queue_column} IN ({queue_marks})"
+        queue_params = list(queue_ids)
+        if history_queue_id is not None and self._column("ticket_history", "queue_id"):
+            # Also discover brief passages between polls and tickets already
+            # moved out of Triagem. Membership uses the real QueueID/history.
+            queue_filter = (f"({queue_filter} OR `id` IN (SELECT `ticket_id` FROM {self._table('ticket_history')} "
+                            "WHERE `queue_id` = %s))")
+            queue_params.append(history_queue_id)
         where = queue_filter
-        params = list(queue_ids)
+        params = list(queue_params)
+        if ticket_ids is not None:
+            ticket_ids = tuple(ticket_ids)
+            if not ticket_ids:
+                return []
+            marks = ",".join(["%s"] * len(ticket_ids))
+            where = f"{self._column('ticket', 'id', required=True)} IN ({marks})"
+            params = list(ticket_ids)
+        elif known_ids and changed_since is None:
+            marks = ",".join(["%s"] * len(known_ids))
+            where = f"({queue_filter}) OR ({self._column('ticket', 'id', required=True)} IN ({marks}))"
+            params.extend(known_ids)
         if changed_since is not None:
             change_column = self._column("ticket", "change_time", required=True)
             id_column = self._column("ticket", "id", required=True)
             known_ids = tuple(known_ids)
             marks = ",".join(["%s"] * len(known_ids)) or "NULL"
             where = f"(({queue_filter}) OR ({id_column} IN ({marks}))) AND {change_column} >= %s"
-            params = [*queue_ids, *known_ids, changed_since]
+            params = [*queue_params, *known_ids, changed_since]
         sql = f"SELECT {', '.join(selected)} FROM {self._table('ticket')} WHERE {where}"
         rows = self.client.execute_select(sql, tuple(params))
         if any(_number(_val(row, "id")) is None or not clean(_val(row, "tn")) for row in rows):
@@ -161,6 +181,68 @@ class OTRSSyncService:
         if len(set(ids)) != len(ids) or len(set(numbers)) != len(numbers):
             raise ValueError("IDs/números de ticket duplicados no snapshot; reconciliação cancelada.")
         return rows
+
+    def _lifecycle_events(self, ticket_rows, dimensions):
+        """Batch official NewTicket/Move/StateUpdate/Merged evidence by TicketID.
+
+        Older source schemas without queue snapshots remain usable, with an
+        explicit coverage warning rather than invented transfer evidence.
+        """
+        required = {"id", "ticket_id", "queue_id", "state_id", "history_type_id", "create_time"}
+        columns = {name.casefold() for name in self.columns.get("ticket_history", ())}
+        if not required.issubset(columns):
+            return [], ["Histórico de filas indisponível no schema OTRS; nível de resolução não inferido."]
+        types = {int(row["id"]): row["name"] for row in self._dimension("ticket_history_type")
+                 if row["name"] in {"NewTicket", "Move", "StateUpdate", "Merged"}}
+        if not {"NewTicket", "Move", "StateUpdate", "Merged"}.issubset(types.values()):
+            return [], ["Tipos de histórico incompletos; nível de resolução não inferido."]
+        queues = self._dimension_map(self._dimension("queue"))
+        states = self._dimension_map(dimensions["states"])
+        result = {}
+        ids = [int(row["id"]) for row in ticket_rows]
+        for offset in range(0, len(ids), 400):
+            batch = ids[offset:offset + 400]
+            marks = ",".join(["%s"] * len(batch))
+            type_marks = ",".join(["%s"] * len(types))
+            rows = self._select("ticket_history", [(key, key) for key in sorted(required)],
+                where=f"`ticket_id` IN ({marks}) AND `history_type_id` IN ({type_marks})",
+                params=(*batch, *types))
+            for row in rows:
+                at = source_datetime(row["create_time"])
+                queue_id, state_id = int(row["queue_id"]), int(row["state_id"])
+                if not at or queue_id not in queues or state_id not in states:
+                    raise ValueError("Evento OTRS sem fila, estado ou data verificável.")
+                event = {"external_id": int(row["id"]), "ticket_external_id": int(row["ticket_id"]),
+                         "event_type": types[int(row["history_type_id"])], "occurred_at": at,
+                         "queue_external_id": queue_id, "queue_name": queues[queue_id],
+                         "external_state_id": state_id, "external_state_name": states[state_id],
+                         "business_status": self._state_status(states[state_id])}
+                if event["external_id"] in result and result[event["external_id"]] != event:
+                    raise ValueError("Eventos OTRS conflitantes para o mesmo ID.")
+                result[event["external_id"]] = event
+        return list(result.values()), []
+
+    @staticmethod
+    def _upsert_events(events, ticket_map):
+        # Bound IN clauses and in-memory model instances on SQLite and MySQL.
+        for offset in range(0, len(events), 400):
+            OTRSSyncService._upsert_event_batch(events[offset:offset + 400], ticket_map)
+
+    @staticmethod
+    def _upsert_event_batch(events, ticket_map):
+        existing = {row.external_id: row for row in OTRSTicketEvent.objects.filter(
+            external_id__in=[event["external_id"] for event in events])}
+        create = []
+        for event in events:
+            fields = {key: value for key, value in event.items() if key != "ticket_external_id"}
+            fields["ticket_id"] = ticket_map[event["ticket_external_id"]].pk
+            previous = existing.get(event["external_id"])
+            if previous:
+                if any(getattr(previous, key) != value for key, value in fields.items()):
+                    raise ValueError("Evento oficial já espelhado divergiu; histórico preservado.")
+            else:
+                create.append(OTRSTicketEvent(**fields))
+        OTRSTicketEvent.objects.bulk_create(create, batch_size=400)
 
     def _relation_ids(self, table, names):
         rows = self._select(table, (("id", "id"), ("name", "name")))
@@ -531,7 +613,7 @@ class OTRSSyncService:
                 OTRSTicketConfigItem.objects.filter(pk__in=stale_ids).update(is_present_in_source=False)
         return {"found": found_count, "processed": len(relations), "created": created, "updated": updated, "unchanged": unchanged, "stale": len(stale_ids), "failed": 0, "unresolved_link": sum(1 for row in relations if normalized_name(row["config_item_id"]) not in links_by_ci)}
 
-    def run(self, queue_name="NOC - ATACADO", *, queue_names=None, apply=False, changed_since=None, safety_window=120):
+    def run(self, queue_name="NOC - ATACADO", *, queue_names=None, apply=False, changed_since=None, safety_window=120, ticket_ids=None):
         started = time.perf_counter()
         queries_before = getattr(self.client, "select_queries_count", 0)
         self._discover()
@@ -566,10 +648,13 @@ class OTRSSyncService:
         state_type_map = self._dimension_map(type_rows)
         now = timezone.now()
         is_incremental = changed_since is not None
+        known_filter = Q(is_present_in_queue=True, queue_external_id__in=queue_ids)
+        if set(NOC_QUEUE_NAMES).issubset(requested_queue_names):
+            known_filter |= Q(has_support_history=True)
         known_ids = tuple(
-            OTRSTicket.objects.filter(is_present_in_queue=True, queue_external_id__in=queue_ids)
+            OTRSTicket.objects.filter(known_filter)
             .values_list("external_id", flat=True)
-        ) if is_incremental else ()
+        )
         query_changed_since = changed_since
         if is_incremental:
             from datetime import timedelta
@@ -580,7 +665,11 @@ class OTRSSyncService:
                 changed_since.isoformat(), query_changed_since.isoformat(),
                 safety_window, timezone.get_default_timezone_name(),
             )
-        ticket_source_rows = self._tickets(queue_ids, changed_since=query_changed_since, known_ids=known_ids)
+        triage_queue_id = next((queue_id for queue_id, name in queues if name == TRIAGE_QUEUE_NAME), None)
+        ticket_source_rows = self._tickets(queue_ids, changed_since=query_changed_since, known_ids=known_ids,
+                                          ticket_ids=ticket_ids, history_queue_id=triage_queue_id)
+        if ticket_ids is not None and {int(row['id']) for row in ticket_source_rows} != set(ticket_ids):
+            raise ValueError("Lote histórico incompleto; cursor preservado.")
         self.progress(f"[OTRS] Tickets atuais encontrados: {len(ticket_source_rows)}.")
         source_queue_ids = {_number(_val(row, "queue_id")) for row in ticket_source_rows}
         unmapped_queue_ids = source_queue_ids - set(queue_names_by_id)
@@ -611,8 +700,16 @@ class OTRSSyncService:
             ticket_source_rows, queue_names_by_id, queue_ids, dimensions, state_type_map, now,
         )
         ticket_terminal_fields, terminal_field_counts = self._ticket_terminal_fields(ticket_source_rows, dimensions)
+        events, event_warnings = self._lifecycle_events(ticket_source_rows, dimensions)
+        self.progress(f"[OTRS] Eventos oficiais de atendimento: {len(events)}.")
+        warnings.extend(event_warnings)
+        support_ids = {event["ticket_external_id"] for event in events if event["queue_name"] in NOC_QUEUE_NAMES}
+        support_ids.update(OTRSTicket.objects.filter(
+            external_id__in=[ticket["external_id"] for ticket in tickets], has_support_history=True,
+        ).values_list("external_id", flat=True))
         for ticket in tickets:
             ticket.update(ticket_terminal_fields.get(ticket["external_id"], {}))
+            ticket["has_support_history"] = ticket["queue_name"] in NOC_QUEUE_NAMES or ticket["external_id"] in support_ids
         objects = self._object_ids()
         relation_type_id = self._relation_ids("link_type", {"DependsOn"})
         relation_state_id = self._relation_ids("link_state", {"Valid"})
@@ -643,7 +740,7 @@ class OTRSSyncService:
         if any(number_owners.get(row["ticket_number"], row["external_id"]) != row["external_id"] for row in tickets):
             raise ValueError("TN já pertence a outro ID externo local; reconciliação cancelada.")
         affected_ticket_ids = {item["external_id"] for item in tickets}
-        if not is_incremental:
+        if not is_incremental and ticket_ids is None:
             affected_ticket_ids.update(
                 OTRSTicket.objects.filter(is_present_in_queue=True, queue_external_id__in=queue_ids)
                 .values_list("external_id", flat=True)
@@ -651,11 +748,12 @@ class OTRSSyncService:
         with transaction.atomic() if apply else _NullContext():
             mapping_counts = self._upsert_dimension(OTRSStateMapping, state_mappings, apply=apply)
             ticket_counts_summary = self._upsert_tickets(
-                tickets, now=now, apply=apply, reconcile=not is_incremental,
-                reconcile_queue_ids=queue_ids if not is_incremental else None,
+                tickets, now=now, apply=apply, reconcile=not is_incremental and ticket_ids is None,
+                reconcile_queue_ids=queue_ids if not is_incremental and ticket_ids is None else None,
             )
             if apply:
                 ticket_map = {row.external_id: row for row in OTRSTicket.objects.filter(external_id__in=[row["external_id"] for row in tickets])}
+                self._upsert_events(events, ticket_map)
             else:
                 existing_tickets = {row.external_id: row for row in OTRSTicket.objects.filter(external_id__in=[item["external_id"] for item in tickets])}
                 ticket_map = {
@@ -677,7 +775,8 @@ class OTRSSyncService:
                 if affected_link_ids:
                     OperationalIdentityService.reconcile_all(apply=True, link_ids=affected_link_ids)
                 from .otrs_snapshots import capture_hourly_backlog_checkpoint
-                capture_hourly_backlog_checkpoint(captured_at=now)
+                if ticket_ids is None and set(requested_queue_names) == set(COCKPIT_QUEUE_NAMES):
+                    capture_hourly_backlog_checkpoint(captured_at=now)
 
         status_counts = {key: status_counts.get(key, 0) for key in OTRSStateMapping.BusinessStatus.values}
         result = {
@@ -687,6 +786,7 @@ class OTRSSyncService:
             "tickets_by_queue": queue_ticket_summary,
             "tickets": ticket_counts_summary, "relations": relation_counts_summary, "state_mappings": mapping_counts,
             "ticket_terminal_fields": terminal_field_counts,
+            "lifecycle_events": len(events),
             "relation_stats": relation_stats,
             "business_status": status_counts, "business_open": sum(status_counts[key] for key in OPEN_STATUSES),
             # Advance the watermark to this successful read's start time, even when the delta is empty.

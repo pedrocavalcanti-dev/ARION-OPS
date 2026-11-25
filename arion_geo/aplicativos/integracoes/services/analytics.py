@@ -6,7 +6,7 @@ from django.db.models.functions import Coalesce
 
 from aplicativos.configuracoes.data_scope import DataScopeService
 from aplicativos.integracoes.models import CMDBLinkMirror, OTRSTicket, OTRSTicketConfigItem
-from aplicativos.integracoes.otrs_queues import CANCELLATION_QUEUE_NAMES, NOC_QUEUE_NAME
+from aplicativos.integracoes.otrs_queues import CANCELLATION_QUEUE_NAMES, NOC_QUEUE_NAME, NOC_QUEUE_NAMES
 from aplicativos.integracoes.services.otrs_status import (
     BACKLOG_STATUSES, BUSINESS_OPEN_STATUSES, OPERATIONAL_VALID_STATUSES,
     RESOLVED_STATUS, TERMINAL_STATUSES, normalize_business_status,
@@ -92,19 +92,25 @@ class LinkQueryService:
 
 class TicketQueryService:
     QUEUE_NAME = NOC_QUEUE_NAME
+    QUEUE_NAMES = NOC_QUEUE_NAMES
     CANCELLATION_QUEUE_NAMES = CANCELLATION_QUEUE_NAMES
 
     @classmethod
     def noc_tickets(cls):
-        """Current operational ticket universe, resolved by the configured queue name."""
-        return OTRSTicket.objects.filter(queue_name=cls.QUEUE_NAME, is_present_in_queue=True)
+        """Operational membership, including proven participation in N1/N2."""
+        return OTRSTicket.objects.filter(cls.support_query())
+
+    @classmethod
+    def support_query(cls):
+        return (Q(queue_name__in=cls.QUEUE_NAMES, is_present_in_queue=True)
+                | Q(has_support_history=True))
 
     @staticmethod
     def base(user=None, *, links=None, all_queues=False):
         # Keep the established NOC universe as the default for existing callers.
         # Cockpit contexts that explicitly combine operational processes can ask
         # for all mirrored queues while retaining the same Data Scope boundary.
-        tickets = (OTRSTicket.objects.filter(is_present_in_queue=True)
+        tickets = (OTRSTicket.objects.filter(Q(is_present_in_queue=True) | Q(has_support_history=True))
                    if all_queues else TicketQueryService.noc_tickets())
         if user is None or DataScopeService.is_global(user):
             return tickets
@@ -118,7 +124,7 @@ class TicketQueryService:
     def business_open(cls, user=None, *, links=None, queryset=None):
         tickets = queryset if queryset is not None else cls.base(user, links=links)
         return tickets.filter(
-            queue_name=cls.QUEUE_NAME,
+            queue_name__in=cls.QUEUE_NAMES,
             is_present_in_queue=True,
             business_status__in=BUSINESS_OPEN_STATUSES,
         )

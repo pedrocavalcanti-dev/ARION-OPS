@@ -17,7 +17,7 @@ from aplicativos.integracoes.models import (
     OTRSTicket,
     OTRSTicketConfigItem,
 )
-from aplicativos.integracoes.otrs_queues import NOC_QUEUE_NAME
+from aplicativos.integracoes.otrs_queues import NOC_QUEUE_NAME, NOC_HISTORY_SCOPE
 from aplicativos.integracoes.services.otrs_snapshots import capture_hourly_backlog_checkpoint
 from aplicativos.mapa.services.analytics import MapAnalyticsService
 from aplicativos.mapa.services.presentation import presentation_payload
@@ -172,7 +172,7 @@ class IndicatorsReconciliationTests(TestCase):
         )
         # Historical intervals: at 2026-11-18 07:00 BRT, 3 tickets were open; by 12:00 BRT only 1 remained!
         coverage = OTRSBacklogHistory.objects.create(
-            queue_name=NOC_QUEUE_NAME,
+            queue_name=NOC_HISTORY_SCOPE,
             earliest_at=datetime(2026, 11, 1, 0, 0, tzinfo=self.tz).astimezone(dt_tz.utc),
             through=sync_time,
             ticket_count=3,
