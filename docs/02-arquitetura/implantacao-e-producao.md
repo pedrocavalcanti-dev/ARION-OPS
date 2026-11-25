@@ -84,7 +84,11 @@ Logs podem conter contexto operacional mesmo sanitizados: consultar localmente e
 .\deploy\windows\restart-arion.ps1 -Role worker
 ```
 
-O gerenciador `deploy/windows/ARION-OPS.bat` ou `manage-arion.ps1` coordena Start/Stop/Restart/Update/Diagnostics com lock e relatório sanitizado. Start/Stop/Restart/Update exigem Administradores locais. Diagnostics cria relatório local; não altera usuários ou banco. Cloudflared é consultado, não reiniciado pelo gerenciador. Web e Worker são processos supervisionados por tarefas, não serviços Windows com nomes inventados.
+O gerenciador Windows 2.0 (`deploy/windows/ARION-OPS.bat` ou `manage-arion.ps1`) oferece as operacoes completas e por `-Role web|worker`, status com PID efetivo, logs separados, Health Check e verificacoes de producao. `-Action Start|Stop|Restart` conserva a operacao de todos quando Role e omitido; `Update` e `Diagnostics` continuam disponiveis por CLI. Operacoes de controle/Update exigem Administradores locais, preservam os servicos saudaveis em falhas parciais e usam locks. Cloudflared e somente consultado. Web e Worker sao processos supervisionados, opcionalmente iniciados por tarefas agendadas, sem servicos Windows com nomes inventados.
+
+O status distingue `running`, `starting`, `restarting`, `stopped` e `failed`. Worker exige confirmacao de inicializacao depois da aquisicao da lease, identidade do processo efetivo e estabilidade; Web exige tambem listener proprio e HTTP `/health/`. A parada tenta liberar a lease pelo encerramento normal do Worker antes do fallback por identidade/criacao. Cinco falhas em cinco minutos encerram as tentativas do supervisor, com backoff e diagnostico persistente. Nao apagar leases nem arquivos de identidade de processos vivos. O ambiente padrao e `production`; `-Environment development` existe para homologacao isolada e nao altera a configuracao de producao.
+
+Comandos oficiais, protocolo de status, homologacao real e deploy exclusivo de infraestrutura com rollback estao no [hotfix do gerenciamento Windows](../08-releases/hotfix-gerenciamento-windows.md).
 
 `install-arion.ps1` e `install-tasks.ps1 -ServiceAccount '<conta Windows autorizada>'` são procedimentos críticos de instalação, não consultas nem passos de todo deploy. A instalação de tarefas solicita credencial local, modifica ACLs e inicia processos. Não reinstalar tarefas em operação somente para conferir status.
 

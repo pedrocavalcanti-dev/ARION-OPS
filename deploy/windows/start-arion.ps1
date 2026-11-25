@@ -1,58 +1,33 @@
-param(
+﻿param(
     [ValidateSet('web', 'worker')][string]$Role = 'web',
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+    [ValidateSet('production', 'development')][string]$Environment = 'production'
 )
-
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'arion-common.ps1')
+$ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $runner = Join-Path $ProjectRoot 'deploy\windows\run_process.py'
-if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw 'Supervisor do ARION não encontrado.' }
-
 $python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python da .venv nao encontrado.' }
-$existingOutput = & $python $runner --status $Role 2>&1
-$existingCode = $LASTEXITCODE
-if ($existingCode -eq 0) {
-    $existingOutput
-    return
-}
-if ($existingCode -eq 2) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    do {
-        $existingOutput = & $python $runner --status $Role 2>&1
-        $existingCode = $LASTEXITCODE
-        if ($existingCode -eq 0) {
-            $existingOutput
-            return
-        }
-        if ($existingCode -eq 1) { break }
-        Start-Sleep -Seconds 1
-    } while ([DateTime]::UtcNow -lt $deadline)
-    $existingOutput
-    throw 'O supervisor ARION existente não confirmou o processo e, no Web, a prontidão do Waitress na porta configurada em 30 segundos.'
-}
-
-$startupLogs = Join-Path $ProjectRoot 'var\logs'
-New-Item -ItemType Directory -Path $startupLogs -Force | Out-Null
-$startupOut = Join-Path $startupLogs "arion-$Role-startup.out.log"
-$startupErr = Join-Path $startupLogs "arion-$Role-startup.err.log"
-# A separate hidden console process retains working standard streams and
-# survives the invoking terminal. pythonw can discard startup diagnostics.
-$process = Start-Process -FilePath $python -ArgumentList @(('"' + $runner + '"'), $Role) `
-    -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput $startupOut -RedirectStandardError $startupErr
-$deadline = [DateTime]::UtcNow.AddSeconds(30)
-$statusOutput = @()
-do {
-    if ($process.HasExited) {
-        throw "ARION supervisor exited during startup (code $($process.ExitCode)). Consulte var\logs\arion-$Role-startup.err.log e arion-$Role.log."
-    }
-    $statusOutput = & $python $runner --status $Role 2>&1
-    $statusCode = $LASTEXITCODE
-    if ($statusCode -eq 0) {
-        $statusOutput
+$control = Enter-ArionRoleControl $ProjectRoot $Role
+try {
+    $existing = Get-ArionRoleStatus $ProjectRoot $Role
+    if ($existing.locked) {
+        $ready = Wait-ArionRoleReady $ProjectRoot $Role
+        Write-Output "$Role`: running (supervisor pid $($ready.supervisor_pid), launcher pid $($ready.launcher_pid), child pid $($ready.child_pid)); instancia existente preservada."
         return
     }
-    Start-Sleep -Seconds 1
-} while ([DateTime]::UtcNow -lt $deadline)
-$statusOutput
-throw 'O supervisor permaneceu ativo, mas não confirmou o processo e, no Web, a prontidão do Waitress na porta configurada em 30 segundos.'
+    $check = Invoke-ArionPython $ProjectRoot @($runner, '--preflight', $Role, '--environment', $Environment)
+    Write-Output $check.Output
+    $logs = Join-Path $ProjectRoot 'var\logs'
+    New-Item -ItemType Directory -Path $logs -Force | Out-Null
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+    $launchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0
+    $process = Start-Process -FilePath $python -ArgumentList @(
+        ('"' + $runner + '"'), $Role, '--environment', $Environment) `
+        -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $logs "arion-$Role-startup.$stamp.$PID.out.log") `
+        -RedirectStandardError (Join-Path $logs "arion-$Role-startup.$stamp.$PID.err.log")
+    # Store launchers can exit while the effective interpreter survives.
+    $ready = Wait-ArionRoleReady $ProjectRoot $Role -LaunchedAt $launchedAt
+    Write-Output "$Role`: running (supervisor pid $($ready.supervisor_pid), launcher pid $($ready.launcher_pid), child pid $($ready.child_pid)); prontidao confirmada."
+} finally { $control.Dispose() }

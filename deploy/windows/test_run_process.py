@@ -33,7 +33,7 @@ class WindowsProcessIdentityTests(unittest.TestCase):
         with mock.patch.object(run_process, "_is_locked", return_value=False):
             with mock.patch("builtins.print") as output:
                 self.assertEqual(run_process._print_status("worker"), 1)
-        output.assert_called_once_with("worker: stopped")
+        self.assertIn("worker: stopped", output.call_args.args[0])
 
     def test_reused_pid_does_not_match_saved_creation_time(self):
         current = run_process._process_identity(os.getpid())
@@ -91,7 +91,9 @@ class WindowsProcessIdentityTests(unittest.TestCase):
                         "web", "child", service_pid, parent_pid=parent_map[service_pid]
                     )
                     with mock.patch.object(run_process, "_is_locked", return_value=True):
-                        with mock.patch.object(run_process, "_listener_pids", return_value={service_pid}):
+                        with mock.patch.object(run_process, "_listener_pids", return_value={service_pid}), \
+                                mock.patch.object(run_process, "_web_health", return_value=True), \
+                                mock.patch.object(run_process, "_read_state", return_value={"state": "running", "child_pid": service_pid}):
                             with mock.patch("builtins.print") as output:
                                 self.assertEqual(run_process._print_status("web"), 0)
                     rendered = " ".join(str(part) for call in output.call_args_list for part in call.args)
@@ -173,6 +175,71 @@ class WindowsProcessIdentityTests(unittest.TestCase):
 
 
 class WebReadinessTests(unittest.TestCase):
+    def test_duplicate_direct_start_does_not_claim_success_while_existing_role_restarts(self):
+        with mock.patch.object(run_process, "_logger"), \
+                mock.patch.object(run_process, "_lock_file", return_value=None), \
+                mock.patch.object(run_process, "_status", return_value={"state": "restarting", "code": 2}), \
+                mock.patch.object(run_process, "_remove_process_record") as remove:
+            self.assertEqual(run_process.supervise("worker"), 2)
+            remove.assert_not_called()
+
+    def test_managed_child_error_keeps_diagnostics_after_runpy_changes_argv(self):
+        import io
+
+        def fail():
+            sys.argv = ["integration_worker"]
+            raise RuntimeError("password=child-secret-value")
+
+        original = sys.argv
+        output = io.StringIO()
+        try:
+            with mock.patch.object(run_process, "main", side_effect=fail), \
+                    mock.patch.object(run_process, "_logger") as logger, \
+                    mock.patch.object(sys, "argv", ["run_process.py", "--run-child", "worker"]), \
+                    mock.patch.object(sys, "stderr", output):
+                self.assertEqual(run_process.guarded_main(), 1)
+                logger.assert_not_called()
+            self.assertIn("RuntimeError", output.getvalue())
+            self.assertNotIn("child-secret-value", output.getvalue())
+        finally:
+            sys.argv = original
+
+    def test_lock_before_pid_publication_is_starting_not_failed(self):
+        with mock.patch.object(run_process, "_is_locked", return_value=True), \
+                mock.patch.object(run_process, "_read_process_record", return_value=None), \
+                mock.patch.object(run_process, "_read_state", return_value={}):
+            self.assertEqual((run_process._status("worker")["state"], run_process._status("worker")["code"]),
+                             ("starting", 2))
+
+    def test_worker_pid_alone_never_means_ready_and_failed_is_retained(self):
+        records = {"supervisor": {"pid": 11}, "launcher": {"pid": 22}, "child": {"pid": 33}}
+        with mock.patch.object(run_process, "_is_locked", return_value=True), \
+                mock.patch.object(run_process, "_read_process_record", side_effect=lambda role, name, **kw: records[name]), \
+                mock.patch.object(run_process, "_service_process_matches_launcher", return_value=True), \
+                mock.patch.object(run_process, "_read_state", return_value={"state": "starting"}):
+            self.assertEqual(run_process._status("worker")["state"], "starting")
+        with mock.patch.object(run_process, "_is_locked", return_value=False), \
+                mock.patch.object(run_process, "_read_process_record", return_value=None), \
+                mock.patch.object(run_process, "_read_state", return_value={"state": "failed", "last_exit_code": 1}):
+            status = run_process._status("worker")
+            self.assertEqual((status["state"], status["code"], status["last_exit_code"]), ("failed", 3, 1))
+
+    def test_lost_or_replaced_child_is_restarting_even_when_state_file_says_running(self):
+        records = {"supervisor": {"pid": 11}, "launcher": {"pid": 22}, "child": {"pid": 44}}
+        with mock.patch.object(run_process, "_is_locked", return_value=True), \
+                mock.patch.object(run_process, "_read_process_record", side_effect=lambda role, name, **kw: records[name]), \
+                mock.patch.object(run_process, "_service_process_matches_launcher", return_value=True), \
+                mock.patch.object(run_process, "_read_state", return_value={"state": "running", "child_pid": 33}):
+            self.assertEqual(run_process._status("worker")["state"], "restarting")
+
+    def test_orphan_cleanup_refuses_an_unrelated_process(self):
+        records = {"supervisor": None, "launcher": {"pid": 22}, "child": {"pid": 33}}
+        with mock.patch.object(run_process, "_read_process_record", side_effect=lambda role, name, **kw: records[name]), \
+                mock.patch.object(run_process, "_service_process_matches_launcher", return_value=False), \
+                mock.patch.object(run_process, "_terminate_windows_process") as terminate:
+            self.assertFalse(run_process._cleanup_orphan("worker"))
+            terminate.assert_not_called()
+
     def test_startup_failure_is_recorded_and_sensitive_values_are_redacted(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             logger = mock.Mock()
@@ -193,14 +260,16 @@ class WebReadinessTests(unittest.TestCase):
         with mock.patch.object(run_process, "_is_locked", return_value=True):
             with mock.patch.object(run_process, "_read_process_record", side_effect=lambda role, name, **kwargs: records[name]):
                 with mock.patch.object(run_process, "_service_process_matches_launcher", return_value=True):
-                    with mock.patch.object(run_process, "_web_port", return_value=8100):
+                    with mock.patch.object(run_process, "_web_port", return_value=8100), \
+                            mock.patch.object(run_process, "_web_health", return_value=True), \
+                            mock.patch.object(run_process, "_read_state", return_value={"state": "running", "child_pid": 33}):
                         with mock.patch.object(run_process, "_listener_pids", return_value={33}):
                             self.assertEqual(run_process._print_status("web"), 0)
                         with mock.patch.object(run_process, "_listener_pids", return_value={44}):
                             with mock.patch("builtins.print") as output:
                                 self.assertEqual(run_process._print_status("web"), 2)
             output.assert_called_once()
-            self.assertIn("8100", output.call_args.args[0])
+            self.assertIn("restarting", output.call_args.args[0])
 
 
 if __name__ == "__main__":

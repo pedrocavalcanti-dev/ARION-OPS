@@ -11,6 +11,7 @@ $script:RealInvokeArionScript = (Get-Command Invoke-ArionScript).ScriptBlock
 function Assert-Project {}
 function Assert-AuthorizedOperator {}
 function Enter-OperationLock {}
+function Assert-SingleRoleState([string]$Role, [string]$Expected) { $script:Calls.Add("state:${Role}:$Expected") }
 function Assert-RoleState([string]$Expected) { $script:Calls.Add("state:$Expected") }
 function Show-Status { $script:Calls.Add('status') }
 function Test-WebReadiness([int]$TimeoutSeconds = 0) { $script:Calls.Add('web-health'); return $true }
@@ -44,6 +45,21 @@ Write-Output "$Role|$ProjectRoot"
     if ($observed -ne "worker|$script:Root") { throw 'Role deve chegar como parametro nomeado, sem receber -Role como valor.' }
     Write-Output 'OK: binding real de Role por hashtable'
 
+    'exit 7' | Set-Content -LiteralPath (Join-Path $probeDirectory 'exit-probe.ps1') -Encoding UTF8
+    $failed = $false
+    try { & $script:RealInvokeArionScript 'exit-probe' } catch { $failed = $true }
+    if (-not $failed) { throw 'Exit code nao zero de um script foi ignorado.' }
+    Write-Output 'OK: gerenciador propaga exit code real de scripts individuais'
+
+    $actualRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    $native = Invoke-ArionPython $actualRoot @('-c', 'import sys; print(''password=never-print'', file=sys.stderr); print(''native-ok'')')
+    if ($native.Code -ne 0 -or $native.Output -notmatch 'native-ok' -or $native.Output -match 'never-print') { throw 'stderr nativo quebrou sucesso ou vazou segredo.' }
+    Write-Output 'OK: stderr nativo sanitizado sem falso erro no PowerShell'
+    $global:LASTEXITCODE = 0
+    $probe = Invoke-ArionPython $actualRoot @('-c', 'raise SystemExit(7)') -AllowNonZero
+    if ($probe.Code -ne 7 -or $LASTEXITCODE -ne 0) { throw 'Consulta nativa contaminou o exit code do script chamador.' }
+    Write-Output 'OK: codigo de consulta nao provoca falha falsa de Stop'
+
     $releaseDirectory = Join-Path $script:Root 'docs\08-releases'
     New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
     '{"current_version":"test"}' | Set-Content -LiteralPath (Join-Path $releaseDirectory 'releases.json') -Encoding UTF8
@@ -58,15 +74,15 @@ Write-Output "$Role|$ProjectRoot"
 
     Reset-Calls
     Start-AllServices
-    Assert-Sequence 'start: Web antes de Worker, com confirmação final' @('start-arion:web', 'start-arion:worker', 'state:running', 'web-health', 'status')
+    Assert-Sequence 'start: Web antes de Worker, com confirmação final' @('start-arion:web', 'state:web:running', 'web-health', 'start-arion:worker', 'state:running', 'status', 'state:running')
 
     Reset-Calls
     Stop-AllServices
-    Assert-Sequence 'stop: Worker antes de Web, com confirmação final' @('stop-arion:worker', 'stop-arion:web', 'state:stopped', 'status')
+    Assert-Sequence 'stop: Worker antes de Web, com confirmação final' @('stop-arion:worker', 'state:worker:stopped', 'stop-arion:web', 'state:web:stopped', 'status')
 
     Reset-Calls
     Restart-AllServices
-    Assert-Sequence 'restart: parada Worker/Web e partida Web/Worker' @('stop-arion:worker', 'stop-arion:web', 'state:stopped', 'start-arion:web', 'start-arion:worker', 'state:running', 'web-health', 'status')
+    Assert-Sequence 'restart: parada Worker/Web e partida Web/Worker' @('stop-arion:worker', 'state:worker:stopped', 'stop-arion:web', 'state:web:stopped', 'start-arion:web', 'state:web:running', 'web-health', 'start-arion:worker', 'state:running', 'status', 'state:running')
 
     Reset-Calls
     $script:FailOn = 'start-arion:web'
@@ -74,6 +90,21 @@ Write-Output "$Role|$ProjectRoot"
     try { Start-AllServices } catch { $failed = $true }
     if (-not $failed -or @($script:Calls) -contains 'start-arion:worker') { throw 'Falha de Web deve interromper a inicialização antes do Worker.' }
     Write-Output 'OK: erro interrompe a ordem e não inicia o serviço seguinte'
+
+    Reset-Calls
+    $script:FailOn = 'start-arion:worker'
+    $failed = $false
+    try { Start-AllServices } catch { $failed = $true }
+    if (-not $failed -or @($script:Calls | Where-Object { $_ -like 'stop-arion:*' }).Count) { throw 'Falha de Worker deve preservar Web saudavel.' }
+    Write-Output 'OK: falha de Worker preserva Web e nao declara sucesso'
+
+    foreach ($roleName in @('web', 'worker')) {
+        Reset-Calls
+        Invoke-SingleService 'Restart' $roleName
+        $otherRole = if ($roleName -eq 'web') { 'worker' } else { 'web' }
+        if (@($script:Calls | Where-Object { $_ -eq "stop-arion:$otherRole" -or $_ -eq "start-arion:$otherRole" }).Count) { throw 'Operacao parcial alterou outro servico.' }
+    }
+    Write-Output 'OK: reinicios parciais preservam outro servico'
 
     New-Item -ItemType Directory -Path (Join-Path $script:Root 'var\run') -Force | Out-Null
     Reset-Calls

@@ -1,6 +1,7 @@
-param([string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path)
+﻿param([string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path)
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'arion-common.ps1')
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 $manage = Join-Path $ProjectRoot 'arion_geo\gerenciar.py'
@@ -21,10 +22,10 @@ try {
     $env:DJANGO_SETTINGS_MODULE = 'config.settings'
     Push-Location (Join-Path $ProjectRoot 'arion_geo')
     try {
-        & $python $checker
-        if ($LASTEXITCODE -ne 0) { throw 'A configuração local não passou no production-check.' }
-        & $python $manage check --deploy
-        if ($LASTEXITCODE -ne 0) { throw 'O Django check --deploy encontrou erro.' }
+        $result = Invoke-ArionPython $ProjectRoot @($checker)
+        Write-Output $result.Output
+        $result = Invoke-ArionPython $ProjectRoot @($manage, 'check', '--deploy')
+        Write-Output $result.Output
     } finally { Pop-Location }
 } finally {
     if ($null -eq $oldArionEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $oldArionEnv }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import _thread
 import ctypes
 from ctypes import wintypes
 import json
@@ -20,6 +21,7 @@ import sys
 import threading
 import time
 import traceback
+from urllib.request import build_opener, ProxyHandler
 from urllib.parse import urlsplit
 import uuid
 
@@ -31,6 +33,10 @@ RUN_ROOT = PROJECT_ROOT / "var" / "run"
 LOG_ROOT = PROJECT_ROOT / "var" / "logs"
 ROLES = {"web", "worker"}
 STOP_EVENT = threading.Event()
+STABLE_SECONDS = 5
+STARTUP_SECONDS = 30
+MAX_RESTARTS = 5
+RESTART_WINDOW = 300
 
 SECRET_KEY_PATTERN = re.compile(
     r"(?i)\b(password|passwd|secret_key|secret|token|access_token|refresh_token|api_key|"
@@ -200,42 +206,96 @@ def _windows_process_identity(pid: int) -> dict[str, int | str] | None:
         kernel32.CloseHandle(handle)
 
 
-def _print_status(role: str) -> int:
-    if not _is_locked(role):
-        print(f"{role}: stopped")
-        return 1
+def _state_path(role: str) -> Path:
+    return RUN_ROOT / f"{role}.state.json"
+
+
+def _read_state(role: str) -> dict:
+    try:
+        value = json.loads(_state_path(role).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_state(role: str, state: str, **details) -> None:
+    RUN_ROOT.mkdir(parents=True, exist_ok=True)
+    previous = _read_state(role)
+    if (previous.get("state") == state and time.time() - previous.get("updated_at", 0) < 5
+            and all(previous.get(key) == value for key, value in details.items())):
+        return
+    value = {"state": state, "updated_at": time.time(),
+             "environment": os.environ.get("ARION_ENV", "production"), **details}
+    path = _state_path(role)
+    temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(value), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _web_health() -> bool:
+    # Never use inherited HTTP proxies or follow redirects for local readiness.
+    from urllib.request import HTTPRedirectHandler
+
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    try:
+        opener = build_opener(ProxyHandler({}), NoRedirect())
+        with opener.open(f"http://127.0.0.1:{_web_port()}/health/", timeout=2) as response:
+            return response.status == 200 and json.loads(response.read(4096)).get("status") == "ok"
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def _status(role: str) -> dict:
+    saved = _read_state(role)
     supervisor = _read_process_record(role, "supervisor")
     launcher = _read_process_record(role, "launcher", require_running=False)
     service = _read_process_record(role, "child")
-    supervisor_pid = str(supervisor["pid"]) if supervisor else "unknown"
     service_matches = bool(supervisor and launcher and service
                            and _service_process_matches_launcher(launcher, service))
-    web_ready = True
-    web_port = None
+    ready = service_matches
     if role == "web" and service_matches:
-        web_port = _web_port()
-        web_ready = int(service["pid"]) in _listener_pids(web_port)
-    if service_matches and web_ready:
-        print(
-            f"{role}: running (supervisor pid {supervisor_pid}, "
-            f"launcher pid {launcher['pid']} ({'running' if launcher['running'] else 'exited'}), "
-            f"child pid {service['pid']}, "
-            f"executable {service['executable']})"
-        )
-        return 0
-    launcher_pid = str(launcher["pid"]) if launcher else "unknown"
-    child_pid = str(service["pid"]) if service else "unknown"
-    if role == "web" and service_matches:
-        print(
-            f"web: supervisor running (pid {supervisor_pid}); launcher pid {launcher_pid}, "
-            f"child pid {child_pid}; Waitress not ready on 127.0.0.1:{web_port}"
-        )
-        return 2
-    print(
-        f"{role}: supervisor running (pid {supervisor_pid}); "
-        f"launcher pid {launcher_pid}, child pid {child_pid}; child restarting or unavailable"
-    )
-    return 2
+        ready = int(service["pid"]) in _listener_pids(_web_port()) and _web_health()
+    locked = _is_locked(role)
+    state = saved.get("state", "starting")
+    if not locked:
+        # Keep a terminal failure visible until the operator acknowledges stop/start.
+        state = "failed" if state == "failed" or service or (launcher and launcher["running"]) else "stopped"
+    elif not supervisor:
+        # Lock acquisition precedes publication of PID + creation time. This
+        # interval is Starting, never a terminal failure or a healthy service.
+        state = "starting"
+    elif state == "running" and (not ready or saved.get("child_pid") != service["pid"]):
+        state = "restarting"
+    elif state not in {"running", "starting", "restarting", "failed"}:
+        state = "starting"
+    return {"role": role, "state": state, "locked": locked,
+            "environment": saved.get("environment", "unknown"),
+            "code": {"running": 0, "stopped": 1, "starting": 2, "restarting": 2, "failed": 3}[state],
+            "supervisor_pid": supervisor["pid"] if supervisor else None,
+            "launcher_pid": launcher["pid"] if launcher else None,
+            "child_pid": service["pid"] if service else None,
+            "last_exit_code": saved.get("last_exit_code"), "restarts": saved.get("restarts", 0),
+            "detail": saved.get("detail", ""), "updated_at": saved.get("updated_at", 0),
+            "checked_at": time.time()}
+
+
+def _print_status(role: str, *, as_json: bool = False) -> int:
+    status = _status(role)
+    if as_json:
+        print(json.dumps(status))
+    else:
+        print(f"{role}: {status['state']} (supervisor pid {status['supervisor_pid']}, "
+              f"launcher pid {status['launcher_pid']}, child pid {status['child_pid']}; "
+              f"restarts {status['restarts']}; exit {status['last_exit_code']})")
+        if status["detail"]:
+            print(sanitize_line(status["detail"]))
+    return status["code"]
 
 
 def _process_identity(pid: int) -> dict[str, int | str] | None:
@@ -461,6 +521,17 @@ def _run_managed_child(role: str) -> int:
     target = _command(role)
     child_pid = os.getpid()
     _write_process_record(role, "child", child_pid, parent_pid=os.getppid())
+    finished = threading.Event()
+
+    def stop_monitor():
+        while not finished.wait(0.2):
+            if _stop_path(role).exists():
+                # A Windows TerminateProcess bypasses Django's finally/release.
+                # Deliver KeyboardInterrupt inside the effective interpreter.
+                _thread.interrupt_main()
+                return
+
+    threading.Thread(target=stop_monitor, daemon=True).start()
     try:
         sys.path.insert(0, str(PROJECT_ROOT / "arion_geo"))
         if target[1] == "-m":
@@ -472,13 +543,14 @@ def _run_managed_child(role: str) -> int:
             sys.argv = [script_path, *target[2:]]
             runpy.run_path(script_path, run_name="__main__")
     finally:
+        finished.set()
         _remove_process_record(role, "child", only_pid=child_pid)
     return 0
 
 
-def _load_project_environment(project_root: Path = PROJECT_ROOT) -> dict[str, str | bool]:
+def _load_project_environment(project_root: Path | None = None) -> dict[str, str | bool]:
     """Load the fixed project .env using OS environment precedence and report sources safely."""
-    dotenv_path = project_root / ".env"
+    dotenv_path = (project_root or PROJECT_ROOT) / ".env"
     inherited_keys = set(os.environ)
     try:
         file_values = dotenv_values(dotenv_path)
@@ -498,13 +570,21 @@ def _load_project_environment(project_root: Path = PROJECT_ROOT) -> dict[str, st
 def _child_environment() -> dict[str, str]:
     """Build the same production environment for the web and worker children."""
     environment = os.environ.copy()
-    environment["DJANGO_SETTINGS_MODULE"] = "config.settings"
-    environment["ARION_ENV"] = "production"
+    environment["ARION_ENV"] = os.environ.get("ARION_ENV", "production")
+    environment["DJANGO_SETTINGS_MODULE"] = (os.environ.get("DJANGO_SETTINGS_MODULE", "config.settings")
+                                              if environment["ARION_ENV"] == "development" else "config.settings")
+    environment["PYTHONUNBUFFERED"] = "1"
+    environment["PYTHONIOENCODING"] = "utf-8"
     return environment
 
 
 def _request_stop(role: str) -> int:
     if not _is_locked(role):
+        if not _cleanup_orphan(role):
+            print(f"{role}: failed; recorded process could not be stopped safely")
+            return 3
+        _stop_path(role).unlink(missing_ok=True)
+        _write_state(role, "stopped")
         print(f"{role}: stopped")
         return 0
     RUN_ROOT.mkdir(parents=True, exist_ok=True)
@@ -513,6 +593,9 @@ def _request_stop(role: str) -> int:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if not _is_locked(role):
+            if _read_process_record(role, "child") or _read_process_record(role, "launcher"):
+                print(f"{role}: failed; effective process remains alive")
+                return 3
             print(f"{role}: stopped")
             return 0
         time.sleep(0.5)
@@ -540,11 +623,13 @@ def _command(role: str) -> list[str]:
     return [str(python), str(PROJECT_ROOT / "arion_geo" / "gerenciar.py"), "integration_worker"]
 
 
-def _read_child_output(child: subprocess.Popen, logger: logging.Logger) -> None:
+def _read_child_output(child: subprocess.Popen, logger: logging.Logger, ready: threading.Event) -> None:
     if child.stdout is None:
         return
     for line in child.stdout:
         logger.info("child: %s", sanitize_line(line))
+        if line.strip() == "Worker iniciado.":
+            ready.set()
 
 
 def _terminate_windows_process(pid: int, expected_created_at: int) -> bool:
@@ -587,7 +672,34 @@ def _terminate_windows_process(pid: int, expected_created_at: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
-def _stop_child(child: subprocess.Popen, logger: logging.Logger, role: str) -> None:
+def _cleanup_orphan(role: str) -> bool:
+    """Never discard a live effective child after a crashed supervisor."""
+    launcher = _read_process_record(role, "launcher", require_running=False)
+    service = _read_process_record(role, "child")
+    if service:
+        if not launcher or not _service_process_matches_launcher(launcher, service):
+            return False
+        _stop_path(role).write_text("stop\n", encoding="ascii")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and _pid_is_running(int(service["pid"]), int(service["created_at"])):
+            time.sleep(0.2)
+        if (_pid_is_running(int(service["pid"]), int(service["created_at"]))
+                and not _terminate_windows_process(int(service["pid"]), int(service["created_at"]))):
+            return False
+    if launcher and launcher["running"]:
+        supervisor = _read_process_record(role, "supervisor", require_running=False)
+        if (not supervisor or launcher.get("parent_pid") != supervisor["pid"]
+                or int(launcher["created_at"]) < int(supervisor["created_at"])):
+            return False
+        if (_pid_is_running(int(launcher["pid"]), int(launcher["created_at"]))
+                and not _terminate_windows_process(int(launcher["pid"]), int(launcher["created_at"]))):
+            return False
+    for process in ("child", "launcher", "supervisor"):
+        _remove_process_record(role, process)
+    return True
+
+
+def _stop_child(child: subprocess.Popen, logger: logging.Logger, role: str) -> bool:
     service = None
     owned_service = False
     try:
@@ -598,10 +710,17 @@ def _stop_child(child: subprocess.Popen, logger: logging.Logger, role: str) -> N
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         service = None
 
-    if child.poll() is not None:
-        pass
-    else:
-        logger.info("requesting child shutdown")
+    logger.info("requesting graceful shutdown of effective child")
+    _stop_path(role).write_text("stop\n", encoding="ascii")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        effective_alive = bool(owned_service and service and
+                               _pid_is_running(int(service["pid"]), int(service["created_at"])))
+        if child.poll() is not None and not effective_alive:
+            break
+        time.sleep(0.2)
+    if child.poll() is None:
+        logger.warning("graceful shutdown timed out; terminating recorded launcher")
         child.terminate()
         try:
             child.wait(timeout=15)
@@ -619,102 +738,143 @@ def _stop_child(child: subprocess.Popen, logger: logging.Logger, role: str) -> N
             if service_pid != child.pid and _pid_is_running(service_pid, int(service["created_at"])):
                 if not _terminate_windows_process(service_pid, int(service["created_at"])):
                     logger.warning("could not stop the recorded effective child process %s", service_pid)
+                    return False
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            pass
+            return False
+    return child.poll() is not None and not _read_process_record(role, "child")
 
 
 def supervise(role: str) -> int:
     logger = _logger(role)
     lock = _lock_file(role)
     if lock is None:
-        logger.warning("duplicate start ignored")
-        return 0
-
+        status = _status(role)
+        logger.warning("duplicate start ignored; existing state=%s", status["state"])
+        return status["code"]
     child = None
+    final_state = "stopped"
+    restarts = []
+    STOP_EVENT.clear()
     stop_file = _stop_path(role)
-    stop_file.unlink(missing_ok=True)
-    for process in ("supervisor", "launcher", "child"):
-        _remove_process_record(role, process)
-    _write_process_record(role, "supervisor", os.getpid(), parent_pid=os.getppid())
-    signal.signal(signal.SIGTERM, lambda *_: STOP_EVENT.set())
-    signal.signal(signal.SIGINT, lambda *_: STOP_EVENT.set())
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-    os.environ["ARION_ENV"] = "production"
-    environment_summary = _load_project_environment()
-    os.environ["ARION_ENV"] = "production"
-    logger.info(
-        "supervisor started role=%s project_root=%s dotenv_present=%s "
-        "otrs_legacy_host_source=%s",
-        role, PROJECT_ROOT, environment_summary["dotenv_present"],
-        environment_summary["otrs_legacy_host_source"],
-    )
-
     try:
-        delay = 2
+        if not _cleanup_orphan(role):
+            final_state = "failed"
+            _write_state(role, final_state, detail="Existing recorded child cannot be safely replaced; run stop and inspect logs.")
+            return 1
+        stop_file.unlink(missing_ok=True)
+        _write_process_record(role, "supervisor", os.getpid(), parent_pid=os.getppid())
+        _write_state(role, "starting", supervisor_pid=os.getpid())
+        signal.signal(signal.SIGTERM, lambda *_: STOP_EVENT.set())
+        signal.signal(signal.SIGINT, lambda *_: STOP_EVENT.set())
+        environment_summary = _load_project_environment()
+        logger.info("supervisor started role=%s environment=%s dotenv_present=%s",
+                    role, os.environ["ARION_ENV"], environment_summary["dotenv_present"])
         while not STOP_EVENT.is_set():
             if stop_file.exists():
                 STOP_EVENT.set()
                 break
-            try:
-                target_command = _command(role)
-            except RuntimeError as exc:
-                logger.error("startup refused: %s", sanitize_line(str(exc)))
-                return 1
-            environment = _child_environment()
-            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            command = [target_command[0], str(Path(__file__).resolve()), "--run-child", role]
-            try:
-                child = subprocess.Popen(command, cwd=PROJECT_ROOT / "arion_geo", env=environment,
-                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                         encoding="utf-8", errors="replace", bufsize=1, creationflags=flags)
-            except OSError as exc:
-                logger.error("child launch failed: %s", sanitize_line(str(exc)))
-                return 1
-            try:
-                _write_process_record(
-                    role, "launcher", child.pid, parent_pid=os.getpid(), executable=target_command[0],
-                    created_at=_windows_process_created_at(child._handle) if os.name == "nt" else None,
-                )
-            except RuntimeError as exc:
-                logger.warning("could not confirm launcher process: %s", sanitize_line(str(exc)))
-            logger.info("child launcher started (pid %s)", child.pid)
-            reader = threading.Thread(target=_read_child_output, args=(child, logger), daemon=True)
+            _write_state(role, "restarting" if restarts else "starting", restarts=len(restarts))
+            target = _command(role)
+            ready = threading.Event()
+            child = subprocess.Popen(
+                [target[0], str(Path(__file__).resolve()), "--run-child", role],
+                cwd=PROJECT_ROOT / "arion_geo", env=_child_environment(),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            _write_process_record(role, "launcher", child.pid, parent_pid=os.getpid(),
+                created_at=_windows_process_created_at(child._handle) if os.name == "nt" else None)
+            logger.info("child launcher started pid=%s attempt=%s", child.pid, len(restarts) + 1)
+            reader = threading.Thread(target=_read_child_output, args=(child, logger, ready), daemon=True)
             reader.start()
-            while child.poll() is None and not STOP_EVENT.wait(0.5):
+            started = time.monotonic()
+            ready_since = None
+            unavailable_since = started
+            ever_running = False
+            next_health = 0
+            web_healthy = False
+            reason = "Child exited unexpectedly (including exit 0 for a persistent service)."
+            while not STOP_EVENT.wait(0.2):
                 if stop_file.exists():
                     STOP_EVENT.set()
-            if STOP_EVENT.is_set():
-                _stop_child(child, logger, role)
-                break
-            code = child.wait()
-            launcher_record = _read_process_record(role, "launcher", require_running=False)
-            # Some Store Python launchers exit after transferring execution to
-            # python3.12.exe. Keep supervising that recorded effective process.
-            while launcher_record and not STOP_EVENT.is_set():
+                    break
+                launcher = _read_process_record(role, "launcher", require_running=False)
                 service = _read_process_record(role, "child")
-                if not service or not _service_process_matches_launcher(launcher_record, service):
+                matches = bool(launcher and service and _service_process_matches_launcher(launcher, service))
+                alive = child.poll() is None or matches
+                # The Store launcher may exit while the effective interpreter
+                # still owns the output pipe and is publishing its identity.
+                if not alive and not reader.is_alive():
                     break
+                now = time.monotonic()
+                if role == "web" and matches and now >= next_health:
+                    web_healthy = int(service["pid"]) in _listener_pids(_web_port()) and _web_health()
+                    next_health = now + 5
+                healthy = matches and (ready.is_set() if role == "worker" else web_healthy)
+                if healthy:
+                    ready_since = ready_since or now
+                    unavailable_since = now
+                    if now - ready_since >= STABLE_SECONDS:
+                        ever_running = True
+                        _write_state(role, "running", child_pid=service["pid"], restarts=len(restarts))
+                        if now - ready_since >= RESTART_WINDOW:
+                            restarts.clear()
+                else:
+                    ready_since = None
+                    if ever_running:
+                        _write_state(role, "restarting", restarts=len(restarts), detail="Effective child lost readiness.")
+                if not ever_running and now - started >= STARTUP_SECONDS:
+                    reason = "Startup not confirmed: check worker lease, application error and startup logs."
+                    break
+                if ever_running and now - unavailable_since >= STARTUP_SECONDS:
+                    reason = "Effective child lost readiness for the startup budget."
+                    break
+            code = child.poll()
+            if not _stop_child(child, logger, role):
+                final_state = "failed"
+                _write_state(role, final_state, detail="Recorded child did not stop; duplicate launch refused.")
+                return 1
+            reader.join(timeout=2)
+            if child.stdout and not reader.is_alive():
+                child.stdout.close()
+            child = None
+            for process in ("child", "launcher"):
+                _remove_process_record(role, process)
+            if STOP_EVENT.is_set():
+                break
+            stop_file.unlink(missing_ok=True)
+            now = time.monotonic()
+            restarts = [stamp for stamp in restarts if now - stamp < RESTART_WINDOW]
+            restarts.append(now)
+            terminal = len(restarts) >= MAX_RESTARTS
+            delay = min(2 ** len(restarts), 30)
+            final_state = "failed" if terminal else "stopped"
+            _write_state(role, "failed" if terminal else "restarting", restarts=len(restarts),
+                         last_exit_code=code, detail=reason)
+            logger.error("child unavailable exit=%s failures=%s/%s; %s", code, len(restarts), MAX_RESTARTS, reason)
+            if terminal:
+                return 1
+            deadline = time.monotonic() + delay
+            while time.monotonic() < deadline and not STOP_EVENT.wait(0.2):
                 if stop_file.exists():
                     STOP_EVENT.set()
-                    break
-                STOP_EVENT.wait(0.5)
-            if STOP_EVENT.is_set():
-                _stop_child(child, logger, role)
-                break
-            _remove_process_record(role, "child")
-            _remove_process_record(role, "launcher", only_pid=child.pid)
-            reader.join(timeout=2)
-            child = None
-            logger.warning("child exited with status %s; restart in %s seconds", code, delay)
-            STOP_EVENT.wait(delay)
-            delay = min(delay * 2, 60)
+    except Exception:
+        final_state = "failed"
+        _write_state(role, final_state, detail="Supervisor exception; inspect sanitized role log.")
+        logger.error("supervisor failed: %s", sanitize_line(traceback.format_exc()))
+        return 1
     finally:
-        if child is not None:
-            _stop_child(child, logger, role)
-        for process in ("child", "launcher", "supervisor"):
-            _remove_process_record(role, process)
+        cleaned = child is None or _stop_child(child, logger, role)
+        if cleaned:
+            for process in ("child", "launcher", "supervisor"):
+                _remove_process_record(role, process)
+        else:
+            final_state = "failed"
+            _write_state(role, final_state, detail="Cleanup incomplete; identities retained for safe stop.")
         stop_file.unlink(missing_ok=True)
-        logger.info("supervisor stopped")
+        if final_state != "failed":
+            _write_state(role, "stopped")
+        logger.info("supervisor stopped state=%s", final_state)
         lock.close()
     return 0
 
@@ -722,27 +882,192 @@ def supervise(role: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="ARION Windows process supervisor")
     parser.add_argument("--run-child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("role", choices=sorted(ROLES))
+    parser.add_argument("role", type=str.casefold, choices=sorted(ROLES))
+    parser.add_argument("--json", action="store_true", help="Machine-readable status")
+    parser.add_argument("--environment", type=str.casefold, choices=("production", "development"), default="production")
+    parser.add_argument("--wait-for-web", action="store_true", help="Boot worker only after managed Web readiness")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--status", action="store_true")
     action.add_argument("--stop", action="store_true")
+    action.add_argument("--preflight", action="store_true")
+    action.add_argument("--wait-lease", action="store_true", help="Read-only wait for a former worker lease to expire")
+    action.add_argument("--deployment", choices=("root", "snapshot", "stopped", "running"),
+                        help="Deployment fences compatible with previous Windows scripts")
     args = parser.parse_args()
+    if not args.run_child:
+        os.environ["ARION_ENV"] = args.environment
     if args.run_child:
         return _run_managed_child(args.role)
     if args.status:
-        return _print_status(args.role)
+        return _print_status(args.role, as_json=args.json)
     if args.stop:
         return _request_stop(args.role)
+    if args.preflight:
+        return _preflight(args.role)
+    if args.wait_lease:
+        return _wait_worker_lease()
+    if args.deployment:
+        return _deployment_check(args.deployment)
+    if args.wait_for_web and args.role == "worker":
+        deadline = time.monotonic() + STARTUP_SECONDS
+        while time.monotonic() < deadline:
+            if _status("web")["state"] == "running":
+                break
+            time.sleep(1)
+        else:
+            _write_state("worker", "failed", detail="Boot refused: managed Web is not ready.")
+            _logger("worker").error("boot refused: managed Web is not ready")
+            return 1
     return supervise(args.role)
+
+
+def _setup_django():
+    sys.path.insert(0, str(PROJECT_ROOT / "arion_geo"))
+    _load_project_environment()
+    os.environ.update(_child_environment())
+    import django
+    django.setup()
+
+
+def _worker_lease_seconds() -> float:
+    from aplicativos.integracoes.models import IntegrationLease
+    from django.utils import timezone
+    row = IntegrationLease.objects.filter(key="worker").values("expires_at", "owner_token").first()
+    return max(0, (row["expires_at"] - timezone.now()).total_seconds()) if row and row["owner_token"] else 0
+
+
+def _wait_worker_lease() -> int:
+    _setup_django()
+    deadline = time.monotonic() + 190
+    while _worker_lease_seconds() > 0:
+        if time.monotonic() >= deadline:
+            print("Worker lease remains active; another worker may own it. Nothing was changed.")
+            return 1
+        time.sleep(1)
+    print("Worker lease available; no database record was modified.")
+    return 0
+
+
+def _deployment_check(action: str) -> int:
+    """Verify physical processes across versions, without changing services/DB."""
+    snapshot_path = RUN_ROOT / "windows-manager-2-processes.json"
+    if action == "root":
+        print(PROJECT_ROOT)
+        return 0
+    if action == "snapshot":
+        records = [record for role in sorted(ROLES) for name in ("supervisor", "launcher", "child")
+                   if (record := _read_process_record(role, name, require_running=False))]
+        if snapshot_path.exists():
+            # A failed old stop can delete its PID files before the effective
+            # child exits. Retrying/rolling back must retain that live identity.
+            previous = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            records.extend(row for row in previous if _pid_is_running(int(row["pid"]), int(row["created_at"])))
+        records = list({(row["pid"], row["created_at"]): row for row in records}.values())
+        RUN_ROOT.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(records), encoding="utf-8")
+        print("Pre-stop identities captured (PID and creation time).")
+        return 0
+    if action == "stopped":
+        records = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 5
+        while True:
+            alive = any(_pid_is_running(int(row["pid"]), int(row["created_at"])) for row in records)
+            alive = alive or any(_is_locked(role) or any(_read_process_record(role, name)
+                for name in ("supervisor", "launcher", "child")) for role in ROLES)
+            if not alive and not _listener_pids(_web_port()):
+                print("Web and Worker stopped: recorded processes exited; local Web listener released.")
+                return 0
+            if time.monotonic() >= deadline:
+                print("Stop NOT confirmed; code update refused. Inspect recorded PIDs and role logs.")
+                return 1
+            time.sleep(0.2)
+    _setup_django()
+    deadline = time.monotonic() + STARTUP_SECONDS
+    previous = None
+    confirmations = 0
+    while True:
+        identities = []
+        healthy = True
+        for role in sorted(ROLES):
+            supervisor = _read_process_record(role, "supervisor")
+            launcher = _read_process_record(role, "launcher", require_running=False)
+            service = _read_process_record(role, "child")
+            if not (supervisor and launcher and service and _is_locked(role)
+                    and _service_process_matches_launcher(launcher, service)):
+                healthy = False
+                break
+            created = int(service["created_at"]) / 10_000_000 - 11_644_473_600 if os.name == "nt" else 0
+            if time.time() - created < STABLE_SECONDS:
+                healthy = False
+            identities.append((supervisor["pid"], supervisor["created_at"], service["pid"], service["created_at"]))
+            if role == "web":
+                healthy = healthy and int(service["pid"]) in _listener_pids(_web_port()) and _web_health()
+            else:
+                healthy = healthy and _deployment_worker_lease(created)
+        confirmations = confirmations + 1 if healthy and identities == previous else (1 if healthy else 0)
+        previous = identities
+        if confirmations >= 3:
+            print("Web and Worker confirmed: stable effective PIDs, HTTP health and current worker lease.")
+            return 0
+        if not all(_is_locked(role) for role in ROLES) or time.monotonic() >= deadline:
+            print("Web/Worker availability NOT confirmed; deployment is NOT complete.")
+            return 1
+        time.sleep(1)
+
+
+def _deployment_worker_lease(child_created: float) -> bool:
+    from aplicativos.integracoes.models import IntegrationLease
+    from django.utils import timezone
+    row = IntegrationLease.objects.filter(key="worker").values(
+        "owner_token", "started_at", "heartbeat_at", "expires_at").first()
+    now = timezone.now()
+    return bool(row and row["owner_token"] and row["started_at"] and row["heartbeat_at"]
+                and row["started_at"].timestamp() >= child_created - 1
+                and row["expires_at"] > now and 0 <= (now - row["heartbeat_at"]).total_seconds() <= 60)
+
+
+def _preflight(role: str = "web") -> int:
+    """Read-only dependency/settings/DB check; never run migrations or jobs."""
+    try:
+        import importlib.util
+        assert importlib.util.find_spec("waitress") is not None, "Waitress missing"
+        assert sys.version_info[:2] == (3, 12), "Python 3.12 required"
+        _setup_django()
+        from django.conf import settings
+        from django.db import connection
+        if os.environ["ARION_ENV"] == "production":
+            assert settings.DEBUG is False, "DEBUG must be False"
+            assert connection.vendor == "mysql", "Production requires MySQL"
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone()[0] == 1
+        _command("web")
+        if role == "worker" and _worker_lease_seconds() > 0:
+            print("Worker lease is active; stop its owner or wait for expiry. No lease was modified.")
+            raise RuntimeError("Worker lease is still active. Stop the owner or wait for expiry; never clear the lease manually.")
+        print("Environment, Python 3.12, Django, Waitress and database: OK")
+        return 0
+    except Exception as error:
+        print(f"Preflight failed ({type(error).__name__}); inspect sanitized startup log.")
+        _logger(role).error("preflight failed: %s", sanitize_line(traceback.format_exc()))
+        return 1
 
 
 def guarded_main() -> int:
     """Record failures before the normal supervisor loop/child logger starts."""
+    # runpy replaces sys.argv with the application's arguments. Retain the
+    # management role before entering it so child failures reach the right log.
+    role = next((value.casefold() for value in sys.argv[1:] if value.casefold() in ROLES), "startup")
+    managed_child = "--run-child" in sys.argv
     try:
         return main()
     except Exception:
-        role = next((value for value in sys.argv[1:] if value in ROLES), "startup")
-        _logger(role).error("supervisor startup failed: %s", sanitize_line(traceback.format_exc()))
+        diagnostic = sanitize_line(traceback.format_exc())
+        if managed_child:
+            # Single rotating-log writer: the supervisor captures this stream.
+            print(diagnostic, file=sys.stderr, flush=True)
+        else:
+            _logger(role).error("supervisor startup failed: %s", diagnostic)
         return 1
 
 

@@ -1,18 +1,13 @@
-param([string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path)
-
+﻿param([string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path)
 $ErrorActionPreference = 'Stop'
-$python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-$runner = Join-Path $ProjectRoot 'deploy\windows\run_process.py'
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python da .venv nao encontrado.' }
+. (Join-Path $PSScriptRoot 'arion-common.ps1')
 $problem = $false
 foreach ($role in @('web', 'worker')) {
-    & $python $runner --status $role
-    if ($LASTEXITCODE -ne 0) { $problem = $true }
+    $status = Get-ArionRoleStatus $ProjectRoot $role
+    Write-Output "$role`: $($status.state) (supervisor pid $($status.supervisor_pid), launcher pid $($status.launcher_pid), child pid $($status.child_pid)); exit=$($status.last_exit_code); reinicios=$($status.restarts)"
+    if ($status.state -ne 'running') { $problem = $true }
 }
-$cloudflared = Get-Service -Name 'Cloudflared' -ErrorAction SilentlyContinue
-if ($cloudflared) {
-    Write-Output "Cloudflared: $($cloudflared.Status)"
-} else {
-    Write-Output 'Cloudflared: Not installed'
-}
+$service = Get-Service -Name Cloudflared -ErrorAction SilentlyContinue
+Write-Output "Cloudflared: $(if ($service) { $service.Status } else { 'Not installed' }) (somente consulta)"
+Write-Output "Consulta: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 if ($problem) { exit 2 }

@@ -1,27 +1,26 @@
 ﻿[CmdletBinding()]
 param(
-    [ValidateSet('Menu', 'Start', 'Stop', 'Restart', 'Status', 'Update', 'Diagnostics')]
+    [ValidateSet('Menu', 'Start', 'Stop', 'Restart', 'Status', 'Update', 'Diagnostics', 'WebLogs', 'WorkerLogs', 'Health', 'ProductionCheck')]
     [string]$Action = 'Menu',
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+    [ValidateSet('all', 'web', 'worker')][string]$Role = 'all',
+    [ValidateSet('production', 'development')][string]$Environment = 'production'
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'arion-common.ps1')
 $script:Root = [IO.Path]::GetFullPath($ProjectRoot)
 $script:LogPath = $null
 $script:LockStream = $null
 $script:Steps = New-Object System.Collections.Generic.List[object]
 $script:HasError = $false
 
-function Protect-Text([string]$Text) {
-    if ($null -eq $Text) { return '' }
-    $safe = $Text -replace '(?i)(password|passwd|token|secret|client_secret|api_key|authorization|cookie|database_url)(\s*[=:]\s*)([^\s;,&]+)', '$1$2[REDACTED]'
-    $safe = $safe -replace '(?i)(://[^:/\s]+:)[^@/\s]+@', '$1[REDACTED]@'
-    return $safe
-}
+function Protect-Text([string]$Text) { return Protect-ArionText $Text }
 
 function Write-Log([string]$Message, [string]$Level = 'INFO') {
     $line = '{0} [{1}] {2}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, (Protect-Text $Message)
-    Write-Host $line
+    $color = switch ($Level) { 'ERRO' { 'Red' } 'WARN' { 'Yellow' } 'OK' { 'Green' } default { 'Gray' } }
+    Write-Host $line -ForegroundColor $color
     if ($script:LogPath) { Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8 }
 }
 
@@ -58,8 +57,12 @@ function Exit-OperationLock {
 
 function Invoke-Native([string]$File, [string[]]$Arguments, [string]$Label, [switch]$AllowNonZero) {
     Write-Log "Iniciando: $Label"
-    $lines = @(& $File @Arguments 2>&1 | ForEach-Object { [string]$_ })
-    $code = $LASTEXITCODE
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $lines = @(& $File @Arguments 2>&1 | ForEach-Object { Protect-Text ([string]$_) })
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
     foreach ($line in $lines) { if ($line) { Write-Log $line 'OUT' } }
     if ($code -ne 0 -and -not $AllowNonZero) { Add-Step $Label 'falha' "código $code"; throw "$Label falhou (código $code)." }
     Add-Step $Label $(if ($code -eq 0) { 'ok' } else { "codigo-$code" })
@@ -70,16 +73,20 @@ function Invoke-ArionScript([string]$Name, [hashtable]$Parameters = @{}) {
     $path = Join-Path $script:Root ("deploy\windows\{0}.ps1" -f $Name)
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Script ausente: $path" }
     Write-Log "Executando $Name"
-    try { & $path @Parameters -ProjectRoot $script:Root; Add-Step $Name 'ok' }
+    try {
+        $global:LASTEXITCODE = 0
+        & $path @Parameters -ProjectRoot $script:Root
+        if ($LASTEXITCODE -ne 0) { throw "Script retornou codigo $LASTEXITCODE." }
+        Add-Step $Name 'ok'
+    }
     catch { Add-Step $Name 'falha' $_.Exception.Message; throw "Etapa '$Name' falhou: $($_.Exception.Message)" }
 }
 
 function Get-RoleStatus([string]$Role) {
-    $python = Join-Path $script:Root '.venv\Scripts\python.exe'
-    $runner = Join-Path $script:Root 'deploy\windows\run_process.py'
-    $result = Invoke-Native $python @($runner, '--status', $Role) "Consultar estado $Role" -AllowNonZero
-    $state = switch ($result.Code) { 0 { 'running' } 1 { 'stopped' } 2 { 'unavailable' } default { 'error' } }
-    return [pscustomobject]@{ Role = $Role; State = $state; Code = $result.Code }
+    $value = Get-ArionRoleStatus $script:Root $Role
+    return [pscustomobject]@{ Role = $Role; State = $value.state; Code = $value.code
+        SupervisorPid = $value.supervisor_pid; LauncherPid = $value.launcher_pid
+        ChildPid = $value.child_pid; Detail = $value.detail; Restarts = $value.restarts }
 }
 
 function Get-WebPort {
@@ -116,81 +123,97 @@ function Test-WebReadiness([int]$TimeoutSeconds = 0) {
 
 function Show-Status {
     $states = @((Get-RoleStatus 'web'), (Get-RoleStatus 'worker'))
-    foreach ($item in $states) { Write-Log ("{0}: {1}" -f $item.Role, $item.State) }
-    if (($states | Where-Object { $_.Role -eq 'web' -and $_.State -eq 'running' }).Count -gt 0) {
-        if (Test-WebReadiness) { Write-Log 'Web HTTP health: ok' 'OK' } else { Write-Log 'Web HTTP health: sem resposta válida' 'WARN' }
+    $versionFile = Join-Path $script:Root 'docs\08-releases\releases.json'
+    $version = if (Test-Path $versionFile) { (Get-Content -Raw -Encoding UTF8 -LiteralPath $versionFile | ConvertFrom-Json).current_version } else { '?' }
+    $hash = (Get-Git @('rev-parse', '--short', 'HEAD') 'Commit ativo' -AllowNonZero).Output.Trim()
+    Write-Host "`nARION OPS | Gerenciador Windows 2.0" -ForegroundColor Cyan
+    Write-Host "Versao $version | commit $hash | ambiente da operacao: $Environment"
+    foreach ($item in $states) {
+        $color = if ($item.State -eq 'running') { 'Green' } elseif ($item.State -eq 'failed') { 'Red' } else { 'Yellow' }
+        Write-Host ('{0,-8} {1,-11} PID efetivo: {2} | supervisor: {3} | launcher: {4}' -f $item.Role, $item.State, $item.ChildPid, $item.SupervisorPid, $item.LauncherPid) -ForegroundColor $color
+        if ($item.Detail) { Write-Host (Protect-Text $item.Detail) -ForegroundColor Yellow }
     }
-    $service = Get-Service -Name 'Cloudflared' -ErrorAction SilentlyContinue
-    if ($service) { Write-Log "Cloudflared: $($service.Status) (somente consulta)" } else { Write-Log 'Cloudflared: não instalado' }
+    $health = Test-WebReadiness
+    Write-Host "Health Check: $(if ($health) { 'OK' } else { 'indisponivel' })"
+    $service = Get-Service -Name Cloudflared -ErrorAction SilentlyContinue
+    Write-Host "Cloudflared: $(if ($service) { $service.Status } else { 'nao instalado' }) (somente consulta)"
+    $lastPath = Join-Path $script:Root 'var\run\manage-arion-last.json'
+    if (Test-Path -LiteralPath $lastPath) {
+        try {
+            $last = Get-Content -LiteralPath $lastPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            Write-Host (Protect-Text "Ultima operacao: $($last.action) / $($last.role) - $($last.result) em $($last.at)")
+        } catch { Write-Host 'Ultimo resultado indisponivel.' -ForegroundColor Yellow }
+    }
+    Write-Host "Consulta: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     return $states
 }
 
-function Assert-RoleState([string]$Expected) {
-    $states = @((Get-RoleStatus 'web'), (Get-RoleStatus 'worker'))
-    $bad = @($states | Where-Object { $_.State -ne $Expected })
-    if ($bad.Count -gt 0) {
-        $badText = ($bad | ForEach-Object { '{0}={1}' -f $_.Role, $_.State }) -join ', '
-        throw "Estado final inesperado: $badText"
-    }
+function Assert-SingleRoleState([string]$Role, [string]$Expected) {
+    $state = Get-RoleStatus $Role
+    if ($state.State -ne $Expected) { throw "$Role=$($state.State); esperado $Expected. Consulte os logs e use Restart apos corrigir a causa." }
 }
-
+function Assert-RoleState([string]$Expected) {
+    foreach ($item in @('web', 'worker')) { Assert-SingleRoleState $item $Expected }
+}
+function Start-OrderedServices {
+    Invoke-ArionScript 'start-arion' @{ Role = 'web'; Environment = $Environment }
+    Assert-SingleRoleState 'web' 'running'
+    if (-not (Test-WebReadiness)) { throw 'Web sem /health/ valido; Worker nao sera iniciado.' }
+    Invoke-ArionScript 'start-arion' @{ Role = 'worker'; Environment = $Environment }
+    Assert-RoleState 'running'
+}
 function Start-AllServices {
     Assert-Project
     Assert-AuthorizedOperator
     Enter-OperationLock
-    Write-Log 'Validando Python da .venv e iniciando Web antes do Worker.'
-    try {
-        Invoke-ArionScript 'start-arion' @{ Role = 'web' }
-        Invoke-ArionScript 'start-arion' @{ Role = 'worker' }
-        Assert-RoleState 'running'
-        if (-not (Test-WebReadiness -TimeoutSeconds 30)) { throw 'Web não confirmou /health/.' }
-    } catch {
-        Write-Log 'A inicialização falhou; solicitando parada dos processos ARION para evitar estado parcial.' 'ERRO'
-        foreach ($role in @('worker', 'web')) {
-            try { Invoke-ArionScript 'stop-arion' @{ Role = $role } }
-            catch { Write-Log "Não foi possível confirmar a parada de $role após falha: $($_.Exception.Message)" 'ERRO' }
-        }
-        throw "Falha ao iniciar os serviços: $($_.Exception.Message)"
+    try { Start-OrderedServices }
+    catch {
+        Write-Log 'Partida incompleta; os servicos saudaveis foram preservados. Consulte Status e logs; corrija e reinicie somente o servico afetado.' 'ERRO'
+        throw
     }
-    Write-Log 'Web e Worker ativos.' 'OK'
     Show-Status | Out-Null
+    Assert-RoleState 'running'
+    Write-Log 'Web e Worker confirmados.' 'OK'
 }
-
+function Stop-OrderedServices {
+    Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
+    Assert-SingleRoleState 'worker' 'stopped'
+    Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
+    Assert-SingleRoleState 'web' 'stopped'
+}
 function Stop-AllServices {
     Assert-Project
     Assert-AuthorizedOperator
     Enter-OperationLock
-    Write-Log 'Parando Worker antes do Web; somente supervisores ARION serão sinalizados.'
-    Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
-    Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
-    Assert-RoleState 'stopped'
+    Stop-OrderedServices
     Write-Log 'Web e Worker encerrados.' 'OK'
     Show-Status | Out-Null
 }
-
 function Restart-AllServices {
     Assert-Project
     Assert-AuthorizedOperator
     Enter-OperationLock
-    Write-Log 'Reiniciando na ordem Worker → Web → Web → Worker.'
-    Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
-    Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
-    Assert-RoleState 'stopped'
-    try {
-        Invoke-ArionScript 'start-arion' @{ Role = 'web' }
-        Invoke-ArionScript 'start-arion' @{ Role = 'worker' }
-        Assert-RoleState 'running'
-        if (-not (Test-WebReadiness -TimeoutSeconds 30)) { throw 'Web não confirmou /health/.' }
-    } catch {
-        Write-Log 'A reinicialização falhou; solicitando parada dos processos ARION para evitar estado parcial.' 'ERRO'
-        foreach ($role in @('worker', 'web')) {
-            try { Invoke-ArionScript 'stop-arion' @{ Role = $role } }
-            catch { Write-Log "Não foi possível confirmar a parada de $role após falha: $($_.Exception.Message)" 'ERRO' }
-        }
-        throw "Falha ao reiniciar os serviços: $($_.Exception.Message)"
-    }
-    Write-Log 'Reinício concluído; Web e Worker confirmados.' 'OK'
+    Stop-OrderedServices
+    Start-OrderedServices
     Show-Status | Out-Null
+    Assert-RoleState 'running'
+    Write-Log 'Reinicio concluido.' 'OK'
+}
+function Invoke-SingleService([string]$Operation, [string]$SelectedRole) {
+    Assert-Project
+    Assert-AuthorizedOperator
+    Enter-OperationLock
+    if ($Operation -in @('Stop', 'Restart')) {
+        Invoke-ArionScript 'stop-arion' @{ Role = $SelectedRole }
+        Assert-SingleRoleState $SelectedRole 'stopped'
+    }
+    if ($Operation -in @('Start', 'Restart')) {
+        Invoke-ArionScript 'start-arion' @{ Role = $SelectedRole; Environment = $Environment }
+        Assert-SingleRoleState $SelectedRole 'running'
+        if ($SelectedRole -eq 'web' -and -not (Test-WebReadiness)) { throw 'Web nao confirmou Health Check.' }
+    }
+    Show-Status | Out-Null
+    Write-Log "$Operation de $SelectedRole concluido; outro servico preservado." 'OK'
 }
 
 function Get-Git([string[]]$Arguments, [string]$Label, [switch]$AllowNonZero) {
@@ -292,6 +315,13 @@ function Invoke-UpdateCore {
     Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
     Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
     Assert-RoleState 'stopped'
+    $leaseEnv = $env:ARION_ENV
+    try {
+        $env:ARION_ENV = 'production'
+        [void](Invoke-Native $python @((Join-Path $script:Root 'deploy\windows\run_process.py'), '--wait-lease', 'worker') 'Aguardar lease anterior sem alterar banco')
+    } finally {
+        if ($null -eq $leaseEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $leaseEnv }
+    }
     if ($pythonDependencyChange) {
         $requirements = Join-Path $script:Root 'requirements-prod.txt'
         [void](Invoke-Native $python @('-m', 'pip', 'install', '-r', $requirements) 'Instalar dependências Python')
@@ -324,16 +354,11 @@ function Invoke-UpdateCore {
     }
     Invoke-ArionScript 'production-check'
     try {
-        Invoke-ArionScript 'start-arion' @{ Role = 'web' }
-        Invoke-ArionScript 'start-arion' @{ Role = 'worker' }
+        Start-OrderedServices
         Assert-RoleState 'running'
         if (-not (Test-WebReadiness -TimeoutSeconds 30)) { throw 'Web não confirmou /health/.' }
     } catch {
-        Write-Log 'A inicialização após atualização falhou; solicitando parada dos processos ARION para evitar estado parcial.' 'ERRO'
-        foreach ($role in @('worker', 'web')) {
-            try { Invoke-ArionScript 'stop-arion' @{ Role = $role } }
-            catch { Write-Log "Não foi possível confirmar a parada de $role após falha: $($_.Exception.Message)" 'ERRO' }
-        }
+        Write-Log 'Atualizacao com partida incompleta; servicos saudaveis preservados. Consulte Status e reinicie somente o servico afetado.' 'ERRO'
         throw "Falha ao validar os serviços após atualização: $($_.Exception.Message)"
     }
     $newVersion = if (Test-Path $versionFile) { (Get-Content -Raw -LiteralPath $versionFile | ConvertFrom-Json).current_version } else { 'desconhecida' }
@@ -354,39 +379,76 @@ function Show-Diagnostics {
     }
 }
 
+function Show-RoleLogs([string]$SelectedRole) {
+    $logs = Join-Path $script:Root 'var\logs'
+    $files = @((Join-Path $logs "arion-$SelectedRole.log"))
+    $files += @(Get-ChildItem -LiteralPath $logs -Filter "arion-$SelectedRole-startup.*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2 -ExpandProperty FullName)
+    foreach ($file in $files) {
+        Write-Host "=== $([IO.Path]::GetFileName($file)) ===" -ForegroundColor Cyan
+        if (Test-Path -LiteralPath $file) { Get-Content -LiteralPath $file -Encoding UTF8 -Tail 80 | ForEach-Object { Write-Host (Protect-Text ([string]$_)) } }
+    }
+}
+function Save-OperationResult([string]$Selected, [string]$SelectedRole, [string]$Result) {
+    $run = Join-Path $script:Root 'var\run'
+    New-Item -ItemType Directory -Force -Path $run | Out-Null
+    $value = [pscustomobject]@{ action = $Selected; role = $SelectedRole; result = $Result; at = (Get-Date).ToString('o') }
+    $path = Join-Path $run 'manage-arion-last.json'
+    $temporary = "$path.$PID.tmp"
+    $value | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
+    Move-Item -LiteralPath $temporary -Destination $path -Force
+}
+function Invoke-RecordedAction([string]$Selected, [string]$SelectedRole) {
+    $script:Steps.Clear()
+    try {
+        Invoke-Action $Selected $SelectedRole
+        Save-OperationResult $Selected $SelectedRole 'OK'
+    } catch {
+        Save-OperationResult $Selected $SelectedRole 'FALHOU'
+        Write-Log $_.Exception.Message 'ERRO'
+        Add-Step $Selected 'falha' $_.Exception.Message
+        throw
+    } finally {
+        Exit-OperationLock
+        if ($Selected -in @('Start', 'Stop', 'Restart', 'Update')) { Write-DeploymentReport "$Selected-$SelectedRole" }
+    }
+}
 function Start-Manager {
     Assert-Project
     $logDir = Join-Path $script:Root 'var\logs'
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     $script:LogPath = Join-Path $logDir ('manage-arion-{0}-{1}.log' -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'), $PID)
-    $hash = (Get-Git @('rev-parse', '--short', 'HEAD') 'Commit atual' -AllowNonZero).Output.Trim()
-    $versionPath = Join-Path $script:Root 'docs\08-releases\releases.json'
-    $version = if (Test-Path $versionPath) { (Get-Content -Raw -LiteralPath $versionPath | ConvertFrom-Json).current_version } else { 'desconhecida' }
-    Write-Log "ARION OPS | versão $version | commit $hash"
-    if ($Action -eq 'Menu') {
+    if ($Action -ne 'Menu') { Invoke-RecordedAction $Action $Role; return }
+    $choices = @{
+        '1' = @('Start','all'); '2' = @('Stop','all'); '3' = @('Restart','all')
+        '4' = @('Start','web'); '5' = @('Stop','web'); '6' = @('Restart','web')
+        '7' = @('Start','worker'); '8' = @('Stop','worker'); '9' = @('Restart','worker')
+        '10' = @('Status','all'); '11' = @('WebLogs','web'); '12' = @('WorkerLogs','worker')
+        '13' = @('Health','all'); '14' = @('ProductionCheck','all')
+    }
+    while ($true) {
         Show-Status | Out-Null
-        while ($true) {
-            Write-Host "`n========================================`n         ARION OPS - GERENCIADOR`n========================================`n`n [1] Iniciar todos os servicos`n [2] Parar todos os servicos`n [3] Reiniciar todos os servicos`n [4] Consultar status`n [5] Atualizar pelo GitHub e reiniciar`n [6] Verificar logs e diagnosticos`n [0] Sair`n`n========================================"
-            $choice = Read-Host 'Selecione uma opção'
-            if ($choice -eq '0') { break }
-            $selected = @{ '1' = 'Start'; '2' = 'Stop'; '3' = 'Restart'; '4' = 'Status'; '5' = 'Update'; '6' = 'Diagnostics' }[$choice]
-            if (-not $selected) { Write-Host 'Opção inválida.' -ForegroundColor Yellow; continue }
-            $script:Steps.Clear()
-            try { Invoke-Action $selected }
-            catch { $script:HasError = $true; Write-Log $_.Exception.Message 'ERRO'; Add-Step $selected 'falha' $_.Exception.Message }
-            finally { Exit-OperationLock }
-            if ($selected -ne 'Status' -and $selected -ne 'Diagnostics') { Write-DeploymentReport $selected }
-            Read-Host 'Pressione Enter para voltar ao menu' | Out-Null
-        }
-        if ($script:HasError) { throw 'Uma ou mais operações falharam durante esta sessão. Consulte os logs e relatórios.' }
+        Write-Host @"
+
+  1 Iniciar todos           2 Parar todos            3 Reiniciar todos
+  4 Iniciar Web             5 Parar Web              6 Reiniciar Web
+  7 Iniciar Worker          8 Parar Worker           9 Reiniciar Worker
+ 10 Status completo        11 Logs Web              12 Logs Worker
+ 13 Health Check           14 Verificacoes producao  0 Sair
+"@ -ForegroundColor Cyan
+        $choice = Read-Host 'Selecione uma opcao'
+        if ($choice -eq '0') { return }
+        if (-not $choices.ContainsKey($choice)) { Write-Host 'Opcao invalida.' -ForegroundColor Yellow; continue }
+        $selection = $choices[$choice]
+        try { Invoke-RecordedAction $selection[0] $selection[1] }
+        catch { Write-Host 'Operacao falhou. Consulte o status e os logs antes de repetir.' -ForegroundColor Red }
+        Read-Host 'Enter para voltar ao menu' | Out-Null
+    }
+}
+function Invoke-Action([string]$Selected, [string]$SelectedRole = 'all') {
+    if ($Selected -in @('Start', 'Stop', 'Restart') -and $SelectedRole -ne 'all') {
+        Invoke-SingleService $Selected $SelectedRole
         return
     }
-    $script:Steps.Clear()
-    Invoke-Action $Action
-    if ($Action -ne 'Status' -and $Action -ne 'Diagnostics') { Write-DeploymentReport $Action }
-}
-
-function Invoke-Action([string]$Selected) {
     switch ($Selected) {
         'Start' { Start-AllServices }
         'Stop' { Stop-AllServices }
@@ -394,6 +456,10 @@ function Invoke-Action([string]$Selected) {
         'Status' { Show-Status | Out-Null }
         'Update' { Invoke-Update }
         'Diagnostics' { Show-Diagnostics }
+        'WebLogs' { Show-RoleLogs 'web' }
+        'WorkerLogs' { Show-RoleLogs 'worker' }
+        'Health' { if (-not (Test-WebReadiness)) { throw 'Health Check indisponivel.' }; Write-Log 'Health Check: OK' 'OK' }
+        'ProductionCheck' { Invoke-ArionScript 'production-check' }
     }
 }
 

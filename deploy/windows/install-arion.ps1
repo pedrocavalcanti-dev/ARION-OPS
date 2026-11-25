@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$ApplyMigrations,
     [switch]$InstallTasks,
     [string]$ServiceAccount,
@@ -6,6 +6,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'arion-common.ps1')
+foreach ($role in @('web', 'worker')) {
+    if ((Get-ArionRoleStatus $ProjectRoot $role).locked) {
+        throw 'Preparacao de instalacao exige Web e Worker parados antes de modificar assets ou dependencias.'
+    }
+}
 $python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 $manage = Join-Path $ProjectRoot 'arion_geo\gerenciar.py'
 if (-not (Test-Path -LiteralPath $python -PathType Leaf) -or -not (Test-Path -LiteralPath $manage -PathType Leaf)) {

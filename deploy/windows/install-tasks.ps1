@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$ServiceAccount,
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 )
@@ -8,9 +8,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot '.env') -PathType Leaf)
     throw 'Crie e proteja o arquivo .env antes de instalar as tarefas.'
 }
 $python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-$pythonw = Join-Path $ProjectRoot '.venv\Scripts\pythonw.exe'
 $runner = Join-Path $ProjectRoot 'deploy\windows\run_process.py'
-foreach ($required in @($python, $pythonw, $runner)) {
+foreach ($required in @($python, $runner)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw 'Pré-requisito do supervisor ausente.' }
 }
 
@@ -38,8 +37,10 @@ try {
         }
     }
     foreach ($item in $actions) {
-        $action = New-ScheduledTaskAction -Execute $pythonw `
-            -Argument ('"{0}" {1}' -f $runner, $item.Role) -WorkingDirectory $ProjectRoot
+        $arguments = '"{0}" {1}' -f $runner, $item.Role
+        if ($item.Role -eq 'worker') { $arguments += ' --wait-for-web' }
+        $action = New-ScheduledTaskAction -Execute $python `
+            -Argument $arguments -WorkingDirectory $ProjectRoot
         $trigger = New-ScheduledTaskTrigger -AtStartup
         $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
             -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
@@ -78,5 +79,8 @@ foreach ($secretFile in @((Join-Path $ProjectRoot '.env'), (Join-Path $ProjectRo
 }
 
 Start-ScheduledTask -TaskName 'ARION-Web'
+. (Join-Path $PSScriptRoot 'arion-common.ps1')
+$null = Wait-ArionRoleReady $ProjectRoot 'web'
 Start-ScheduledTask -TaskName 'ARION-Integration-Worker'
-Write-Output 'Tarefas ARION-Web e ARION-Integration-Worker instaladas e iniciadas.'
+$null = Wait-ArionRoleReady $ProjectRoot 'worker'
+Write-Output 'Tarefas ARION-Web e ARION-Integration-Worker instaladas; prontidao confirmada.'

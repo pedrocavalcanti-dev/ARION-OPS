@@ -2,7 +2,7 @@
 setlocal
 title ARION OPS - Gerenciador
 set "MANAGER=%~dp0manage-arion.ps1"
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%MANAGER%" -ProjectRoot "%~dp0..\.."
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%MANAGER%" -ProjectRoot "%~dp0..\.." %*
 set "RESULT=%ERRORLEVEL%"
 if not "%RESULT%"=="0" (
     echo.
@@ -10,5 +10,5 @@ if not "%RESULT%"=="0" (
     echo Codigo de saida: %RESULT%
 )
 echo.
-pause
+if not "%ARION_MANAGER_NO_PAUSE%"=="1" pause
 exit /b %RESULT%
