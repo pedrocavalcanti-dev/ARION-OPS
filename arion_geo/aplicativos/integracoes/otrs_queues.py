@@ -3,9 +3,8 @@
 NOC_QUEUE_NAME = "NOC - ATACADO"
 TRIAGE_QUEUE_NAME = "NOC - TRIAGEM"
 NOC_QUEUE_NAMES = (NOC_QUEUE_NAME, TRIAGE_QUEUE_NAME)
-# Separate coverage key: an older N2-only history must never imply N1 coverage.
+# An older Atacado-only history must never imply coverage of both queues.
 NOC_HISTORY_SCOPE = "|".join(NOC_QUEUE_NAMES)
-ATTENDANCE_LEVELS = {TRIAGE_QUEUE_NAME: "N1", NOC_QUEUE_NAME: "N2"}
 CANCELLATION_REQUEST_QUEUE_NAME = "NOC - CANCELAMENTOS NGO"
 EQUIPMENT_REMOVAL_QUEUE_NAME = "NOC - RETIRA EQUIPAMENTO"
 # The source KPI profile stores the real queue name with an en dash.

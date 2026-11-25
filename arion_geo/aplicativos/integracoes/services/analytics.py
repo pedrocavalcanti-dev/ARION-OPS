@@ -97,7 +97,7 @@ class TicketQueryService:
 
     @classmethod
     def noc_tickets(cls):
-        """Operational membership, including proven participation in N1/N2."""
+        """NOC Atacado membership, including proven passages through either queue."""
         return OTRSTicket.objects.filter(cls.support_query())
 
     @classmethod

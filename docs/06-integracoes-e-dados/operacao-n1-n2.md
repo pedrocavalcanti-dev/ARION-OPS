@@ -1,88 +1,85 @@
-# Operação NOC Atacado — N1 e N2
+# Operação NOC Atacado — filas Atacado e Triagem
 
-O universo de suporte consolida **NOC - TRIAGEM (N1)** e **NOC - ATACADO (N2)**. OTRS permanece a fonte oficial; o ARION consulta seu espelho local e nunca altera a origem. A identidade única é `OTRSTicket.external_id` (TicketID), inclusive nas transferências, retornos e reaberturas.
+**Uma operação: NOC Atacado. Filas incluídas: NOC - ATACADO e NOC - TRIAGEM.** O nome deste arquivo foi mantido para preservar links existentes; não representa uma divisão por níveis de atendimento.
 
-## Filas e coleta
+OTRS permanece a fonte oficial. `NOC_QUEUE_NAMES` define as duas filas; a coleta resolve seus IDs oficiais por nome exato e exige resultado único. Na origem homologada: **107 = NOC - ATACADO** e **181 = NOC - TRIAGEM**. As filas específicas de Cancelamentos já existentes continuam com seu escopo próprio.
 
-`integracoes/otrs_queues.py` define `NOC_QUEUE_NAMES` e acrescenta a Triagem a `COCKPIT_QUEUE_NAMES`, preservando as filas específicas de Cancelamentos. O sincronizador resolve cada nome exato na tabela oficial `queue`, exige resultado único e executa a coleta pelos IDs reais. Na homologação de 25/11/2026 foram confirmados **107 = Atacado** e **181 = Triagem**; esses números são evidência da origem, não IDs fixados em regras de negócio.
+## Regras preservadas
 
-O Worker existente utiliza as mesmas credenciais e os mesmos ciclos FULL/FAST. A mudança de assinatura obriga FULL antes do primeiro FAST. A coleta não restringe a estados abertos: tickets resolvidos e cancelados também são espelhados. O filtro inclui passagens históricas pela Triagem, inclusive quando o ticket já saiu dela antes da leitura. Tickets conhecidos continuam acompanhados por ID após sair das filas. FULL reconcilia somente as filas selecionadas; lotes de backfill nunca marcam outros tickets como ausentes.
+- TicketID é a identidade única. Transferências, retornos e reaberturas não criam outro ticket nem outra ocorrência.
+- Criados usam a criação oficial; resolvidos usam a data efetiva canônica. Uma resolução na Triagem conta normalmente, mesmo sem passagem pelo Atacado.
+- Ativos e aging da fila incluem `OPEN`, `PENDING` e `SCHEDULED`. Backlog inclui somente `OPEN` e `PENDING`, excluindo improcedentes, conforme a regra anterior.
+- Fila atual e passagem histórica são informações diferentes. O banco preserva a fila oficial, os eventos e a participação comprovada na operação. Tickets externos sem essa participação não são admitidos no suporte.
+- Data Scope e RBAC permanecem aplicados no backend. Dashboard, Cockpit, Chamados, GEO/Apresentação, Qualidade, reincidências, Rankings e Planta × Chamados reutilizam o universo consolidado, mantendo suas exclusões e definições. Nenhum snapshot CMDB é reescrito.
+- A interface mantém os componentes aprovados, sem resumo, produtividade, filtro ou rótulo gerencial por nível. O detalhe de Chamados preserva a fila oficial OTRS.
 
-`OTRSTicketEvent` armazena os eventos oficiais `NewTicket`, `Move`, `StateUpdate` e `Merged`, com ID único do evento, TicketID, fila, estado e horário. Não contém artigos, autores, notas ou o payload textual do histórico. Eventos repetidos são idempotentes; divergência de um evento já armazenado interrompe o lote, preservando a transação anterior. Leituras e gravações dos eventos usam lotes de até 400. `has_support_history` preserva a participação comprovada na operação após transferências, sem transformar a fila atual em evidência do passado.
+## Coleta e histórico
 
-O único ticket encontrado na Triagem em DEV possui vínculo oficial ao CI **5524**, identificado como **Claro / Correios**. Não se observou atendimento de outra operação nessa fila no recorte disponível. Essa amostra não comprova exclusividade futura da fila: eventual compartilhamento deve ter sua regra de elegibilidade homologada antes de ampliar o escopo. RBAC e Data Scope por operadora/projeto continuam aplicados antes de filtros, agregações e paginação.
+O Worker existente utiliza as mesmas credenciais e os ciclos FULL/FAST. A assinatura das filas exige FULL antes do primeiro FAST que inclua a Triagem. São coletados também resolvidos e cancelados, passagens pela Triagem e alterações posteriores de tickets conhecidos. A origem permanece somente leitura.
 
-## Definições dos indicadores
+A migration aditiva **`integracoes.0025_noc_triagem_lifecycle`** preserva eventos oficiais em `OTRSTicketEvent`, progresso em `OTRSQueueBackfill`, participação histórica do ticket e fila dos intervalos de backlog. Não há nova migration neste ajuste de interface.
 
-- **Criados:** TicketIDs distintos pela data oficial de criação, conforme a definição canônica anterior, incluindo tickets que participaram da Triagem e os resolvidos exclusivamente pelo N1. Transferência não é criação.
-- **Resolvidos:** estado atual normalizado Resolvido e data efetiva de resolução canônica (`ticketResolvido` / evento do ciclo vigente, conforme a regra já existente). Um fechamento administrativo posterior não substitui a resolução.
-- **Cancelados:** preservam estado oficial, classificação e data próprios; não são promovidos a incidentes válidos.
-- **Ativos / aging da fila:** fila atual efetiva N1 ou N2, presença confirmada e estados `OPEN`, `PENDING` ou `SCHEDULED`.
-- **Backlog atual:** fila atual efetiva N1 ou N2 e estados `OPEN` ou `PENDING`, excluindo improcedentes. Agendados continuam fora do backlog, como antes da integração.
-- **Histórico e observações:** os intervalos usam a fila de cada evento, nunca a fila atual; capturas FULL e checkpoints usam uma assinatura nova para N1 + N2. Evidências antigas de N2 permanecem armazenadas, mas não representam cobertura consolidada.
-- **Reincidência / links afetados:** mantêm a relação oficial Ticket–ConfigItem e a deduplicação por TicketID e CI. Passar de N1 a N2 não cria ocorrência adicional. Qualidade, Rankings, Base e GEO reutilizam o universo compartilhado e mantêm suas regras de validade, exclusões por operadora, identidade operacional e proteção financeira no Modo Apresentação.
-- **Planta × Chamados:** amplia somente o universo de tickets; nenhum snapshot da planta CMDB é reescrito.
+O backfill é paginado por TicketID, usa o sincronizador existente e confirma o cursor na mesma transação de cada lote. Reexecuções não duplicam tickets/eventos; falha preserva os lotes confirmados. `complete=true` indica conclusão. `--restart` revisa desde o início sem apagar registros e só deve ser usado quando houver necessidade comprovada.
 
-O Dashboard oferece um resumo compacto de N1/N2; Chamados identifica fila atual e nível, permite filtro por fila e exibe até 80 eventos oficiais recentes no detalhe, separados do histórico de acompanhamento ARION. O consolidado é o padrão. O Cockpit Suporte também retorna o resumo complementar em `operational.attendance`.
+O histórico usa a fila e o estado efetivos de cada evento, nunca a fila atual para reconstruir o passado. Evidências antigas somente do Atacado permanecem armazenadas, mas não representam cobertura das duas filas. Lacunas continuam indisponíveis; não se presume histórico completo.
 
-Os complementos distinguem:
+## Próxima atualização no Windows Server — somente pendências da Triagem
 
-| Indicador | Definição |
-| --- | --- |
-| Atualmente N1 / N2 | Ativos na fila atual, incluindo agendados; independente do período de criação |
-| Resolvidos N1 / N2 | TicketIDs distintos com estado atual resolvido, data efetiva no período e evento oficial de resolução nessa data comprovando a fila |
-| Encaminhados N1 → N2 | TicketIDs distintos com evento `Move` no período para Atacado e evento anterior na Triagem; múltiplos encaminhamentos do mesmo ticket contam uma vez |
-| Resolução sem nível comprovado | Resolução canônica sem evento correspondente que permita atribuir N1/N2; não inferir pela fila atual |
+Procedimento **documentado, não executado nesta tarefa**. Usar a identidade e a pasta operacional existentes, preservar configurações e confirmar backup válido. Não repetir processamento financeiro, importação legada, sincronização CMDB ou migrations antigas.
 
-Essas métricas possuem bases temporais diferentes e não são parcelas aditivas dos criados. Uma reabertura retira o ticket do total de resolvidos do ciclo atual, preservando os eventos anteriores. Não há atribuição automática de responsabilidade pessoal ao N1 ou N2.
-
-## Histórico e produção
-
-Migration aditiva: **`integracoes.0025_noc_triagem_lifecycle`**. Cria eventos oficiais e progresso do backfill, acrescenta participação histórica ao ticket e fila aos intervalos de backlog.
-
-Na próxima atualização de produção, após preparar código e assets pelos procedimentos existentes:
-
-```text
-python arion_geo/gerenciar.py migrate --noinput
-python arion_geo/gerenciar.py sincronizar_historico_triagem --apply --batch-size 200 --max-batches 10
-python arion_geo/gerenciar.py sincronizar_otrs --apply --full
-python arion_geo/gerenciar.py sincronizar_historico_backlog --apply
+```powershell
+Set-Location C:\Users\Arion\Desktop\ARION-OPS
+$ErrorActionPreference = 'Stop'
+git status --short
+git fetch origin --tags
+if ($LASTEXITCODE -ne 0) { throw 'Falha no fetch' }
+git log --oneline HEAD..origin/main
+# Prosseguir com checkout limpo e somente a atualizacao esperada.
+.\deploy\windows\stop-arion.ps1 -Role worker
+.\deploy\windows\stop-arion.ps1 -Role web
+git merge --ff-only origin/main
+if ($LASTEXITCODE -ne 0) { throw 'Fast-forward recusado' }
+$env:ARION_ENV = 'production'
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py check
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py showmigrations integracoes
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py migrate integracoes 0025 --plan
 ```
 
-Em DEV, utilizar `.venv/Scripts/python.exe`. Em Linux, usar o Python do ambiente virtual do serviço. Não executar em paralelo com outro sincronizador: os comandos compartilham a lease OTRS. A publicação desta alteração não realiza deploy no Windows Server nem cria tag de release.
+Conferir o plano antes de aplicar: a base deve ter `0024` e suas dependências aplicadas. **Se o plano incluir migrations anteriores ou de outros apps, parar e revisar; não aplicar o plano completo automaticamente.** Se `0025` já estiver marcada `[X]`, pular a aplicação. Caso somente `0025` esteja pendente:
 
-O backfill usa paginação por TicketID, descobre fila atual e histórico sem restrição de status, aplica o mesmo sincronizador e avança `OTRSQueueBackfill.last_ticket_id` na mesma transação do lote. Reexecutar até `complete=true`; falha mantém os lotes já confirmados e o cursor anterior ao lote que falhou. Sem `--apply`, não escreve tickets, eventos ou progresso. `--restart` revisa a origem desde o início sem apagar o espelho. FULL também descobre passagens pela Triagem; a rotina separada permite carga controlada e retomável antes da reconciliação completa. FAST acompanha alterações e passagens breves pelo histórico desde o cursor, com a janela de segurança existente.
+```powershell
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py migrate integracoes 0025 --noinput
+if ($LASTEXITCODE -ne 0) { throw 'Migration 0025 falhou' }
+```
 
-Não se presume histórico completo. Ausência ou tipos incompletos de eventos impede atribuir resolução por nível; a interface mantém as resoluções sem nível comprovado. Lacunas de estado, fila ou procedência continuam indisponíveis no histórico de backlog. Capturas antigas não recebem Triagem retroativamente.
+Na Central de Integrações/registro de execuções, verificar se há FULL aplicado e bem-sucedido com a assinatura atual das cinco filas (incluindo Triagem), backfill concluído e histórico com chave `NOC - ATACADO|NOC - TRIAGEM`. Executar **somente os comandos cujas etapas estiverem pendentes**, com o Worker parado:
 
-## Reconciliação DEV — 25/11/2026
+```powershell
+# Somente se o backfill ainda nao foi concluido; repetir lotes ate complete=true.
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py sincronizar_historico_triagem --apply --batch-size 200 --max-batches 10
+# Somente se ainda nao existe FULL aplicado com a cobertura das duas filas.
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py sincronizar_otrs --apply --full
+# Somente se ainda falta a cobertura historica consolidada.
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py sincronizar_historico_backlog --apply
+```
 
-Consultas somente leitura na origem, migração e sincronizações executadas no SQLite DEV. Contagens comparadas por TicketID, sem valores fixados no frontend.
+Conferir sucesso de cada comando antes do próximo. Uma execução interrompida retoma pelo cursor; não usar `--restart` automaticamente. O Worker retomará o acompanhamento incremental normal após iniciar.
 
-| Evidência | Resultado |
-| --- | --- |
-| FULL | 13.300 tickets nas cinco filas configuradas; 88.009 eventos oficiais de atendimento |
-| Triagem exclusiva em relação ao N2 | 1 ticket: **103911** |
-| Passagem comprovada pelas duas filas | 0 |
-| Resolvidos pelo N1 | 0 na população disponível |
-| Novembro: criados sem / com Triagem | 702 / 703 |
-| Referência da comparação ao vivo | **09:24:30 America/Sao_Paulo** |
-| Ativos Atacado / Triagem / consolidado | 22 / 1 / **23** |
-| Backlog Atacado / Triagem / consolidado | 19 / 1 / **20** |
-| Agendados | 3, incluídos nos ativos e excluídos do backlog |
-| TicketIDs faltantes / extras | **0 / 0**, tanto em ativos quanto em backlog |
-| Cache histórico consolidado | 13.640 tickets; 109.150 eventos; 18.064 intervalos |
-| Cobertura histórica | até **09:22:33**; 209 intervalos históricos indeterminados, nenhum indeterminado no extremo final da cobertura |
+```powershell
+npm.cmd run build:production
+if ($LASTEXITCODE -ne 0) { throw 'Build falhou' }
+.\.venv\Scripts\python.exe arion_geo\gerenciar.py collectstatic --noinput
+if ($LASTEXITCODE -ne 0) { throw 'Collectstatic falhou' }
+.\deploy\windows\production-check.ps1
+if ($LASTEXITCODE -ne 0) { throw 'Preflight falhou' }
+.\deploy\windows\manage-arion.ps1 -Action Start
+.\deploy\windows\status-arion.ps1
+```
 
-A captura inicial da tarefa (23 + 1) não é uma meta fixa: um ticket foi resolvido durante a homologação e o FAST registrou essa alteração. O comparativo acima usa a mesma leitura de origem e o espelho já atualizado. A atualização FULL também encontrou tickets novos de outras filas desde a sincronização anterior; o aumento global de registros não deve ser atribuído integralmente à Triagem.
+Web e Worker são os supervisores/tarefas existentes; não criar serviços novos nem reiniciar Cloudflared por causa desta alteração. Conferir saúde, login, totais consolidados e ausência de erros de assets. Preservar `v1.4.0` e `v1.4.1`; não criar `v1.4.2` nesta conferência.
 
-Os cenários ainda ausentes nos dados reais — resolução exclusiva N1, encaminhamento N1/N2 e retornos — são exercitados por testes sintéticos de integração e indicadores, sem fabricar evidência na origem. O histórico de novembro contém resoluções sem nível comprovado; elas permanecem nos indicadores canônicos e não são atribuídas ao N1/N2 por suposição.
+## Conferência DEV — 25/11/2026, 10:19:06 (America/Sao_Paulo)
 
-## Validação da implementação
+Após atualização FAST, a leitura oficial e o espelho coincidiram por TicketID: **24 ativos (18 Atacado + 6 Triagem), backlog 24, nenhum agendado e zero faltantes/extras**. Dashboard e Cockpit reconciliaram **706 criados em novembro** e backlog 24. Esses valores são uma referência temporal, não metas fixadas na interface.
 
-- Django `check` e `makemigrations --check`: sem erros ou alterações pendentes.
-- 455 testes da integração, Worker, indicadores, GEO, Chamados, Qualidade e Base: aprovados. A execução ampliada utiliza hasher rápido somente no processo de testes; não modifica a configuração da aplicação. O subconjunto de 38 testes de sincronização e Triagem também passou com a configuração normal.
-- Orçamento de até 20 consultas do Dashboard preservado: níveis e status compartilham uma agregação, sem consultas por ticket.
-- Oito rotas autenticadas principais responderam HTTP 200. Dashboard e Cockpit reconciliados novamente após a agregação final: 703 criados e backlog atual de 20.
-- Build de produção: 42 bundles e Service Worker gerados. Layouts revisados em claro/escuro, inclusive em 1024 e 1366 px; o filtro secundário permanece dentro da tela em notebooks.
-- Migration aplicada somente no SQLite DEV. A origem MySQL foi consultada somente para leitura; não houve deploy, alteração de tags ou escrita no OTRS.
+Passaram 65 testes focados de escopo, resolução, transferência/deduplicação, reabertura, cancelamento, backlog, GEO/Apresentação, paridade e regressões da interface. Também passaram Django check, migration check, build de produção e smoke tests de Dashboard, Cockpit e Chamados (HTTP 200). Migration 0025, coleta e backfill foram preservados; nenhuma carga histórica extensa foi repetida nem houve ação no servidor de produção.

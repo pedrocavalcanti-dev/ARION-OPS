@@ -376,9 +376,6 @@ class AnalyticsQueryService:
             backlog_observations=backlog_observations,
         )
         if scope == "support":
-            from aplicativos.integracoes.services.otrs_attendance import attendance_summary
-            operational["attendance"] = attendance_summary(operational_rows, start_at=start_at, end_at=end_exclusive)
-        if scope == "support":
             from .backlog_history import reconstructed_backlog
 
             reconstruction = reconstructed_backlog(
@@ -2243,11 +2240,15 @@ class DashboardAnalyticsService:
                 "logo_initials": logo["initials"],
             })
 
-        from aplicativos.integracoes.services.otrs_attendance import attendance_summary
-        attendance = attendance_summary(tickets, start_at=start_at, end_at=end_at, include_stock=True)
-        snapshot_status = {status: attendance.pop(f"stock_{status}")
-                           for status in ("OPEN", "PENDING", "SCHEDULED", "RESOLVED", "CANCELED", "UNKNOWN")}
-        backlog_current = attendance.pop("stock_backlog")
+        status_resp_rows = list(current_tickets.values(
+            "business_status", "responsibility_normalized",
+        ).annotate(total=Count("pk")))
+        snapshot_status = normalized_status_counts(status_resp_rows)
+        backlog_current = sum(
+            row["total"] for row in status_resp_rows
+            if row["business_status"] in BACKLOG_STATUSES
+            and row["responsibility_normalized"] != "IMPROCEDENTE"
+        )
         status_counts = {status: snapshot_status.get(status, 0) for status in STATUS_ORDER}
         open_count = status_counts[OTRSStateMapping.BusinessStatus.OPEN]
         pending_count = status_counts[OTRSStateMapping.BusinessStatus.PENDING]
@@ -2312,7 +2313,6 @@ class DashboardAnalyticsService:
             "repeat": recurrence_total,
             "business_open": open_count + pending_count + scheduled_count,
             "backlog_current": backlog_current,
-            "attendance": attendance,
             "otrs_last_sync_at": otrs_last_sync_at,
             "otrs_last_sync_label": otrs_last_sync_label,
             "open_count": open_count,

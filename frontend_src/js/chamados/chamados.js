@@ -170,18 +170,6 @@
     if (data.ticket.closing_reason_label) appendMeta(meta, "Motivo de encerramento", data.ticket.closing_reason_label);
     summary.appendChild(meta);
     host.appendChild(summary);
-    const events = data.ticket.source_events || [];
-    if (events.length) {
-      const history = document.createElement("details");
-      history.className = "drawer-original-title";
-      appendText(history, "summary", "Histórico oficial de atendimento OTRS · até 80 eventos recentes");
-      const eventLabels = { NewTicket: "Criação", Move: "Transferência", StateUpdate: "Alteração de estado", Merged: "Mesclagem" };
-      events.forEach((event) => {
-        const date = new Date(event.at).toLocaleString("pt-BR");
-        appendText(history, "p", `${date} · ${eventLabels[event.type] || event.type} · ${event.queue} · ${event.state}`);
-      });
-      host.appendChild(history);
-    }
 
     const headerLink = drawer.querySelector("[data-drawer-ticket-link]");
     const headerNumber = drawer.querySelector("[data-drawer-ticket-number]");

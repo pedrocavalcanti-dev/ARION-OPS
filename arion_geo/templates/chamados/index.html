@@ -60,11 +60,9 @@
       <label><span>UF</span><select name="uf"><option value="">Todas</option>{% for option in filter_options.ufs %}<option{% if filters.uf == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
 
           </div>
-    <details class="ticket-more-filters"{% if filters.queue or filters.otrs_status or filters.priority or filters.reason or filters.over_24h or filters.recurrent or filters.sort != 'aging' %} open{% endif %}>
+    <details class="ticket-more-filters"{% if filters.otrs_status or filters.priority or filters.reason or filters.over_24h or filters.recurrent or filters.sort != 'aging' %} open{% endif %}>
       <summary>Mais filtros</summary>
       <div class="ticket-filter-secondary">
-      <label><span>Fila de atendimento</span><select name="queue"><option value="">Todas — Atacado + Triagem</option><option value="NOC - TRIAGEM"{% if filters.queue == 'NOC - TRIAGEM' %} selected{% endif %}>NOC - TRIAGEM · N1</option><option value="NOC - ATACADO"{% if filters.queue == 'NOC - ATACADO' %} selected{% endif %}>NOC - ATACADO · N2</option></select></label>
-
         <label><span>Responsável</span><select name="assignee"><option value="">Todos</option><option value="unassigned"{% if filters.assignee == 'unassigned' %} selected{% endif %}>Sem responsável</option>{% for option in filter_options.assignees %}<option value="{{ option.value }}"{% if filters.assignee == option.value|stringformat:'s' %} selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
         <label><span>Status OTRS</span><select name="otrs_status"><option value="">Todos ativos</option>{% for code,label in status_choices %}<option value="{{ code }}"{% if filters.otrs_status == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
         <label><span>Prioridade OTRS</span><select name="priority"><option value="">Todas</option>{% for option in filter_options.priorities %}<option{% if filters.priority == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
@@ -85,7 +83,7 @@
   <div class="ticket-table-wrap">
     <table class="ticket-table"><thead><tr><th>Chamado</th><th>Cliente / projeto</th><th>Link / local</th><th>Provider / ISP</th><th>Acompanhamento ARION</th><th title="Aging operacional ARION; não representa necessariamente SLA contratual">Aging ⓘ</th><th>Ação</th></tr></thead>
       <tbody>{% for row in rows %}<tr class="ticket-row" data-ticket-id="{{ row.external_id }}" tabindex="0" role="button" aria-label="Abrir detalhes ARION do chamado {{ row.ticket_number }}">
-        <td data-label="Chamado">{% if row.otrs_url %}<a class="ticket-number-link" href="{{ row.otrs_url }}" target="_blank" rel="noopener noreferrer" data-external-ticket>{{ row.ticket_number }} <span aria-hidden="true">↗</span></a>{% else %}<strong>{{ row.ticket_number }}</strong>{% endif %}<small>{{ row.source_created_at|date:'d/m/Y H:i'|default:'Sem data' }}</small><small>{{ row.queue_name }} &middot; {{ row.attendance_level }}</small></td>
+        <td data-label="Chamado">{% if row.otrs_url %}<a class="ticket-number-link" href="{{ row.otrs_url }}" target="_blank" rel="noopener noreferrer" data-external-ticket>{{ row.ticket_number }} <span aria-hidden="true">↗</span></a>{% else %}<strong>{{ row.ticket_number }}</strong>{% endif %}<small>{{ row.source_created_at|date:'d/m/Y H:i'|default:'Sem data' }}</small></td>
         <td data-label="Cliente / projeto"><strong><span class="ticket-client ticket-client--{{ row.client|slugify }}">{{ row.client }}</span></strong><small>{{ row.project }}</small></td>
         <td data-label="Link / local"><strong class="ticket-link-title" title="{{ row.title }}">{{ row.designation }}</strong><small title="{{ row.title }}">{{ row.city }}{% if row.city and row.state %} · {% endif %}{{ row.state }}{% if row.links_count > 1 %} · +{{ row.links_count|add:'-1' }} links{% endif %}</small></td>
         <td data-label="Provider / ISP"><strong>{{ row.provider }}{% if row.provider_more %} <small>+{{ row.provider_more }} ISP</small>{% endif %}</strong></td>

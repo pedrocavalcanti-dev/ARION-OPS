@@ -16,7 +16,6 @@ from aplicativos.integracoes.otrs_queues import (
     COCKPIT_QUEUE_NAMES, NOC_QUEUE_NAME, TRIAGE_QUEUE_NAME,
 )
 from aplicativos.integracoes.services.analytics import TicketQueryService
-from aplicativos.integracoes.services.otrs_attendance import attendance_summary
 from aplicativos.integracoes.services.otrs_backlog_history import reconstruct_ticket
 from aplicativos.integracoes.services.otrs_snapshots import capture_hourly_backlog_checkpoint
 from aplicativos.integracoes.services.otrs_sync import OTRSSyncService
@@ -90,28 +89,33 @@ class TriageIntegrationTests(TestCase):
         self.source.history_rows = [{"ticket_id": 100, "state_id": 20, "terminal_at": resolved}]
         self.source.event(3, queue, 20, "StateUpdate", resolved)
 
-    def summary(self):
-        return attendance_summary(TicketQueryService.base(self.user), start_at=START, end_at=END)
+    def query(self, metric="tickets"):
+        return AnalyticsQueryService().query({"scope": "support", "metric": metric,
+            "start": "2026-11-01", "end": "2026-11-30",
+            "include_cancelled": True, "include_improcedente": True}, user=self.user)
 
     def test_open_triage_is_in_queue_dashboard_cockpit_and_backlog(self):
         self.sync()
         queue = TicketQueueService.build(self.user, {})
         self.assertEqual(queue["active_count"], 1)
-        self.assertEqual(queue["rows"][0]["attendance_level"], "N1")
+        self.assertNotIn("attendance_level", queue["rows"][0])
         dashboard = DashboardAnalyticsService.build(user=self.user, start=date(2026, 11, 1), end=date(2026, 11, 30))
         self.assertEqual(dashboard["backlog_current"], 1)
         self.assertEqual(dashboard["calls"], 1)
         cockpit = AnalyticsQueryService().query({"scope": "support", "metric": "tickets",
             "start": "2026-11-01", "end": "2026-11-30"}, user=self.user)
-        self.assertEqual(cockpit["operational"]["attendance"]["current_n1"], 1)
-        self.assertEqual(self.summary()["current_n1"], 1)
+        self.assertEqual(cockpit["value"], dashboard["calls"])
+        self.assertEqual(cockpit["operational"]["current"]["total"], dashboard["backlog_current"])
+        self.assertNotIn("attendance", cockpit["operational"])
+        self.assertNotIn("attendance", dashboard)
 
     def test_resolved_only_in_triage_remains_in_created_resolution_and_quality(self):
         self.resolve()
         self.sync()
         self.assertEqual(TicketQueryService.business_open(self.user).count(), 0)
         self.assertEqual(TicketQueryService.base(self.user).count(), 1)
-        self.assertEqual(self.summary()["resolved_n1"], 1)
+        self.assertEqual(self.query("resolved_tickets")["value"], 1)
+        self.assertEqual(self.query()["value"], 1)
         self.assertEqual(quality_ticket_sets(self.user)["valid_tickets"].count(), 1)
         self.assertEqual(TicketQueueService.build(self.user, {})["active_count"], 0)
 
@@ -124,26 +128,25 @@ class TriageIntegrationTests(TestCase):
         self.sync()
         self.assertEqual(OTRSTicket.objects.get().pk, pk)
         self.assertEqual(OTRSTicketEvent.objects.count(), 3)
-        self.assertEqual(self.summary()["forwarded_n1_n2"], 1)
-        self.assertEqual(self.summary()["resolved_n2"], 1)
+        self.assertEqual(self.query()["value"], 1)
+        self.assertEqual(self.query("resolved_tickets")["value"], 1)
         self.assertEqual(quality_ticket_sets(self.user)["valid_tickets"].count(), 1)
         self.source.ticket.update(queue_id=181, state_id=10)
         self.source.event(4, 181, 10, "Move", START + timedelta(hours=4))
         self.sync()
-        self.assertEqual(self.summary()["current_n1"], 1)
-        self.assertEqual(self.summary()["resolved_n2"], 0)
+        self.assertEqual(TicketQueryService.business_open(self.user).count(), 1)
+        self.assertEqual(self.query("resolved_tickets")["value"], 0)
         self.source.ticket.update(state_id=30)
         self.source.event(5, 181, 30, "StateUpdate", START + timedelta(hours=5))
         self.sync()
         self.assertEqual(TicketQueryService.business_open(self.user).count(), 0)
         self.assertEqual(OTRSTicket.objects.count(), 1)
 
-    def test_missing_resolution_queue_evidence_stays_unclassified(self):
+    def test_resolution_uses_canonical_date_without_requiring_level_evidence(self):
         self.resolve()
         self.source.events = self.source.events[:1]
         self.sync()
-        self.assertEqual(self.summary()["resolved_n1"], 0)
-        self.assertEqual(self.summary()["resolution_unclassified"], 1)
+        self.assertEqual(self.query("resolved_tickets")["value"], 1)
 
     def test_explicit_historical_batch_keeps_outside_ticket_without_reconciling_others(self):
         self.source.ticket.update(queue_id=222)
@@ -153,7 +156,6 @@ class TriageIntegrationTests(TestCase):
         self.assertFalse(ticket.is_present_in_queue)
         self.assertEqual(TicketQueryService.base(self.user).count(), 1)
         self.assertEqual(TicketQueryService.business_open(self.user).count(), 0)
-        self.assertEqual(self.summary()["current_n1"], 0)
         self.assertEqual(DashboardAnalyticsService.build(user=self.user,
             start=date(2026, 11, 1), end=date(2026, 11, 30))["backlog_current"], 0)
 
@@ -196,13 +198,12 @@ class TriageIntegrationTests(TestCase):
             with source.read_only_session():
                 raise ValueError("synthetic validation")
 
-    def test_queue_filter_and_scope_are_applied_on_backend(self):
+    def test_queue_filter_is_ignored_and_data_scope_stays_on_backend(self):
         self.sync()
-        self.assertEqual(TicketQueueService.build(self.user, {"queue": NOC_QUEUE_NAME})["active_count"], 0)
+        self.assertEqual(TicketQueueService.build(self.user, {"queue": NOC_QUEUE_NAME})["active_count"], 1)
         self.assertEqual(TicketQueueService.build(self.user, {"queue": TRIAGE_QUEUE_NAME})["active_count"], 1)
         limited = get_user_model().objects.create_user("limited")
         self.assertEqual(TicketQueryService.base(limited).count(), 0)
-        self.assertEqual(self.summary()["current_n1"], 1)
         self.assertNotIn("queue", sanitize_queue_filters({"queue": "OUTSIDE QUEUE"}))
 
     def test_current_checkpoint_counts_both_queues_once(self):
@@ -211,12 +212,24 @@ class TriageIntegrationTests(TestCase):
         self.assertEqual(result["support_backlog"], 1)
         self.assertFalse(capture_hourly_backlog_checkpoint(captured_at=START)["created"])
 
-    def test_old_n2_history_does_not_imply_consolidated_coverage(self):
+    def test_single_queue_history_does_not_imply_consolidated_coverage(self):
         from aplicativos.painel.services.backlog_history import reconstructed_backlog_at
         OTRSBacklogHistory.objects.create(queue_name=NOC_QUEUE_NAME, earliest_at=START, through=END)
         result = reconstructed_backlog_at(user=self.user, links=CMDBLinkMirror.objects.all(), filters={},
             target_dt=START + timedelta(days=1), apply_filters=AnalyticsQueryService._apply_filters)
         self.assertFalse(result["covered"])
+
+    def test_pages_keep_the_approved_interface_without_level_controls(self):
+        self.sync()
+        self.client.force_login(self.user)
+        dashboard = self.client.get("/dashboard/")
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertNotContains(dashboard, "dashboard-attendance")
+        self.assertNotContains(dashboard, "Atendimento N1")
+        queue = self.client.get("/chamados/")
+        self.assertEqual(queue.status_code, 200)
+        self.assertNotContains(queue, 'name="queue"')
+        self.assertNotContains(queue, "Fila de atendimento")
 
     def test_reconstruction_tracks_triage_and_atacado_intervals_without_overlap(self):
         events = [{"id": e["id"], "at": e["create_time"], "queue_id": e["queue_id"],
