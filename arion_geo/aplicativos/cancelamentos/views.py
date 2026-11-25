@@ -21,7 +21,10 @@ from aplicativos.chamados.services import otrs_ticket_url
 
 from . import forms
 from .services.data_scope import CancellationScope
-from .services.otrs_intake import intake_settings, source_status, synchronization_indicator, current_intakes
+from .services.otrs_intake import (
+    intake_settings, source_status, synchronization_indicator, current_intakes,
+    reviewable_intakes, ticket_needs_reconciliation,
+)
 from .models import CancellationIntake, CancellationPending, CancellationProcess
 from .services.queries import query_module, TABS
 from .services.legacy_history import legacy_context, present_events
@@ -85,6 +88,9 @@ def _return_url(request, default):
 @vary_on_headers("X-Cancellation-Fragment")
 def index(request):
     data = query_module(request.user, request.GET)
+    reconciliation = data.pop("reconciliation_intakes")
+    reconciliation_page = (Paginator(reconciliation.select_related("ticket", "assigned_to", "link__operator"), 40)
+                           .get_page(request.GET.get("reconciliation_page"))) if data["tab"] == "order" else None
     page = Paginator(data.pop("queryset"), 40).get_page(request.GET.get("page"))
     if data["tab"] != "intake":
         page.object_list = prepare_rows(page.object_list, request.user)
@@ -102,7 +108,11 @@ def index(request):
     assignment_form.fields.pop("revision")
     assignment_form.auto_id = "id_list_%s"
     context = {
-        **data, "page": page,
+        **data, "page": page, "reconciliation_page": reconciliation_page,
+        "reconciliation_previous_url": _url_params(request.GET, reconciliation_page=reconciliation_page.previous_page_number())
+            if reconciliation_page and reconciliation_page.has_previous() else "",
+        "reconciliation_next_url": _url_params(request.GET, reconciliation_page=reconciliation_page.next_page_number())
+            if reconciliation_page and reconciliation_page.has_next() else "",
         "tabs": [{"key": key, "label": label, "url": _tab_url(request.GET, key), "metric_url": _metric_url(request.GET, key), "count": data["metrics"][key]} for key, label in TABS],
         "quick_filters": [{"label": label, "value": value, "url": _url_params(request.GET, owner=value)} for value, label in (("", "Todos"), ("me", "Meus" if data["tab"] == "intake" else "Meus cancelamentos"), ("none", "Sem responsável"))],
         "sync_indicator": synchronization_indicator(), "assignment_form": assignment_form,
@@ -130,11 +140,13 @@ def intake_detail(request, pk):
     if entry.ticket_id:
         official_identity |= Q(source_ticket_id=entry.ticket_id)
     process = CancellationScope.processes(request.user).filter(official_identity).first()
+    has_official_process = CancellationProcess.objects.filter(official_identity).exists()
     source_ok, source_notice, _ = source_status()
     return render(request, "cancelamentos/intake_detail.html", {
         "entry": entry, "triage_form": form, "candidates": candidates, "process": process,
-        "is_current_entry": current_intakes(CancellationIntake.objects.filter(pk=entry.pk)).exists(),
-        "has_official_process": CancellationProcess.objects.filter(official_identity).exists(),
+        "is_current_entry": reviewable_intakes(CancellationIntake.objects.filter(pk=entry.pk)).exists(),
+        "entry_requires_reconciliation": ticket_needs_reconciliation(entry.ticket) and entry.status == "WAITING" and not has_official_process,
+        "has_official_process": has_official_process,
         "history": present_events(history.select_related("actor")), "otrs_url": otrs_ticket_url(entry.ticket_external_id),
         "source_notice": source_notice, "source_ok": source_ok,
     })
@@ -309,7 +321,7 @@ def intake_dialog(request, pk, action):
     require(request.user, "triage_cancellations")
     if action not in ("approve", "reject"):
         raise PermissionDenied
-    entry = get_object_or_404(current_intakes(CancellationScope.intakes(request.user)).filter(status="WAITING"), pk=pk)
+    entry = get_object_or_404(reviewable_intakes(CancellationScope.intakes(request.user)).filter(status="WAITING"), pk=pk)
     identity = Q(ticket_number=entry.ticket_number) | Q(intake=entry)
     if entry.ticket_id:
         identity |= Q(source_ticket_id=entry.ticket_id)

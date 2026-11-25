@@ -16,7 +16,7 @@ from ..models import (CancellationIntake, CancellationProcess, CancellationEvent
                      CancellationPending, CancellationEquipment, FinancialObligation, CancellationEvidence,
                      FinancialHandoff, HandoffObligation)
 from .data_scope import CancellationScope
-from .otrs_intake import source_status, intake_settings, ticket_is_eligible
+from .otrs_intake import source_status, intake_settings, intake_is_reviewable
 from .identity import normalize_ticket_number
 from .financial_totals import money_columns, format_brl
 
@@ -67,7 +67,7 @@ def decide_intake(*, request, pk, action, data):
         raise Conflict("Este ticket já possui processo oficial, inclusive por importação histórica. Consulte o registro existente.")
     if action not in ("approve", "reject", "wait", "assume", "assign"):
         raise ValidationError("Ação de triagem inválida.")
-    if action in ("assign", "assume") and (not entry.eligible or not ticket_is_eligible(entry.ticket)):
+    if action in ("assign", "assume") and not intake_is_reviewable(entry):
         raise ValidationError("A entrada saiu do KPI atual. Consulte seu histórico.")
     old_owner = entry.assigned_to_id
     if not CancellationIntake.objects.filter(pk=entry.pk, revision=values["revision"]).update(revision=F("revision") + 1):
@@ -106,8 +106,8 @@ def decide_intake(*, request, pk, action, data):
         ticket = OTRSTicket.objects.select_for_update().filter(pk=entry.ticket_id).first()
         if not ok:
             raise ValidationError(notice)
-        if not entry.eligible or not ticket_is_eligible(ticket):
-            raise ValidationError("O ticket não pertence mais ao KPI 1 de entrada. Atualize a análise.")
+        if not intake_is_reviewable(entry, ticket):
+            raise ValidationError("O ticket não pertence à entrada atual nem aos tratamentos ativos para reconciliação. Atualize a análise.")
         if (not ticket.source_synced_at or ticket.source_synced_at < timezone.now() - timedelta(minutes=intake_settings().max_age_minutes)
                 or entry.source_changed_at != ticket.source_changed_at or entry.source_synced_at != ticket.source_synced_at):
             raise Conflict("O espelho mudou ou está desatualizado. Aguarde a projeção e revise a entrada.")
@@ -124,7 +124,7 @@ def decide_intake(*, request, pk, action, data):
         if link and not OTRSTicketConfigItem.objects.filter(ticket=ticket, cmdb_link=link, is_present_in_source=True).exists():
             raise Conflict("O vínculo CMDB mudou. Revise os candidatos.")
         process = CancellationProcess.objects.create(
-            intake=entry, ticket_number=normalize_ticket_number(entry.ticket_number), owner=request.user, link=link,
+            intake=entry, source_ticket=ticket, ticket_number=normalize_ticket_number(entry.ticket_number), owner=request.user, link=link,
             config_item_id=link.source_config_item_id if link else "",
             contracting_client=link.contracting_client if link else "",
             project=(link.business_project or link.legacy_project) if link else "",

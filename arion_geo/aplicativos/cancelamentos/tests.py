@@ -497,13 +497,79 @@ class CancellationTests(TestCase):
         entry.refresh_from_db()
         self.assertFalse(entry.eligible)
         self.assertEqual(entry.status, "WAITING")
-        with self.assertRaises(ValidationError):
-            decide_intake(request=self.request(), pk=entry.pk, action="approve", data={"revision": entry.revision, "link": self.link.pk})
+        orders = query_module(self.admin, {"tab": "order"})
+        self.assertEqual(orders["reconciliation_intakes"].get().pk, entry.pk)
+        self.assertEqual(orders["metrics"]["order"], 1)
+        self.assertFalse(CancellationProcess.objects.exists())
         OTRSTicket.objects.filter(pk=entry.ticket_id).update(external_state_id=10, external_state_name="em atendimento", business_status="OPEN")
         project_intakes(force=True)
         self.assertEqual(CancellationIntake.objects.count(), 1)
         self.assertEqual(query_module(self.admin, {})["queryset"].count(), 1)
         self.assertFalse(CancellationProcess.objects.exists())
+
+    def test_treatment_without_process_is_visible_and_only_human_approval_admits_order(self):
+        entry = self.entry(102987)
+        entry.assigned_to = self.admin
+        entry.save(update_fields=("assigned_to",))
+        now = timezone.now()
+        OTRSTicket.objects.filter(pk=entry.ticket_id).update(external_state_id=21,
+            external_state_name="pendente operadora", business_status="PENDING",
+            queue_external_id=164, ticket_number="2026111236000163",
+            source_changed_at=now, source_synced_at=now)
+        # Live classification covers the gap before the next projection.
+        self.assertEqual(query_module(self.admin, {})["queryset"].count(), 0)
+        self.assertEqual(query_module(self.admin, {"tab": "order"})["reconciliation_intakes"].count(), 1)
+        project_intakes(force=True)
+        entry.refresh_from_db()
+        revision = entry.revision
+        events = CancellationEvent.objects.count()
+        project_intakes(force=True)
+        entry.refresh_from_db()
+        self.assertEqual(entry.revision, revision)
+        self.assertEqual(CancellationEvent.objects.count(), events)
+        self.assertFalse(entry.eligible)
+        self.assertEqual(entry.status, "WAITING")
+        self.assertEqual(entry.assigned_to_id, self.admin.pk)
+        self.assertFalse(CancellationProcess.objects.exists())
+        response = self.client.get(reverse("cancelamentos:index"), {"tab": "order"})
+        self.assertContains(response, "Aguardando reconciliação")
+        self.assertContains(response, entry.ticket_number)
+        detail = self.client.get(reverse("cancelamentos:intake_detail", args=(entry.pk,)))
+        self.assertContains(detail, "Aguardando reconciliação por aprovação humana")
+        self.assertNotContains(detail, "Ticket fora do KPI 1 ou origem desatualizada")
+        process = self.approve(entry)
+        self.assertEqual(process.stage, "ORDER")
+        self.assertEqual(process.owner_id, self.admin.pk)
+        self.assertEqual(process.source_ticket_id, entry.ticket_id)
+        self.assertEqual(query_module(self.admin, {"tab": "order"})["reconciliation_intakes"].count(), 0)
+        with self.assertRaises(Conflict):
+            decide_intake(request=self.request(), pk=entry.pk, action="approve",
+                data={"revision": revision, "link": self.link.pk})
+        self.assertEqual(CancellationProcess.objects.count(), 1)
+
+    def test_new_treatment_is_projected_without_order_and_reconciliation_respects_scope(self):
+        ticket = self.ticket(102988)
+        ticket.external_state_name, ticket.business_status = "pendente operadora", "PENDING"
+        ticket.save(update_fields=("external_state_name", "business_status"))
+        project_intakes(force=True)
+        entry = CancellationIntake.objects.get(ticket=ticket)
+        self.assertFalse(entry.eligible)
+        self.assertEqual(query_module(self.admin, {"tab": "order"})["reconciliation_intakes"].count(), 1)
+        restricted = self.restricted(project="Outro projeto")
+        self.assertEqual(query_module(restricted, {"tab": "order"})["reconciliation_intakes"].count(), 0)
+        self.assertFalse(CancellationProcess.objects.exists())
+        ticket.business_status = "CANCELED"
+        ticket.save(update_fields=("business_status",))
+        self.assertFalse(query_module(self.admin, {"tab": "order"})["reconciliation_intakes"].exists())
+
+    def test_existing_official_treatment_is_not_listed_as_unadmitted(self):
+        entry = self.entry(102989)
+        OTRSTicket.objects.filter(pk=entry.ticket_id).update(
+            external_state_name="pendente operadora", business_status="PENDING")
+        CancellationProcess.objects.create(origin="ARIONBROKER", source_ticket_id=entry.ticket_id,
+            ticket_number=entry.ticket_number, link=self.link, contracting_client="Cliente A", project="Projeto A")
+        self.assertFalse(query_module(self.admin, {"tab": "order"})["reconciliation_intakes"].exists())
+        self.assertEqual(CancellationProcess.objects.count(), 1)
 
     def test_approved_and_rejected_decisions_survive_kpi_reclassification(self):
         process = self.approve()

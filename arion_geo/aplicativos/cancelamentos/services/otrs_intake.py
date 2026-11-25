@@ -51,9 +51,32 @@ def eligible_tickets():
     ).filter(_intake_stage="REQUEST")
 
 
+def treatment_tickets():
+    """Active official treatment classification; never an internal process stage."""
+    return OTRSTicket.objects.filter(
+        is_present_in_queue=True, business_status__in=("OPEN", "PENDING", "SCHEDULED"),
+    ).annotate(_intake_stage=cancellation_stage_expression()).filter(_intake_stage="TREATMENT")
+
+
+def ticket_needs_reconciliation(ticket):
+    return bool(ticket and ticket.is_present_in_queue
+                and ticket.business_status in {"OPEN", "PENDING", "SCHEDULED"}
+                and classify_cancellation_stage(ticket) == "TREATMENT")
+
+
+def intake_is_reviewable(entry, ticket=None):
+    ticket = ticket if ticket is not None else entry.ticket
+    return bool((entry.eligible and ticket_is_eligible(ticket)) or ticket_needs_reconciliation(ticket))
+
+
 def current_intakes(queryset):
     """Consult the live mirror as well as the projection, including while the worker lags."""
     return queryset.filter(eligible=True, ticket__in=eligible_tickets())
+
+
+def reviewable_intakes(queryset):
+    return queryset.filter(Q(pk__in=current_intakes(queryset).values("pk"))
+                           | Q(ticket__in=treatment_tickets()))
 
 
 def synchronization_indicator():
@@ -118,7 +141,7 @@ def project_intakes(*, force=False):
                 with transaction.atomic():
                     eligible = ticket_is_eligible(ticket)
                     entry = CancellationIntake.objects.select_for_update().filter(ticket_external_id=ticket.external_id).first()
-                    if not entry and not eligible:
+                    if not entry and not (eligible or ticket_needs_reconciliation(ticket)):
                         continue
                     new = entry is None
                     entry = entry or CancellationIntake(ticket_external_id=ticket.external_id)

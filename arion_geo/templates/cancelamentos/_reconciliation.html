@@ -1,0 +1,12 @@
+{% load cancellation_display %}
+<section class="canc-table-section" aria-label="Pedidos aguardando reconciliação">
+  <div class="canc-table-caption"><h2>Aguardando reconciliação</h2><span>{{ reconciliation_page.paginator.count }} registro{{ reconciliation_page.paginator.count|pluralize:"s" }}</span></div>
+  <p class="canc-muted">Tickets ativos em tratamento no OTRS, sem processo oficial local. Revise e aprove pela triagem existente; nenhuma etapa interna ou decisão foi criada automaticamente.</p>
+  <div class="canc-table-scroll"><table class="canc-compact-table"><thead><tr><th>Ticket</th><th>Designação</th><th>Cliente / projeto</th><th>ISP</th><th>Estado oficial OTRS</th><th>Responsável</th><th>Ação</th></tr></thead><tbody>
+    {% for entry in reconciliation_page %}<tr>
+      <td>{{ entry.ticket_number }}</td><td>{{ entry.designation_snapshot|default:"Vínculo a revisar" }}</td><td>{{ entry.client_snapshot|default:"Não identificado" }} · {{ entry.project_snapshot|default:"—" }}</td><td>{{ entry.link.operator.name|default:"—" }}</td><td>{{ entry.ticket.external_state_name }}</td><td>{{ entry.assigned_to|person_name }}</td>
+      <td><a class="canc-link" href="{% url 'cancelamentos:intake_detail' entry.pk %}">Revisar entrada</a></td>
+    </tr>{% endfor %}
+  </tbody></table></div>
+  <footer class="canc-pagination"><span>Página {{ reconciliation_page.number }} de {{ reconciliation_page.paginator.num_pages }}</span><div>{% if reconciliation_previous_url %}<a class="canc-button" href="{{ reconciliation_previous_url }}">Anterior</a>{% endif %}{% if reconciliation_next_url %}<a class="canc-button" href="{{ reconciliation_next_url }}">Próxima</a>{% endif %}</div></footer>
+</section>

@@ -1,12 +1,46 @@
 from django.contrib.auth import get_user_model
+from django.db import OperationalError
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 import json
 
-from config.errors import api_error
+from config.errors import api_error, handler500
 
 
 class GlobalErrorHandlingTests(TestCase):
+    @override_settings(DEBUG=False)
+    def test_server_error_records_exception_identity_without_secret_message(self):
+        request = RequestFactory().get("/chamados/?token=do-not-log")
+        request.request_id = "REQ-HOTFIX-TEST"
+        with self.assertLogs("config.errors", level="ERROR") as logged:
+            try:
+                raise RuntimeError("password=do-not-log; SELECT private_value")
+            except RuntimeError:
+                response = handler500(request)
+        self.assertEqual(response.status_code, 500)
+        output = " ".join(logged.output)
+        self.assertIn("exception_type=RuntimeError", output)
+        self.assertIn("REQ-HOTFIX-TEST", output)
+        self.assertIn("test_server_error_records_exception_identity", output)
+        self.assertNotIn("do-not-log", output)
+        self.assertNotIn("SELECT", output)
+
+    @override_settings(DEBUG=False)
+    def test_database_error_code_is_logged_without_sql_or_exception_message(self):
+        request = RequestFactory().get("/chamados/")
+        request.request_id = "REQ-HOTFIX-DATABASE"
+        with self.assertLogs("config.errors", level="ERROR") as logged:
+            try:
+                raise OperationalError(1055, "SELECT sensitive_column password=do-not-log")
+            except OperationalError:
+                response = handler500(request)
+        output = " ".join(logged.output)
+        self.assertIn("exception_type=OperationalError", output)
+        self.assertIn("error_code=1055", output)
+        self.assertNotIn("sensitive_column", output)
+        self.assertNotIn("do-not-log", output)
+        self.assertNotIn("OperationalError", response.content.decode())
+
     @override_settings(DEBUG=False)
     def test_unknown_html_page_uses_safe_404_template(self):
         response = self.client.get("/no-such-page/")

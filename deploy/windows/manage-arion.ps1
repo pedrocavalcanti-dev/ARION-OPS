@@ -66,11 +66,11 @@ function Invoke-Native([string]$File, [string[]]$Arguments, [string]$Label, [swi
     return [pscustomobject]@{ Code = $code; Output = ($lines -join "`n") }
 }
 
-function Invoke-ArionScript([string]$Name, [string[]]$Arguments = @()) {
+function Invoke-ArionScript([string]$Name, [hashtable]$Parameters = @{}) {
     $path = Join-Path $script:Root ("deploy\windows\{0}.ps1" -f $Name)
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Script ausente: $path" }
     Write-Log "Executando $Name"
-    try { & $path @Arguments -ProjectRoot $script:Root; Add-Step $Name 'ok' }
+    try { & $path @Parameters -ProjectRoot $script:Root; Add-Step $Name 'ok' }
     catch { Add-Step $Name 'falha' $_.Exception.Message; throw "Etapa '$Name' falhou: $($_.Exception.Message)" }
 }
 
@@ -140,14 +140,14 @@ function Start-AllServices {
     Enter-OperationLock
     Write-Log 'Validando Python da .venv e iniciando Web antes do Worker.'
     try {
-        Invoke-ArionScript 'start-arion' @('-Role', 'web')
-        Invoke-ArionScript 'start-arion' @('-Role', 'worker')
+        Invoke-ArionScript 'start-arion' @{ Role = 'web' }
+        Invoke-ArionScript 'start-arion' @{ Role = 'worker' }
         Assert-RoleState 'running'
         if (-not (Test-WebReadiness -TimeoutSeconds 30)) { throw 'Web não confirmou /health/.' }
     } catch {
         Write-Log 'A inicialização falhou; solicitando parada dos processos ARION para evitar estado parcial.' 'ERRO'
         foreach ($role in @('worker', 'web')) {
-            try { Invoke-ArionScript 'stop-arion' @('-Role', $role) }
+            try { Invoke-ArionScript 'stop-arion' @{ Role = $role } }
             catch { Write-Log "Não foi possível confirmar a parada de $role após falha: $($_.Exception.Message)" 'ERRO' }
         }
         throw "Falha ao iniciar os serviços: $($_.Exception.Message)"
@@ -161,8 +161,8 @@ function Stop-AllServices {
     Assert-AuthorizedOperator
     Enter-OperationLock
     Write-Log 'Parando Worker antes do Web; somente supervisores ARION serão sinalizados.'
-    Invoke-ArionScript 'stop-arion' @('-Role', 'worker')
-    Invoke-ArionScript 'stop-arion' @('-Role', 'web')
+    Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
+    Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
     Assert-RoleState 'stopped'
     Write-Log 'Web e Worker encerrados.' 'OK'
     Show-Status | Out-Null
@@ -173,18 +173,18 @@ function Restart-AllServices {
     Assert-AuthorizedOperator
     Enter-OperationLock
     Write-Log 'Reiniciando na ordem Worker → Web → Web → Worker.'
-    Invoke-ArionScript 'stop-arion' @('-Role', 'worker')
-    Invoke-ArionScript 'stop-arion' @('-Role', 'web')
+    Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
+    Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
     Assert-RoleState 'stopped'
     try {
-        Invoke-ArionScript 'start-arion' @('-Role', 'web')
-        Invoke-ArionScript 'start-arion' @('-Role', 'worker')
+        Invoke-ArionScript 'start-arion' @{ Role = 'web' }
+        Invoke-ArionScript 'start-arion' @{ Role = 'worker' }
         Assert-RoleState 'running'
         if (-not (Test-WebReadiness -TimeoutSeconds 30)) { throw 'Web não confirmou /health/.' }
     } catch {
         Write-Log 'A reinicialização falhou; solicitando parada dos processos ARION para evitar estado parcial.' 'ERRO'
         foreach ($role in @('worker', 'web')) {
-            try { Invoke-ArionScript 'stop-arion' @('-Role', $role) }
+            try { Invoke-ArionScript 'stop-arion' @{ Role = $role } }
             catch { Write-Log "Não foi possível confirmar a parada de $role após falha: $($_.Exception.Message)" 'ERRO' }
         }
         throw "Falha ao reiniciar os serviços: $($_.Exception.Message)"
@@ -289,8 +289,8 @@ function Invoke-UpdateCore {
     } finally {
         if ($null -eq $preflightEnv) { Remove-Item Env:ARION_ENV -ErrorAction SilentlyContinue } else { $env:ARION_ENV = $preflightEnv }
     }
-    Invoke-ArionScript 'stop-arion' @('-Role', 'worker')
-    Invoke-ArionScript 'stop-arion' @('-Role', 'web')
+    Invoke-ArionScript 'stop-arion' @{ Role = 'worker' }
+    Invoke-ArionScript 'stop-arion' @{ Role = 'web' }
     Assert-RoleState 'stopped'
     if ($pythonDependencyChange) {
         $requirements = Join-Path $script:Root 'requirements-prod.txt'
@@ -324,14 +324,14 @@ function Invoke-UpdateCore {
     }
     Invoke-ArionScript 'production-check'
     try {
-        Invoke-ArionScript 'start-arion' @('-Role', 'web')
-        Invoke-ArionScript 'start-arion' @('-Role', 'worker')
+        Invoke-ArionScript 'start-arion' @{ Role = 'web' }
+        Invoke-ArionScript 'start-arion' @{ Role = 'worker' }
         Assert-RoleState 'running'
         if (-not (Test-WebReadiness -TimeoutSeconds 30)) { throw 'Web não confirmou /health/.' }
     } catch {
         Write-Log 'A inicialização após atualização falhou; solicitando parada dos processos ARION para evitar estado parcial.' 'ERRO'
         foreach ($role in @('worker', 'web')) {
-            try { Invoke-ArionScript 'stop-arion' @('-Role', $role) }
+            try { Invoke-ArionScript 'stop-arion' @{ Role = $role } }
             catch { Write-Log "Não foi possível confirmar a parada de $role após falha: $($_.Exception.Message)" 'ERRO' }
         }
         throw "Falha ao validar os serviços após atualização: $($_.Exception.Message)"
@@ -407,7 +407,7 @@ function Write-DeploymentReport([string]$Operation) {
         created_at = (Get-Date).ToString('o')
         commit = $commitResult.Output.Trim()
         version = $versionInfo.current_version
-        steps = @($script:Steps)
+        steps = $script:Steps.ToArray()
     }
     $path = Join-Path $directory ('manage-arion-report-{0}-{1}.json' -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'), $PID)
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding UTF8

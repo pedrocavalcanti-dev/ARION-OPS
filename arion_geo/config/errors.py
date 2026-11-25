@@ -2,6 +2,9 @@
 
 from dataclasses import asdict, dataclass
 import logging
+from pathlib import Path
+import sys
+import traceback
 
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
@@ -170,9 +173,19 @@ def handler404(request, exception=None):
 def handler500(request):
     reference = _request_id(request) or "indisponível"
     user_id = _safe_user_id(request)
+    _kind, exception, trace = sys.exc_info()
+    # Structural diagnostics only: no exception text, SQL, request payload,
+    # source lines or local variables that could contain credentials.
+    exception_type = type(exception).__name__ if exception is not None else "unknown"
+    args = getattr(exception, "args", ())
+    error_code = args[0] if args and isinstance(args[0], int) else "unknown"
+    frames = " > ".join(
+        f"{Path(frame.filename).name}:{frame.name}:{frame.lineno}"
+        for frame in traceback.extract_tb(trace)[-12:]
+    )
     logger.error(
-        "Unhandled server error request_id=%s user_id=%s method=%s path=%s",
-        reference, user_id, request.method, request.path_info,
+        "Unhandled server error request_id=%s user_id=%s method=%s path=%s exception_type=%s error_code=%s frames=%s",
+        reference, user_id, request.method, request.path_info, exception_type, error_code, frames,
     )
     return responder(request, "INTERNAL_ERROR")
 

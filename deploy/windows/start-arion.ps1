@@ -4,9 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$pythonw = Join-Path $ProjectRoot '.venv\Scripts\pythonw.exe'
 $runner = Join-Path $ProjectRoot 'deploy\windows\run_process.py'
-if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) { throw 'pythonw.exe da .venv não encontrado.' }
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw 'Supervisor do ARION não encontrado.' }
 
 $python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
@@ -33,13 +31,20 @@ if ($existingCode -eq 2) {
     throw 'O supervisor ARION existente não confirmou o processo e, no Web, a prontidão do Waitress na porta configurada em 30 segundos.'
 }
 
-$process = Start-Process -FilePath $pythonw -ArgumentList @('"' + $runner + '"', $Role) `
-    -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
+$startupLogs = Join-Path $ProjectRoot 'var\logs'
+New-Item -ItemType Directory -Path $startupLogs -Force | Out-Null
+$startupOut = Join-Path $startupLogs "arion-$Role-startup.out.log"
+$startupErr = Join-Path $startupLogs "arion-$Role-startup.err.log"
+# A separate hidden console process retains working standard streams and
+# survives the invoking terminal. pythonw can discard startup diagnostics.
+$process = Start-Process -FilePath $python -ArgumentList @(('"' + $runner + '"'), $Role) `
+    -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput $startupOut -RedirectStandardError $startupErr
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 $statusOutput = @()
 do {
     if ($process.HasExited) {
-        throw "ARION supervisor exited during startup (code $($process.ExitCode))."
+        throw "ARION supervisor exited during startup (code $($process.ExitCode)). Consulte var\logs\arion-$Role-startup.err.log e arion-$Role.log."
     }
     $statusOutput = & $python $runner --status $Role 2>&1
     $statusCode = $LASTEXITCODE

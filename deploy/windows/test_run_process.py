@@ -173,6 +173,17 @@ class WindowsProcessIdentityTests(unittest.TestCase):
 
 
 class WebReadinessTests(unittest.TestCase):
+    def test_startup_failure_is_recorded_and_sensitive_values_are_redacted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger = mock.Mock()
+            with mock.patch.object(run_process, "main", side_effect=RuntimeError("password=do-not-log")), \
+                    mock.patch.object(run_process, "_logger", return_value=logger), \
+                    mock.patch.object(sys, "argv", ["run_process.py", "worker"]):
+                self.assertEqual(run_process.guarded_main(), 1)
+            output = str(logger.error.call_args)
+            self.assertIn("RuntimeError", output)
+            self.assertNotIn("do-not-log", output)
+
     def test_web_status_requires_managed_child_to_own_configured_listener(self):
         records = {
             "supervisor": {"pid": 11},

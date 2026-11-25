@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from urllib.parse import urlsplit
 import uuid
 
@@ -507,6 +508,7 @@ def _request_stop(role: str) -> int:
         print(f"{role}: stopped")
         return 0
     RUN_ROOT.mkdir(parents=True, exist_ok=True)
+    _logger(role).info("stop requested through control command requester_pid=%s", os.getpid())
     _stop_path(role).write_text("stop\n", encoding="ascii")
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -734,5 +736,15 @@ def main() -> int:
     return supervise(args.role)
 
 
+def guarded_main() -> int:
+    """Record failures before the normal supervisor loop/child logger starts."""
+    try:
+        return main()
+    except Exception:
+        role = next((value for value in sys.argv[1:] if value in ROLES), "startup")
+        _logger(role).error("supervisor startup failed: %s", sanitize_line(traceback.format_exc()))
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(guarded_main())

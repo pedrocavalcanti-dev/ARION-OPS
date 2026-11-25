@@ -6,6 +6,7 @@ $script:FailOn = ''
 $script:GitResponses = @{}
 . $manager -ProjectRoot $script:Root
 $script:RealLock = (Get-Command Enter-OperationLock).ScriptBlock
+$script:RealInvokeArionScript = (Get-Command Invoke-ArionScript).ScriptBlock
 
 function Assert-Project {}
 function Assert-AuthorizedOperator {}
@@ -18,8 +19,8 @@ function Get-Git([string[]]$Arguments, [string]$Label, [switch]$AllowNonZero) {
     $script:Calls.Add("git:$key")
     return [pscustomobject]@{ Code = 0; Output = [string]$script:GitResponses[$key] }
 }
-function Invoke-ArionScript([string]$Name, [string[]]$Arguments = @()) {
-    $role = $Arguments[1]
+function Invoke-ArionScript([string]$Name, [hashtable]$Parameters = @{}) {
+    $role = $Parameters.Role
     $script:Calls.Add("${Name}:$role")
     if ($script:FailOn -eq "${Name}:$role") { throw 'falha simulada' }
 }
@@ -32,6 +33,29 @@ function Assert-Sequence([string]$Name, [string[]]$Expected) {
 }
 
 try {
+    # Exercise actual PowerShell binding, not the orchestration mock below.
+    $probeDirectory = Join-Path $script:Root 'deploy\windows'
+    New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
+    @'
+param([ValidateSet('web','worker')][string]$Role, [string]$ProjectRoot)
+Write-Output "$Role|$ProjectRoot"
+'@ | Set-Content -LiteralPath (Join-Path $probeDirectory 'role-probe.ps1') -Encoding UTF8
+    $observed = & $script:RealInvokeArionScript 'role-probe' @{ Role = 'worker' }
+    if ($observed -ne "worker|$script:Root") { throw 'Role deve chegar como parametro nomeado, sem receber -Role como valor.' }
+    Write-Output 'OK: binding real de Role por hashtable'
+
+    $releaseDirectory = Join-Path $script:Root 'docs\08-releases'
+    New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+    '{"current_version":"test"}' | Set-Content -LiteralPath (Join-Path $releaseDirectory 'releases.json') -Encoding UTF8
+    New-Item -ItemType Directory -Path (Join-Path $script:Root 'var\logs') -Force | Out-Null
+    $script:Steps.Clear()
+    Add-Step 'regression' 'ok'
+    Write-DeploymentReport 'Status'
+    $reportFile = Get-ChildItem -LiteralPath (Join-Path $script:Root 'var\logs') -Filter '*.json' | Select-Object -First 1
+    $reportData = Get-Content -LiteralPath $reportFile.FullName -Raw | ConvertFrom-Json
+    if (@($reportData.steps).Count -ne 1 -or $reportData.steps[0].name -ne 'regression') { throw 'Relatorio perdeu etapas.' }
+    Write-Output 'OK: relatorio serializa List[object] sem erro de tipos'
+
     Reset-Calls
     Start-AllServices
     Assert-Sequence 'start: Web antes de Worker, com confirmação final' @('start-arion:web', 'start-arion:worker', 'state:running', 'web-health', 'status')

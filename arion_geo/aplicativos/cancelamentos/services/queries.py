@@ -3,7 +3,7 @@ from django.db.models import Count, Exists, OuterRef, Q
 from ..forms import QueryForm, FINANCIAL_PENDING_KINDS
 from ..models import CancellationPending, CancellationProcess, FinancialObligation
 from .data_scope import CancellationScope
-from .otrs_intake import current_intakes
+from .otrs_intake import current_intakes, treatment_tickets
 
 
 TABS = (("intake", "Entrada OTRS"), ("order", "Pedido"), ("request", "Solicitação"),
@@ -12,7 +12,9 @@ TABS = (("intake", "Entrada OTRS"), ("order", "Pedido"), ("request", "Solicitaç
 
 def query_module(user, params):
     intakes = CancellationScope.intakes(user).select_related("assigned_to", "link__operator")
-    official_ticket = CancellationProcess.objects.filter(Q(ticket_number=OuterRef("ticket_number")) | Q(source_ticket_id=OuterRef("ticket_id")))
+    official_ticket = CancellationProcess.objects.filter(
+        Q(intake_id=OuterRef("pk")) | Q(ticket_number=OuterRef("ticket_number"))
+        | Q(source_ticket_id=OuterRef("ticket_id")))
     intakes = intakes.annotate(_has_official=Exists(official_ticket))
     processes = CancellationScope.processes(user).select_related("intake", "source_ticket", "owner", "treatment", "link__operator")
     owner_rows = list(processes.exclude(owner_id=None).values_list("owner_id", "owner__username").order_by("owner__username").distinct())
@@ -69,9 +71,17 @@ def query_module(user, params):
     if tab == "pending" and data.get("with_open_pending") and data.get("stage"):
         pending_processes = pending_processes.filter(stage=data["stage"])
     grouped = {row["stage"]: row["n"] for row in processes.values("stage").annotate(n=Count("pk", distinct=True))}
+    reconciliation = intakes.filter(status="WAITING", process__isnull=True,
+        _has_official=False, ticket__in=treatment_tickets())
+    # An intake has no official pending obligations or handoff yet.
+    if any(data.get(key) for key in ("with_open_pending", "pending_kind", "sent")):
+        reconciliation = reconciliation.none()
+    reconciliation_count = reconciliation.count()
     documents_pending = active_pending.filter(kind__in=("BILL", "DOCUMENT", "RELEASE", "AGREEMENT"))
     metrics = {
-        "intake": current_intakes(intakes).filter(status="WAITING", process__isnull=True, _has_official=False).count(), "order": grouped.get("ORDER", 0),
+        "intake": current_intakes(intakes).filter(status="WAITING", process__isnull=True, _has_official=False).count(),
+        "order": grouped.get("ORDER", 0) + reconciliation_count,
+        "reconciliation": reconciliation_count,
         "request": grouped.get("REQUEST", 0), "completed": grouped.get("COMPLETED", 0),
         "pending": grouped.get("PENDING", 0),
         "open_pending": processes.filter(has_pending=True).count(),
@@ -107,4 +117,5 @@ def query_module(user, params):
     advanced_count = sum(bool(data.get(name)) for name in advanced if name != "stage" or data.get("with_open_pending"))
     return {"form": form, "queryset": queryset, "tab": tab, "metrics": metrics,
             "advanced_fields": [form[name] for name in advanced], "advanced_count": advanced_count,
-            "owner_filter": data.get("owner") or ""}
+            "owner_filter": data.get("owner") or "",
+            "reconciliation_intakes": reconciliation.order_by("-source_created_at", "-pk")}
